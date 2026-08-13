@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Settings, Database, Copy, ListMusic, Users, Tag, ScrollText,
   ChevronLeft, ChevronRight, RefreshCw, Pencil, AlertTriangle, Save, Sliders,
   Plus, Trash2, CalendarDays, GripVertical, Search, Music, Megaphone, Box, X,
-  ArrowUp, ArrowDown,
+  ArrowUp, ArrowDown, CircleDot,
 } from "lucide-react";
 import {
   getPlaylistsByDate, getPlaylistById, reorderPlaylist,
@@ -163,19 +163,17 @@ function Toolbar({
     onDateChange(toDateStr(d));
   };
 
-  const sortedHours = useMemo(() => [...hoursWithData].sort((a, b) => a - b), [hoursWithData]);
+  const allHours = useMemo(() => Array.from({ length: 24 }, (_, h) => h), []);
 
   const shiftHour = (direction) => {
-    if (sortedHours.length === 0) return;
     if (activeHour == null) {
-      onHourChange(direction > 0 ? sortedHours[0] : sortedHours[sortedHours.length - 1]);
+      onHourChange(direction > 0 ? allHours[0] : allHours[allHours.length - 1]);
       return;
     }
-    const idx = sortedHours.indexOf(activeHour);
-    let nextIdx = idx + direction;
-    if (nextIdx < 0) nextIdx = sortedHours.length - 1;
-    if (nextIdx >= sortedHours.length) nextIdx = 0;
-    onHourChange(sortedHours[nextIdx]);
+    let nextIdx = activeHour + direction;
+    if (nextIdx < 0) nextIdx = allHours.length - 1;
+    if (nextIdx >= allHours.length) nextIdx = 0;
+    onHourChange(allHours[nextIdx]);
   };
 
   return (
@@ -231,32 +229,29 @@ function Toolbar({
         <div className="flex items-center gap-1.5">
           <button
             onClick={() => shiftHour(-1)}
-            disabled={sortedHours.length === 0}
-            aria-label="Vorherige belegte Stunde"
+            aria-label="Vorherige Stunde"
             className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Vorherige belegte Stunde"
+            title="Vorherige Stunde"
           >
             <ChevronLeft size={16} />
           </button>
           <select
             value={activeHour ?? ""}
             onChange={(e) => onHourChange(Number(e.target.value))}
-            disabled={sortedHours.length === 0}
             className={`${inputClass} py-1.5 disabled:opacity-40`}
           >
-            {sortedHours.length === 0 && <option value="">Keine Stunden</option>}
-            {sortedHours.map((h) => (
+            {allHours.map((h) => (
               <option key={h} value={h}>
+                {hoursWithData.has(h) ? "● " : "  "}
                 {pad2(h)}:00 Uhr
               </option>
             ))}
           </select>
           <button
             onClick={() => shiftHour(1)}
-            disabled={sortedHours.length === 0}
-            aria-label="Nächste belegte Stunde"
+            aria-label="Nächste Stunde"
             className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Nächste belegte Stunde"
+            title="Nächste Stunde"
           >
             <ChevronRight size={16} />
           </button>
@@ -436,7 +431,10 @@ function PlaylistTable({
                 <tr
                   key={entry.position}
                   onClick={() => onSelect(entry.position)}
-                  onDoubleClick={() => entry.item && onEditItem?.(entry.item.internalId)}
+                  onDoubleClick={() =>
+                    entry.item &&
+                    onEditItem?.(entry.item.internalId, { playlistId: playlist.id, position: entry.position })
+                  }
                   onContextMenu={(e) => {
                     e.preventDefault();
                     onSelect(entry.position);
@@ -468,7 +466,18 @@ function PlaylistTable({
                   <td className="px-3 py-2.5 text-zinc-500">{entry.scheduledStart}</td>
                   <td className="px-3 py-2.5 text-zinc-500">{entry.item?.internalId ?? "-"}</td>
                   <td className="px-3 py-2.5 text-zinc-600">{entry.item?.externalId ?? "-"}</td>
-                  <td className="px-3 py-2.5 text-zinc-100">{entry.item?.title || "–"}</td>
+                  <td className="px-3 py-2.5 text-zinc-100">
+                    <span className="inline-flex items-center gap-1.5">
+                      {entry.item?.title || "–"}
+                      {entry.overrides && Object.keys(entry.overrides).length > 0 && (
+                        <CircleDot
+                          size={9}
+                          className="shrink-0 text-orange-500"
+                          title="Lokal geändert (nur für diese Stunde)"
+                        />
+                      )}
+                    </span>
+                  </td>
                   <td className="px-3 py-2.5 text-zinc-500">{entry.item?.artist || "-"}</td>
                   <td className="px-3 py-2.5">{entry.item && <TypeIcon type={entry.item.type} />}</td>
                   <td className="px-3 py-2.5 text-zinc-400">
@@ -480,7 +489,7 @@ function PlaylistTable({
             {playlist.entries.length === 0 && (
               <tr>
                 <td colSpan={9} className="px-4 py-16 text-center text-sm text-zinc-600">
-                  Keine Einträge für diese Stunde. Über die Suche unten Elemente einfügen.
+                  Keine Einträge in dieser Stunde
                 </td>
               </tr>
             )}
@@ -501,7 +510,9 @@ function PlaylistTable({
           onClose={() => setContextMenu(null)}
           onEdit={() => {
             const entry = playlist.entries.find((e) => e.position === contextMenu.position);
-            if (entry?.item) onEditItem?.(entry.item.internalId);
+            if (entry?.item) {
+              onEditItem?.(entry.item.internalId, { playlistId: playlist.id, position: entry.position });
+            }
             setContextMenu(null);
           }}
           onDelete={() => {
@@ -653,7 +664,10 @@ export default function Playlist({ onEditItem, onNavigate }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
 
-  const hoursWithData = useMemo(() => new Set(hourSummaries.map((s) => s.hour)), [hourSummaries]);
+  const hoursWithData = useMemo(
+    () => new Set(hourSummaries.filter((s) => s.hasEntries).map((s) => s.hour)),
+    [hourSummaries]
+  );
 
   const loadHours = useCallback((date) => {
     setHoursLoading(true);
@@ -684,15 +698,17 @@ export default function Playlist({ onEditItem, onNavigate }) {
       .finally(() => setEntriesLoading(false));
   }, []);
 
-  // Date changed: reload hour summaries, then land on the first available hour.
+  // Date changed: reload hour summaries, then land on the first hour with
+  // entries (falling back to 00:00 if the whole day is empty).
   useEffect(() => {
     setActiveHour(null);
     setPlaylist(null);
     setSelectedPosition(null);
     loadHours(selectedDate).then((summaries) => {
       if (summaries.length > 0) {
-        setActiveHour(summaries[0].hour);
-        loadEntries(summaries[0].hour, summaries);
+        const landingHour = summaries.find((s) => s.hasEntries)?.hour ?? summaries[0].hour;
+        setActiveHour(landingHour);
+        loadEntries(landingHour, summaries);
       }
     });
   }, [selectedDate, loadHours, loadEntries]);

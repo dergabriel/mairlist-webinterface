@@ -1,11 +1,51 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import {
   LayoutDashboard, Settings, Database, Copy, ListMusic, Users, Tag, ScrollText,
-  RefreshCw, ChevronLeft, Save, LayoutList, Play, Pause, SlidersHorizontal,
+  RefreshCw, ChevronLeft, LayoutList, Play, Pause, SlidersHorizontal,
   Clock, History, Pencil, Volume2, ZoomIn, ZoomOut, Bookmark, Trash2,
-  Palette, Image as ImageIcon, AlertTriangle,
+  Palette, Image as ImageIcon, AlertTriangle, CircleDot, Database as DatabaseIcon,
 } from "lucide-react";
-import { getItemById, updateItem, getItemHistory, getAttributeDefinitions } from "../lib/api";
+import {
+  getItemById, updateItem, getItemHistory, getAttributeDefinitions,
+  getPlaylistById, savePlaylistItemOverrides,
+} from "../lib/api";
+
+// Fields a playlist entry is allowed to override locally ("volatile" edits,
+// per mAirList's playlist/database separation): cue points and attributes.
+// Everything else (title, storage path, playback, ...) only ever lives on
+// the global item.
+const OVERRIDABLE_KEYS = ["cue", "attributes"];
+
+// Layers `overrides` (a subset of OVERRIDABLE_KEYS) on top of the global
+// item for display. Returns a new object; never mutates either input.
+function applyOverrides(globalItem, overrides) {
+  if (!overrides) return globalItem;
+  const merged = { ...globalItem };
+  for (const key of OVERRIDABLE_KEYS) {
+    if (overrides[key] != null) merged[key] = { ...globalItem[key], ...overrides[key] };
+  }
+  return merged;
+}
+
+// Diffs `edited` against `globalItem` for just the overridable keys and
+// returns only the sub-keys that actually changed (e.g. only the cue points
+// the user touched, not the whole cue object) — so saving "für diese
+// Stunde" never freezes in fields the user never looked at.
+function diffOverrides(globalItem, edited) {
+  const overrides = {};
+  for (const key of OVERRIDABLE_KEYS) {
+    const before = globalItem[key] || {};
+    const after = edited[key] || {};
+    const changed = {};
+    for (const subKey of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (JSON.stringify(before[subKey]) !== JSON.stringify(after[subKey])) {
+        changed[subKey] = after[subKey];
+      }
+    }
+    if (Object.keys(changed).length > 0) overrides[key] = changed;
+  }
+  return overrides;
+}
 
 // --- Shared constants (mirror the backend) ---
 
@@ -815,24 +855,42 @@ const TABS = [
   { key: "cue", label: "Cue-Editor", icon: Pencil },
 ];
 
-export default function ItemEditor({ internalId, onBack, onNavigate }) {
-  const [item, setItem] = useState(null);
+export default function ItemEditor({ internalId, playlistContext, onBack, onNavigate }) {
+  const [globalItem, setGlobalItem] = useState(null); // untouched DB record, for diffing overrides
+  const [item, setItem] = useState(null); // edited, display-merged (global + overrides when in playlist context)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("general");
-  const [saving, setSaving] = useState(false);
+  const [savingScope, setSavingScope] = useState(null); // "hour" | "database" | null
   const [saveError, setSaveError] = useState(null);
+  const [hasOverrides, setHasOverrides] = useState(false);
+
+  const saving = savingScope != null;
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     setItem(null);
-    getItemById(internalId)
-      .then((data) => {
-        if (cancelled) return;
-        setItem(data);
-      })
+    setGlobalItem(null);
+    setHasOverrides(false);
+
+    const load = async () => {
+      const data = await getItemById(internalId);
+      if (cancelled) return;
+      let overrides = null;
+      if (playlistContext) {
+        const playlist = await getPlaylistById(playlistContext.playlistId);
+        const entry = playlist.entries.find((e) => e.position === playlistContext.position);
+        overrides = entry?.overrides ?? null;
+      }
+      if (cancelled) return;
+      setGlobalItem(data);
+      setItem(applyOverrides(data, overrides));
+      setHasOverrides(!!overrides && Object.keys(overrides).length > 0);
+    };
+
+    load()
       .catch((err) => {
         if (cancelled) return;
         setError(err.message);
@@ -842,7 +900,7 @@ export default function ItemEditor({ internalId, onBack, onNavigate }) {
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [internalId]);
+  }, [internalId, playlistContext]);
 
   const update = (key, val) => setItem((prev) => ({ ...prev, [key]: val }));
   // Keeps the raw input while the user is typing (so "14" on the way to
@@ -851,22 +909,58 @@ export default function ItemEditor({ internalId, onBack, onNavigate }) {
   const updateCue = (key, val) =>
     setItem((prev) => ({ ...prev, cue: { ...prev.cue, [key]: val === "" ? null : val } }));
 
-  const handleSave = async () => {
-    setSaving(true);
+  const normalisedCue = () => {
+    const out = {};
+    for (const [key, val] of Object.entries(item.cue)) {
+      out[key] = isValidCueValue(val, item.duration) && val !== null && val !== ""
+        ? toStorage(Number(val))
+        : null;
+    }
+    return out;
+  };
+
+  // "In Datenbank speichern": writes the edited item globally, exactly as
+  // before. Available from both the Elemente list and the playlist (where
+  // it intentionally propagates the change to every hour that plays this
+  // item, unlike the hour-scoped save below). Whatever was displayed is now
+  // the database value, so any local-only overrides this slot had are gone
+  // — cleared on the server too, so the two stay in sync.
+  const handleSaveToDatabase = async () => {
+    setSavingScope("database");
     setSaveError(null);
     try {
-      const normalisedCue = {};
-      for (const [key, val] of Object.entries(item.cue)) {
-        normalisedCue[key] = isValidCueValue(val, item.duration) && val !== null && val !== ""
-          ? toStorage(Number(val))
-          : null;
+      const saved = await updateItem(internalId, { ...item, cue: normalisedCue() });
+      if (playlistContext && hasOverrides) {
+        await savePlaylistItemOverrides(playlistContext.playlistId, playlistContext.position, {});
       }
-      const saved = await updateItem(internalId, { ...item, cue: normalisedCue });
+      setGlobalItem(saved);
       setItem(saved);
+      setHasOverrides(false);
     } catch (err) {
       setSaveError(err.message);
     } finally {
-      setSaving(false);
+      setSavingScope(null);
+    }
+  };
+
+  // "Für diese Stunde speichern": diffs the edited (cue/attributes only)
+  // fields against the untouched global item and writes just that diff as
+  // this playlist entry's `overrides` — a "volatile" change, per mAirList,
+  // that never touches the database and has no effect on any other hour.
+  const handleSaveToHour = async () => {
+    if (!playlistContext) return;
+    setSavingScope("hour");
+    setSaveError(null);
+    try {
+      const edited = { ...item, cue: normalisedCue() };
+      const overrides = diffOverrides(globalItem, edited);
+      await savePlaylistItemOverrides(playlistContext.playlistId, playlistContext.position, overrides);
+      setHasOverrides(Object.keys(overrides).length > 0);
+      setItem(applyOverrides(globalItem, overrides));
+    } catch (err) {
+      setSaveError(err.message);
+    } finally {
+      setSavingScope(null);
     }
   };
 
@@ -923,19 +1017,39 @@ export default function ItemEditor({ internalId, onBack, onNavigate }) {
         {/* Sub toolbar: back + title + save */}
         <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
           <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200">
-            <ChevronLeft size={16} /> Zurück zur Liste
+            <ChevronLeft size={16} /> {playlistContext ? "Zurück zur Playlist" : "Zurück zur Liste"}
           </button>
-          <div className="truncate px-4 text-sm text-zinc-500">
+          <div className="flex items-center gap-2 truncate px-4 text-sm text-zinc-500">
             {item && (
               <>{item.title}{item.artist ? `  ·  ${item.artist}` : ""}  ·  ID {item.internalId}</>
             )}
+            {hasOverrides && (
+              <span
+                className="flex items-center gap-1 rounded border border-orange-600/40 bg-orange-500/10 px-1.5 py-0.5 text-[11px] font-medium text-orange-400"
+                title="Diese Ansicht zeigt lokale Änderungen für diese Stunde, nicht den Datenbank-Stand"
+              >
+                <CircleDot size={9} /> Lokal geändert
+              </span>
+            )}
           </div>
-          <button
-            onClick={handleSave} disabled={!item || saving}
-            className="flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-500 disabled:opacity-50"
-          >
-            <Save size={15} /> {saving ? "Speichert…" : "Speichern"}
-          </button>
+          <div className="flex items-center gap-2">
+            {playlistContext && (
+              <button
+                onClick={handleSaveToHour} disabled={!item || saving}
+                className="flex items-center gap-2 rounded-md border border-orange-600/60 px-3 py-2 text-sm font-medium text-orange-400 hover:bg-orange-600/10 disabled:opacity-50"
+                title="Speichert Cue-Punkte und Attribute nur für diesen Playlist-Eintrag, betrifft keine andere Stunde"
+              >
+                <CircleDot size={15} /> {savingScope === "hour" ? "Speichert…" : "Für diese Stunde speichern"}
+              </button>
+            )}
+            <button
+              onClick={handleSaveToDatabase} disabled={!item || saving}
+              className="flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-500 disabled:opacity-50"
+              title={playlistContext ? "Schreibt die Änderung global in die Datenbank, betrifft alle Stunden mit diesem Element" : undefined}
+            >
+              <DatabaseIcon size={15} /> {savingScope === "database" ? "Speichert…" : "In Datenbank speichern"}
+            </button>
+          </div>
         </div>
 
         {saveError && (

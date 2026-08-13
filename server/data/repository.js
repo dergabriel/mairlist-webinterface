@@ -19,11 +19,22 @@
 //   updateItem(id, data)     -> updated item or null
 //   deleteItem(id)           -> true if an item was deleted, false otherwise
 //   uploadFile(storageId, filename, buffer, title) -> newly created item, or null if storage unknown
-//   getPlaylistsByDate(date)  -> array of { id, date, hour } for that date, sorted by hour
+//   getPlaylistsByDate(date)  -> array of all 24 hours { id, date, hour, hasEntries } for that date, sorted by hour
 //   getPlaylistById(id)       -> { id, date, hour, entries } with entries' items resolved, or null
 //   reorderPlaylist(id, order) -> playlist (as getPlaylistById) with entries in `order`, or null
 //   insertPlaylistItem(id, { itemId, afterPosition }) -> playlist (as getPlaylistById), or null
 //   removePlaylistItem(id, position) -> playlist (as getPlaylistById), or null
+//   savePlaylistItemOverrides(id, position, overrides) -> playlist (as getPlaylistById), or null
+//
+// Playlist entry overrides (mAirList calls these "volatile" changes): a
+// playlist entry may carry an `overrides` object with a subset of item
+// fields (cue, attributes, ...) that apply ONLY to that one entry, in that
+// one hour. They are never merged into the global item here — entries are
+// returned with `item` (the untouched global item) and `overrides` (the
+// per-instance patch) as two separate keys, and it's the caller's job to
+// layer them for display. This mirrors real mAirList: editing an item
+// opened from a playlist is local to that slot unless explicitly written
+// back to the database.
 //
 // Writes currently mutate the in-memory mockData array (the "copy" per
 // README's write-only-against-a-copy rule). Once the real schema is proven,
@@ -99,25 +110,87 @@ function getCuePoints() {
   return CUE_POINTS;
 }
 
-// Playlists for a given date, one per hour that has one, sorted by hour.
-// Returns the summary shape { id, date, hour } — no entries, no resolved
-// items — for the hour-list column in the UI.
+// Synthetic id used for an hour that has no playlist record yet. Stable per
+// date+hour so the frontend can select an empty hour and, if an item is
+// inserted, insertPlaylistItem() can find/materialize the same record.
+const emptyHourId = (date, hour) => `${date}-${String(hour).padStart(2, "0")}`;
+
+// All 24 hours (00-23) for a given date, sorted by hour. Every hour is
+// included so the UI can render the full day; hasEntries marks which ones
+// actually have a playlist with entries.
 function getPlaylistsByDate(date) {
-  return playlists
-    .filter((p) => p.date === date)
-    .sort((a, b) => a.hour - b.hour)
-    .map((p) => ({ id: p.id, date: p.date, hour: p.hour }));
+  const byHour = new Map(playlists.filter((p) => p.date === date).map((p) => [p.hour, p]));
+  return Array.from({ length: 24 }, (_, hour) => {
+    const existing = byHour.get(hour);
+    return {
+      id: existing ? existing.id : emptyHourId(date, hour),
+      date,
+      hour,
+      hasEntries: !!existing && existing.entries.length > 0,
+    };
+  });
 }
 
 // Single hour's playlist with entries resolved against `items`. Returns
-// null if the playlist doesn't exist so the route can 404.
+// null if the id is neither an existing playlist nor a valid synthetic
+// empty-hour id, so the route can 404.
 function getPlaylistById(id) {
   const playlist = playlists.find((p) => p.id === id);
+  if (playlist) {
+    const entries = [...playlist.entries]
+      .sort((a, b) => a.position - b.position)
+      // `overrides` is passed through as-is (undefined if never set) — NOT
+      // merged into `item`. The global item stays untouched; merging the two
+      // for display is the frontend's job, per entry, on demand.
+      .map((entry) => ({ ...entry, item: getItemById(entry.itemId) || null }));
+    return { id: playlist.id, date: playlist.date, hour: playlist.hour, entries };
+  }
+
+  const empty = parseEmptyHourId(id);
+  if (!empty) return null;
+  return { id, date: empty.date, hour: empty.hour, entries: [] };
+}
+
+// Sets (or clears, if `overrides` is null/empty) the volatile per-instance
+// overrides on the entry at `position`. These values apply only to this one
+// playlist slot and are never written into the global item. Returns the
+// resolved playlist, or null if the playlist or entry doesn't exist.
+function savePlaylistItemOverrides(id, position, overrides) {
+  const playlist = playlists.find((p) => p.id === id);
   if (!playlist) return null;
-  const entries = [...playlist.entries]
-    .sort((a, b) => a.position - b.position)
-    .map((entry) => ({ ...entry, item: getItemById(entry.itemId) || null }));
-  return { id: playlist.id, date: playlist.date, hour: playlist.hour, entries };
+
+  const entry = playlist.entries.find((e) => e.position === Number(position));
+  if (!entry) return null;
+
+  // TODO: replace with a real SQL UPDATE (playlist_entry.overrides) once the schema is confirmed.
+  if (overrides == null || Object.keys(overrides).length === 0) {
+    delete entry.overrides;
+  } else {
+    entry.overrides = overrides;
+  }
+  return getPlaylistById(id);
+}
+
+// Parses a synthetic empty-hour id back into { date, hour }, or null if it
+// isn't one.
+function parseEmptyHourId(id) {
+  const match = /^(\d{4}-\d{2}-\d{2})-(\d{2})$/.exec(id);
+  if (!match) return null;
+  return { date: match[1], hour: Number(match[2]) };
+}
+
+// Finds the playlist record for `id`, creating an empty one from a
+// synthetic empty-hour id if it doesn't exist yet. Returns null if `id` is
+// neither a known playlist nor a valid empty-hour id.
+function getOrCreatePlaylist(id) {
+  let playlist = playlists.find((p) => p.id === id);
+  if (playlist) return playlist;
+
+  const empty = parseEmptyHourId(id);
+  if (!empty) return null;
+  playlist = { id, date: empty.date, hour: empty.hour, entries: [] };
+  playlists.push(playlist);
+  return playlist;
 }
 
 // Recomputes position (1-based, array order) and scheduledStart (cumulative
@@ -159,9 +232,11 @@ function reorderPlaylist(id, order) {
 // Inserts a new entry for `itemId` right after the entry currently at
 // `afterPosition` (0 to insert at the very top), then recomputes position
 // and scheduledStart for all entries. Returns the resolved playlist, or null
-// if the playlist or item doesn't exist.
+// if the playlist doesn't exist (or can't be created from `id`) or the item
+// doesn't exist. `id` may be a synthetic empty-hour id, in which case the
+// playlist record is created on first insert.
 function insertPlaylistItem(id, { itemId, afterPosition }) {
-  const playlist = playlists.find((p) => p.id === id);
+  const playlist = getOrCreatePlaylist(id);
   if (!playlist) return null;
   if (!getItemById(itemId)) return null;
 
@@ -321,4 +396,5 @@ module.exports = {
   reorderPlaylist,
   insertPlaylistItem,
   removePlaylistItem,
+  savePlaylistItemOverrides,
 };

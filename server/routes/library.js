@@ -106,7 +106,7 @@ router.post("/upload", (req, res) => {
   });
 });
 
-// GET /api/playlists?date=YYYY-MM-DD -> all hours with a playlist for that date
+// GET /api/playlists?date=YYYY-MM-DD -> all 24 hours for that date, each flagged hasEntries
 router.get("/playlists", (req, res) => {
   const { date } = req.query;
   if (!date) return res.status(400).json({ error: "date ist erforderlich" });
@@ -141,6 +141,15 @@ router.post("/playlists/:id/items", (req, res) => {
 // DELETE /api/playlists/:id/items/:position -> remove the entry at that position
 router.delete("/playlists/:id/items/:position", (req, res) => {
   const playlist = repo.removePlaylistItem(req.params.id, req.params.position);
+  if (!playlist) return res.status(404).json({ error: "Playlist oder Eintrag nicht gefunden" });
+  res.json(playlist);
+});
+
+// PUT /api/playlists/:id/items/:position/overrides -> set (or clear, with {}) this
+// entry's volatile per-instance overrides. Body: { overrides: { cue?: {...}, attributes?: {...}, ... } }
+router.put("/playlists/:id/items/:position/overrides", (req, res) => {
+  const { overrides } = req.body;
+  const playlist = repo.savePlaylistItemOverrides(req.params.id, req.params.position, overrides);
   if (!playlist) return res.status(404).json({ error: "Playlist oder Eintrag nicht gefunden" });
   res.json(playlist);
 });

@@ -97,3 +97,7 @@ export function insertPlaylistItem(id, { itemId, afterPosition }) {
 export function removePlaylistItem(id, position) {
   return request(`/playlists/${id}/items/${position}`, { method: "DELETE" });
 }
+
+export function savePlaylistItemOverrides(id, position, overrides) {
+  return put(`/playlists/${id}/items/${position}/overrides`, { overrides });
+}

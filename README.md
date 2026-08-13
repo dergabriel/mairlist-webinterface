@@ -67,11 +67,11 @@ Der Bibliothek müssen alle Typen bewusst sein, nicht nur Tracks und Jingles:
 | Tab | Inhalt | Status |
 |---|---|---|
 | Allgemein | Titel, Interpret, Type, Länge, Ende, IDs, Kommentar, Farbe, Cover | ✅ (gegen Mock) |
-| Wiedergabe | Abspieleinstellungen, Gain | ⬜ |
+| Wiedergabe | Gain-Regler, Normalisieren (Mock, -14 LUFS), Fade In/Out, Loop, Segue-Modus | ✅ (gegen Mock) |
 | Attribute | Key Value Attribute (Energy, Mood, BPM) | ⬜ |
 | Sendeplanung | Rotationen, Zeitfenster, Regeln | ⬜ |
 | Verlauf | wann lief das Item | ⬜ |
-| Cue Editor | Waveform plus alle 17 Cue Punkte | 🚧 |
+| Cue Editor | Waveform, Marker an korrekter Zeitposition, farbig mit Label, live-update, Zoom, Sortierung nach Wichtigkeit (`DEFAULT_CUE_PRIORITY`) | 🚧 |
 
 ### 🔀 Playlist und Ablaufplanung
 
@@ -116,7 +116,7 @@ Frontend zuerst mit Mock, dann Datenbank Anbindung, dann Schreiben.
 - **0️⃣ Landkarte** ⬜ Schema Dump ziehen, `SCHEMA.md`. Aktuell blockiert, kein DB Zugriff.
 - **1️⃣ Semantik Doku** ⬜ Feldbedeutungen per Diff Methode, `FIELD-SEMANTICS.md`.
 - **2️⃣ Read only Oberfläche** 🚧 Elemente Liste steht, es fehlen Editor Ansichten, Playlist, Verwaltung.
-- **3️⃣ Item Editor** 🚧 Allgemein und Cue Editor im Aufbau, restliche Tabs offen.
+- **3️⃣ Item Editor** 🚧 Allgemein und Wiedergabe fertig, Cue Editor im Aufbau (Marker, Zoom, Sortierung stehen), restliche Tabs offen.
 - **4️⃣ Backend Anbindung** ⬜ Mock durch echte API und SQL ersetzen.
 - **5️⃣ Schreib Beweis** ⬜ ein Cue Punkt sauber in die Kopie schreiben.
 - **6️⃣ Schreiben produktiv** ⬜ Metadaten, Upload, Cue Punkte, Ordner.

@@ -3,9 +3,9 @@ import {
   LayoutDashboard, Settings, Database, Copy, ListMusic,
   Users, Tag, ScrollText, Folder, FolderOpen, ChevronRight,
   ChevronDown, RefreshCw, Plus, Search, Pencil, Trash2, ArrowUpDown,
-  AlertTriangle, X,
+  AlertTriangle, X, Upload,
 } from "lucide-react";
-import { getTree, getItems, createItem, deleteItem } from "../lib/api";
+import { getTree, getItems, getStorages, createItem, deleteItem, uploadFile } from "../lib/api";
 
 // --- Helpers ---
 
@@ -216,6 +216,79 @@ function NewItemDialog({ onClose, onCreate }) {
   );
 }
 
+const AUDIO_ACCEPT = ".wav,.mp3,.aac,.flac,.ogg";
+
+function UploadDialog({ storages, onClose, onUpload }) {
+  const [storageId, setStorageId] = useState(storages[0]?.id ?? "");
+  const [file, setFile] = useState(null);
+  const [title, setTitle] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!file || !storageId) return;
+    setUploading(true);
+    setError(null);
+    try {
+      await onUpload({ file, storageId, title: title.trim() });
+    } catch (err) {
+      setError(err.message);
+      setUploading(false);
+    }
+  };
+
+  return (
+    <Modal title="Datei hochladen" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <label className="block">
+          <span className="mb-1.5 block text-xs text-zinc-400">Storage</span>
+          <select
+            className={inputClass} value={storageId}
+            onChange={(e) => setStorageId(e.target.value)}
+          >
+            {storages.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs text-zinc-400">Audiodatei</span>
+          <input
+            type="file" accept={AUDIO_ACCEPT} className={inputClass}
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs text-zinc-400">Titel (optional)</span>
+          <input
+            className={inputClass} value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Standard: Dateiname ohne Endung"
+          />
+        </label>
+
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-red-500">
+            <AlertTriangle size={14} />
+            <span>Upload fehlgeschlagen: {error}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="rounded-md border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            Abbrechen
+          </button>
+          <button
+            type="submit" disabled={!file || !storageId || uploading}
+            className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
+          >
+            {uploading ? "Lädt hoch…" : "Hochladen"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function ConfirmDeleteDialog({ item, onClose, onConfirm }) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState(null);
@@ -266,6 +339,7 @@ function ConfirmDeleteDialog({ item, onClose, onConfirm }) {
 export default function MairListDB({ onEditItem }) {
   const [tree, setTree] = useState([]);
   const [items, setItems] = useState([]);
+  const [storages, setStorages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -276,15 +350,17 @@ export default function MairListDB({ onEditItem }) {
   const [selected, setSelected] = useState(new Set());
 
   const [showNewItem, setShowNewItem] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
   const loadData = useCallback(() => {
     setLoading(true);
     setError(null);
-    return Promise.all([getTree(), getItems()])
-      .then(([treeData, itemsData]) => {
+    return Promise.all([getTree(), getItems(), getStorages()])
+      .then(([treeData, itemsData, storagesData]) => {
         setTree(treeData);
         setItems(itemsData);
+        setStorages(storagesData);
       })
       .catch((err) => {
         setError(err.message);
@@ -301,6 +377,13 @@ export default function MairListDB({ onEditItem }) {
   const handleCreate = async (data) => {
     const created = await createItem(data);
     setShowNewItem(false);
+    await loadData();
+    onEditItem?.(created.internalId);
+  };
+
+  const handleUpload = async (data) => {
+    const created = await uploadFile(data);
+    setShowUpload(false);
     await loadData();
     onEditItem?.(created.internalId);
   };
@@ -440,13 +523,22 @@ export default function MairListDB({ onEditItem }) {
 
         {/* Toolbar */}
         <div className="flex items-center justify-between gap-4 px-6 py-3">
-          <button
-            onClick={() => setShowNewItem(true)}
-            className="flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
-          >
-            <Plus size={16} />
-            <span>Neues Element</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowNewItem(true)}
+              className="flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
+            >
+              <Plus size={16} />
+              <span>Neues Element</span>
+            </button>
+            <button
+              onClick={() => setShowUpload(true)}
+              className="flex items-center gap-2 rounded-md border border-zinc-800 px-3 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+            >
+              <Upload size={16} />
+              <span>Datei hochladen</span>
+            </button>
+          </div>
 
           <div className="flex items-center gap-3">
             <div className="relative">
@@ -555,6 +647,9 @@ export default function MairListDB({ onEditItem }) {
 
       {showNewItem && (
         <NewItemDialog onClose={() => setShowNewItem(false)} onCreate={handleCreate} />
+      )}
+      {showUpload && (
+        <UploadDialog storages={storages} onClose={() => setShowUpload(false)} onUpload={handleUpload} />
       )}
       {deleteTarget && (
         <ConfirmDeleteDialog

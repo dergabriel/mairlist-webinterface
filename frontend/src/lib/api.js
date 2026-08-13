@@ -30,6 +30,10 @@ export function getTree() {
   return request("/tree");
 }
 
+export function getStorages() {
+  return request("/storages");
+}
+
 export function getItems({ type, artist, folderId, storageId } = {}) {
   return request(`/items${qs({ type, artist, folderId, storageId })}`);
 }
@@ -64,4 +68,12 @@ export function updateItem(id, data) {
 
 export function deleteItem(id) {
   return request(`/items/${id}`, { method: "DELETE" });
+}
+
+export function uploadFile({ file, storageId, title }) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("storageId", storageId);
+  if (title) formData.append("title", title);
+  return request("/upload", { method: "POST", body: formData });
 }

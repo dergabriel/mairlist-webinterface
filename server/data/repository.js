@@ -12,16 +12,21 @@
 //   getArtists()             -> array of distinct artist names
 //   getItems(filters)        -> array of items (filtered)
 //   getItemById(id)          -> single item or null
+//   getItemHistory(id)       -> play history array (newest first) or null
 //   searchItems(query, opts) -> array of items
+//   getAttributeDefinitions() -> predefined attribute schema
 //   createItem(data)         -> newly created item
 //   updateItem(id, data)     -> updated item or null
 //   deleteItem(id)           -> true if an item was deleted, false otherwise
+//   uploadFile(storageId, filename, buffer, title) -> newly created item, or null if storage unknown
 //
 // Writes currently mutate the in-memory mockData array (the "copy" per
 // README's write-only-against-a-copy rule). Once the real schema is proven,
 // only this file is swapped for a SQL-backed implementation.
 
-const { storages, folders, items, ITEM_TYPES, CUE_POINTS } = require("./mockData");
+const fs = require("fs");
+const path = require("path");
+const { storages, folders, items, ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
 
 function getFolderTree() {
   const byParent = (parentId) =>
@@ -63,6 +68,15 @@ function getItemById(id) {
   return items.find((i) => i.id === id) || null;
 }
 
+// Play history, newest first. Returns null if the item itself doesn't exist,
+// so the route can tell "no history" apart from "no such item".
+function getItemHistory(id) {
+  const item = getItemById(id);
+  if (!item) return null;
+  const history = item.playHistory || [];
+  return [...history].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt));
+}
+
 function searchItems(query, opts = {}) {
   if (!query || query.trim() === "") return [];
   const q = query.toLowerCase();
@@ -80,6 +94,12 @@ function getCuePoints() {
   return CUE_POINTS;
 }
 
+// Predefined attribute schema (key, label, type, options) for the item
+// editor's Attribute tab.
+function getAttributeDefinitions() {
+  return ATTRIBUTE_DEFINITIONS;
+}
+
 // Assumption: internalId is the next integer after the current max, since
 // there is no real ID generator yet. The real DB will assign this instead
 // (auto-increment / sequence), so this logic disappears once SQL is wired up.
@@ -92,6 +112,14 @@ function emptyCue() {
   const base = {};
   for (const cp of CUE_POINTS) base[cp.key] = null;
   return base;
+}
+
+function emptyPlayback() {
+  return {
+    gainDb: 0,
+    normalizedLufs: null,
+    segueMode: "normal",
+  };
 }
 
 function createItem(data = {}) {
@@ -113,6 +141,7 @@ function createItem(data = {}) {
     color: data.color ?? null,
     cover: data.cover ?? null,
     cue: emptyCue(),
+    playback: emptyPlayback(),
     attributes: data.attributes || {},
     updatedAt: new Date().toISOString(),
   };
@@ -137,6 +166,47 @@ function deleteItem(id) {
   return true;
 }
 
+// Sanitize an uploaded filename: keep the extension, replace anything that
+// isn't alphanumeric/dot/dash/underscore in the base name with underscores.
+function sanitizeFilename(filename) {
+  const ext = path.extname(filename);
+  const base = path.basename(filename, ext);
+  const safeBase = base.replace(/[^a-zA-Z0-9_-]+/g, "_");
+  return `${safeBase}${ext}`;
+}
+
+// storage.location values are the real (Windows) mAirList paths. On a dev
+// machine those drives don't exist, so UPLOAD_BASE_DIR can redirect writes to
+// a local folder while keeping storage.location as the value stored on the
+// item. Not set in production, where storage.location is used as-is.
+function resolveStorageDir(storage) {
+  const base = process.env.UPLOAD_BASE_DIR;
+  if (!base) return storage.location;
+  return path.join(base, storage.name);
+}
+
+// Writes the uploaded file into the given storage's location and creates a
+// matching item. Returns null if the storage doesn't exist.
+function uploadFile(storageId, filename, buffer, title) {
+  const storage = storages.find((s) => s.id === Number(storageId));
+  if (!storage) return null;
+
+  const safeFilename = sanitizeFilename(filename);
+  const ext = path.extname(safeFilename);
+  const derivedTitle = title && title.trim() !== "" ? title.trim() : path.basename(safeFilename, ext);
+
+  // TODO: replace with real SQL + real file system write
+  const targetDir = resolveStorageDir(storage);
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.writeFileSync(path.join(targetDir, safeFilename), buffer);
+
+  return createItem({
+    title: derivedTitle,
+    storageId: storage.id,
+    relativePath: safeFilename,
+  });
+}
+
 module.exports = {
   getFolderTree,
   getStorages,
@@ -144,9 +214,12 @@ module.exports = {
   getArtists,
   getItems,
   getItemById,
+  getItemHistory,
   searchItems,
   getCuePoints,
+  getAttributeDefinitions,
   createItem,
   updateItem,
   deleteItem,
+  uploadFile,
 };

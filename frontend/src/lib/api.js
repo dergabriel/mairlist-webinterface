@@ -77,3 +77,23 @@ export function uploadFile({ file, storageId, title }) {
   if (title) formData.append("title", title);
   return request("/upload", { method: "POST", body: formData });
 }
+
+export function getPlaylistsByDate(date) {
+  return request(`/playlists${qs({ date })}`);
+}
+
+export function getPlaylistById(id) {
+  return request(`/playlists/${id}`);
+}
+
+export function reorderPlaylist(id, order) {
+  return put(`/playlists/${id}/reorder`, { order });
+}
+
+export function insertPlaylistItem(id, { itemId, afterPosition }) {
+  return post(`/playlists/${id}/items`, { itemId, afterPosition });
+}
+
+export function removePlaylistItem(id, position) {
+  return request(`/playlists/${id}/items/${position}`, { method: "DELETE" });
+}

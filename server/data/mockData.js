@@ -310,4 +310,77 @@ const items = [
   },
 ];
 
-module.exports = { storages, folders, items, ITEM_TYPES, CONTAINER_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS };
+// Playlists: one entry per (date, hour), holding an ordered list of items to
+// play that hour. `entries[].itemId` resolves against `items` above.
+//
+// Example data below is generated for today's date across a realistic
+// morning block (06:00-10:59), each hour built from a repeating rotation
+// pattern (Music, Jingle, Music, Music, Container, Music, Jingle, ...) drawn
+// from the item pool already defined above.
+const today = new Date().toISOString().slice(0, 10);
+
+const MUSIC_IDS = ["476", "492", "598", "477"];
+const JINGLE_ID = "701";
+const CONTAINER_IDS = ["901", "902", "903"];
+
+// Builds one hour's entries from a fixed rotation pattern, cycling through
+// the available music pool and container types so hours don't repeat
+// identically, and stamping scheduledStart from each item's duration.
+function buildHourEntries(hour, patternLength, musicOffset, containerOffset) {
+  const pattern = ["music", "jingle", "music", "music", "container", "music", "jingle", "music"].slice(
+    0,
+    patternLength
+  );
+
+  let cursorSeconds = hour * 3600;
+  let musicIndex = musicOffset;
+  let containerIndex = containerOffset;
+  const entries = [];
+
+  pattern.forEach((kind, i) => {
+    let itemId;
+    if (kind === "music") {
+      itemId = MUSIC_IDS[musicIndex % MUSIC_IDS.length];
+      musicIndex += 1;
+    } else if (kind === "jingle") {
+      itemId = JINGLE_ID;
+    } else {
+      itemId = CONTAINER_IDS[containerIndex % CONTAINER_IDS.length];
+      containerIndex += 1;
+    }
+
+    const item = items.find((it) => it.id === itemId);
+    const h = String(Math.floor(cursorSeconds / 3600) % 24).padStart(2, "0");
+    const m = String(Math.floor((cursorSeconds % 3600) / 60)).padStart(2, "0");
+    const s = String(Math.floor(cursorSeconds % 60)).padStart(2, "0");
+
+    entries.push({
+      position: i + 1,
+      itemId,
+      scheduledStart: `${h}:${m}:${s}`,
+    });
+
+    cursorSeconds += item ? item.duration : 0;
+  });
+
+  return entries;
+}
+
+const playlists = [
+  { id: "pl-06", date: today, hour: 6, entries: buildHourEntries(6, 7, 0, 0) },
+  { id: "pl-07", date: today, hour: 7, entries: buildHourEntries(7, 8, 1, 1) },
+  { id: "pl-08", date: today, hour: 8, entries: buildHourEntries(8, 6, 2, 2) },
+  { id: "pl-09", date: today, hour: 9, entries: buildHourEntries(9, 8, 3, 0) },
+  { id: "pl-10", date: today, hour: 10, entries: buildHourEntries(10, 7, 0, 1) },
+];
+
+module.exports = {
+  storages,
+  folders,
+  items,
+  ITEM_TYPES,
+  CONTAINER_TYPES,
+  CUE_POINTS,
+  ATTRIBUTE_DEFINITIONS,
+  playlists,
+};

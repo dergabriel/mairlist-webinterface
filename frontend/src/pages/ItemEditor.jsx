@@ -127,9 +127,10 @@ const WAVE_BARS = Array.from({ length: 200 }, (_, i) => {
 
 // --- Small components ---
 
-function NavItem({ icon: Icon, label, active }) {
+function NavItem({ icon: Icon, label, active, onClick }) {
   return (
     <button
+      onClick={onClick}
       className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
         active ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
       }`}
@@ -814,7 +815,7 @@ const TABS = [
   { key: "cue", label: "Cue-Editor", icon: Pencil },
 ];
 
-export default function ItemEditor({ internalId, onBack }) {
+export default function ItemEditor({ internalId, onBack, onNavigate }) {
   const [item, setItem] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -884,9 +885,9 @@ export default function ItemEditor({ internalId, onBack }) {
         </nav>
         <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Datenbank</div>
         <nav className="mb-5 space-y-0.5">
-          <NavItem icon={Database} label="Elemente" active />
+          <NavItem icon={Database} label="Elemente" active onClick={onBack} />
           <NavItem icon={Copy} label="Vorlagen" />
-          <NavItem icon={ListMusic} label="Playlist" />
+          <NavItem icon={ListMusic} label="Playlist" onClick={() => onNavigate?.("playlist")} />
         </nav>
         <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Administration</div>
         <nav className="space-y-0.5">

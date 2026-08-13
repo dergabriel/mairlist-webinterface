@@ -19,6 +19,11 @@
 //   updateItem(id, data)     -> updated item or null
 //   deleteItem(id)           -> true if an item was deleted, false otherwise
 //   uploadFile(storageId, filename, buffer, title) -> newly created item, or null if storage unknown
+//   getPlaylistsByDate(date)  -> array of { id, date, hour } for that date, sorted by hour
+//   getPlaylistById(id)       -> { id, date, hour, entries } with entries' items resolved, or null
+//   reorderPlaylist(id, order) -> playlist (as getPlaylistById) with entries in `order`, or null
+//   insertPlaylistItem(id, { itemId, afterPosition }) -> playlist (as getPlaylistById), or null
+//   removePlaylistItem(id, position) -> playlist (as getPlaylistById), or null
 //
 // Writes currently mutate the in-memory mockData array (the "copy" per
 // README's write-only-against-a-copy rule). Once the real schema is proven,
@@ -26,7 +31,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { storages, folders, items, ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
+const { storages, folders, items, ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS, playlists } = require("./mockData");
 
 function getFolderTree() {
   const byParent = (parentId) =>
@@ -92,6 +97,95 @@ function searchItems(query, opts = {}) {
 // Cue point definitions (key, label, colour) for the cue editor.
 function getCuePoints() {
   return CUE_POINTS;
+}
+
+// Playlists for a given date, one per hour that has one, sorted by hour.
+// Returns the summary shape { id, date, hour } — no entries, no resolved
+// items — for the hour-list column in the UI.
+function getPlaylistsByDate(date) {
+  return playlists
+    .filter((p) => p.date === date)
+    .sort((a, b) => a.hour - b.hour)
+    .map((p) => ({ id: p.id, date: p.date, hour: p.hour }));
+}
+
+// Single hour's playlist with entries resolved against `items`. Returns
+// null if the playlist doesn't exist so the route can 404.
+function getPlaylistById(id) {
+  const playlist = playlists.find((p) => p.id === id);
+  if (!playlist) return null;
+  const entries = [...playlist.entries]
+    .sort((a, b) => a.position - b.position)
+    .map((entry) => ({ ...entry, item: getItemById(entry.itemId) || null }));
+  return { id: playlist.id, date: playlist.date, hour: playlist.hour, entries };
+}
+
+// Recomputes position (1-based, array order) and scheduledStart (cumulative
+// item duration, starting at the top of the playlist's hour) for every entry
+// in place. Called after any reorder/insert/remove so the two always agree
+// with the actual entry order.
+function resequence(playlist) {
+  let cursorSeconds = playlist.hour * 3600;
+  playlist.entries.forEach((entry, i) => {
+    entry.position = i + 1;
+    const h = String(Math.floor(cursorSeconds / 3600) % 24).padStart(2, "0");
+    const m = String(Math.floor((cursorSeconds % 3600) / 60)).padStart(2, "0");
+    const s = String(Math.floor(cursorSeconds % 60)).padStart(2, "0");
+    entry.scheduledStart = `${h}:${m}:${s}`;
+    const item = getItemById(entry.itemId);
+    cursorSeconds += item ? item.duration : 0;
+  });
+}
+
+// Reorders a playlist's entries to match `order` (an array of the entries'
+// current positions, in the desired new order), then recomputes position and
+// scheduledStart for all of them. Returns the resolved playlist, or null if
+// the playlist doesn't exist or `order` doesn't match its entries exactly.
+function reorderPlaylist(id, order) {
+  const playlist = playlists.find((p) => p.id === id);
+  if (!playlist) return null;
+
+  const byPosition = new Map(playlist.entries.map((e) => [e.position, e]));
+  if (order.length !== playlist.entries.length) return null;
+  const reordered = order.map((pos) => byPosition.get(Number(pos)));
+  if (reordered.some((e) => !e)) return null;
+
+  // TODO: replace with a real SQL transaction (bulk position UPDATE) once the schema is confirmed.
+  playlist.entries = reordered;
+  resequence(playlist);
+  return getPlaylistById(id);
+}
+
+// Inserts a new entry for `itemId` right after the entry currently at
+// `afterPosition` (0 to insert at the very top), then recomputes position
+// and scheduledStart for all entries. Returns the resolved playlist, or null
+// if the playlist or item doesn't exist.
+function insertPlaylistItem(id, { itemId, afterPosition }) {
+  const playlist = playlists.find((p) => p.id === id);
+  if (!playlist) return null;
+  if (!getItemById(itemId)) return null;
+
+  const insertAt = afterPosition == null ? playlist.entries.length : Number(afterPosition);
+  // TODO: replace with a real SQL INSERT (+ position shift) once the schema is confirmed.
+  playlist.entries.splice(insertAt, 0, { position: 0, itemId, scheduledStart: "" });
+  resequence(playlist);
+  return getPlaylistById(id);
+}
+
+// Removes the entry at `position`, then recomputes position and
+// scheduledStart for the remaining entries. Returns the resolved playlist,
+// or null if the playlist doesn't exist or has no entry at that position.
+function removePlaylistItem(id, position) {
+  const playlist = playlists.find((p) => p.id === id);
+  if (!playlist) return null;
+
+  const index = playlist.entries.findIndex((e) => e.position === Number(position));
+  if (index === -1) return null;
+
+  // TODO: replace with a real SQL DELETE (+ position shift) once the schema is confirmed.
+  playlist.entries.splice(index, 1);
+  resequence(playlist);
+  return getPlaylistById(id);
 }
 
 // Predefined attribute schema (key, label, type, options) for the item
@@ -222,4 +316,9 @@ module.exports = {
   updateItem,
   deleteItem,
   uploadFile,
+  getPlaylistsByDate,
+  getPlaylistById,
+  reorderPlaylist,
+  insertPlaylistItem,
+  removePlaylistItem,
 };

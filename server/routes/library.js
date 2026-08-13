@@ -106,6 +106,45 @@ router.post("/upload", (req, res) => {
   });
 });
 
+// GET /api/playlists?date=YYYY-MM-DD -> all hours with a playlist for that date
+router.get("/playlists", (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ error: "date ist erforderlich" });
+  res.json(repo.getPlaylistsByDate(date));
+});
+
+// GET /api/playlists/:id -> one hour's playlist with resolved items
+router.get("/playlists/:id", (req, res) => {
+  const playlist = repo.getPlaylistById(req.params.id);
+  if (!playlist) return res.status(404).json({ error: "Playlist not found" });
+  res.json(playlist);
+});
+
+// PUT /api/playlists/:id/reorder -> apply a new entry order. Body: { order: [position, ...] }
+router.put("/playlists/:id/reorder", (req, res) => {
+  const { order } = req.body;
+  if (!Array.isArray(order)) return res.status(400).json({ error: "order (Array) ist erforderlich" });
+  const playlist = repo.reorderPlaylist(req.params.id, order);
+  if (!playlist) return res.status(400).json({ error: "Playlist oder Reihenfolge ungültig" });
+  res.json(playlist);
+});
+
+// POST /api/playlists/:id/items -> insert an item. Body: { itemId, afterPosition? }
+router.post("/playlists/:id/items", (req, res) => {
+  const { itemId, afterPosition } = req.body;
+  if (!itemId) return res.status(400).json({ error: "itemId ist erforderlich" });
+  const playlist = repo.insertPlaylistItem(req.params.id, { itemId, afterPosition });
+  if (!playlist) return res.status(400).json({ error: "Playlist oder Item ungültig" });
+  res.status(201).json(playlist);
+});
+
+// DELETE /api/playlists/:id/items/:position -> remove the entry at that position
+router.delete("/playlists/:id/items/:position", (req, res) => {
+  const playlist = repo.removePlaylistItem(req.params.id, req.params.position);
+  if (!playlist) return res.status(404).json({ error: "Playlist oder Eintrag nicht gefunden" });
+  res.json(playlist);
+});
+
 // DELETE /api/items/:id -> delete an item
 router.delete("/items/:id", (req, res) => {
   const deleted = repo.deleteItem(req.params.id);

@@ -12,37 +12,9 @@
 //   getArtists()             -> array of distinct artist names
 //   getItems(filters)        -> array of items (filtered)
 //   getItemById(id)          -> single item or null
-//   getItemHistory(id)       -> play history array (newest first) or null
 //   searchItems(query, opts) -> array of items
-//   getAttributeDefinitions() -> predefined attribute schema
-//   createItem(data)         -> newly created item
-//   updateItem(id, data)     -> updated item or null
-//   deleteItem(id)           -> true if an item was deleted, false otherwise
-//   uploadFile(storageId, filename, buffer, title) -> newly created item, or null if storage unknown
-//   getPlaylistsByDate(date)  -> array of all 24 hours { id, date, hour, hasEntries } for that date, sorted by hour
-//   getPlaylistById(id)       -> { id, date, hour, entries } with entries' items resolved, or null
-//   reorderPlaylist(id, order) -> playlist (as getPlaylistById) with entries in `order`, or null
-//   insertPlaylistItem(id, { itemId, afterPosition }) -> playlist (as getPlaylistById), or null
-//   removePlaylistItem(id, position) -> playlist (as getPlaylistById), or null
-//   savePlaylistItemOverrides(id, position, overrides) -> playlist (as getPlaylistById), or null
-//
-// Playlist entry overrides (mAirList calls these "volatile" changes): a
-// playlist entry may carry an `overrides` object with a subset of item
-// fields (cue, attributes, ...) that apply ONLY to that one entry, in that
-// one hour. They are never merged into the global item here — entries are
-// returned with `item` (the untouched global item) and `overrides` (the
-// per-instance patch) as two separate keys, and it's the caller's job to
-// layer them for display. This mirrors real mAirList: editing an item
-// opened from a playlist is local to that slot unless explicitly written
-// back to the database.
-//
-// Writes currently mutate the in-memory mockData array (the "copy" per
-// README's write-only-against-a-copy rule). Once the real schema is proven,
-// only this file is swapped for a SQL-backed implementation.
 
-const fs = require("fs");
-const path = require("path");
-const { storages, folders, items, ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS, playlists } = require("./mockData");
+const { storages, folders, items, ITEM_TYPES, CUE_POINTS } = require("./mockData");
 
 function getFolderTree() {
   const byParent = (parentId) =>
@@ -57,9 +29,10 @@ function getStorages() {
 }
 
 function getItemTypes() {
-  // Only return types that actually have items, mirroring the mAirList tree.
+  // Return full type definitions. Mark which types have items in the library,
+  // mirroring the mAirList tree (only used types are shown there).
   const used = new Set(items.map((i) => i.type));
-  return ITEM_TYPES.filter((t) => used.has(t));
+  return ITEM_TYPES.map((t) => ({ ...t, hasItems: used.has(t.key) }));
 }
 
 function getArtists() {
@@ -84,15 +57,6 @@ function getItemById(id) {
   return items.find((i) => i.id === id) || null;
 }
 
-// Play history, newest first. Returns null if the item itself doesn't exist,
-// so the route can tell "no history" apart from "no such item".
-function getItemHistory(id) {
-  const item = getItemById(id);
-  if (!item) return null;
-  const history = item.playHistory || [];
-  return [...history].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt));
-}
-
 function searchItems(query, opts = {}) {
   if (!query || query.trim() === "") return [];
   const q = query.toLowerCase();
@@ -110,272 +74,6 @@ function getCuePoints() {
   return CUE_POINTS;
 }
 
-// Synthetic id used for an hour that has no playlist record yet. Stable per
-// date+hour so the frontend can select an empty hour and, if an item is
-// inserted, insertPlaylistItem() can find/materialize the same record.
-const emptyHourId = (date, hour) => `${date}-${String(hour).padStart(2, "0")}`;
-
-// All 24 hours (00-23) for a given date, sorted by hour. Every hour is
-// included so the UI can render the full day; hasEntries marks which ones
-// actually have a playlist with entries.
-function getPlaylistsByDate(date) {
-  const byHour = new Map(playlists.filter((p) => p.date === date).map((p) => [p.hour, p]));
-  return Array.from({ length: 24 }, (_, hour) => {
-    const existing = byHour.get(hour);
-    return {
-      id: existing ? existing.id : emptyHourId(date, hour),
-      date,
-      hour,
-      hasEntries: !!existing && existing.entries.length > 0,
-    };
-  });
-}
-
-// Single hour's playlist with entries resolved against `items`. Returns
-// null if the id is neither an existing playlist nor a valid synthetic
-// empty-hour id, so the route can 404.
-function getPlaylistById(id) {
-  const playlist = playlists.find((p) => p.id === id);
-  if (playlist) {
-    const entries = [...playlist.entries]
-      .sort((a, b) => a.position - b.position)
-      // `overrides` is passed through as-is (undefined if never set) — NOT
-      // merged into `item`. The global item stays untouched; merging the two
-      // for display is the frontend's job, per entry, on demand.
-      .map((entry) => ({ ...entry, item: getItemById(entry.itemId) || null }));
-    return { id: playlist.id, date: playlist.date, hour: playlist.hour, entries };
-  }
-
-  const empty = parseEmptyHourId(id);
-  if (!empty) return null;
-  return { id, date: empty.date, hour: empty.hour, entries: [] };
-}
-
-// Sets (or clears, if `overrides` is null/empty) the volatile per-instance
-// overrides on the entry at `position`. These values apply only to this one
-// playlist slot and are never written into the global item. Returns the
-// resolved playlist, or null if the playlist or entry doesn't exist.
-function savePlaylistItemOverrides(id, position, overrides) {
-  const playlist = playlists.find((p) => p.id === id);
-  if (!playlist) return null;
-
-  const entry = playlist.entries.find((e) => e.position === Number(position));
-  if (!entry) return null;
-
-  // TODO: replace with a real SQL UPDATE (playlist_entry.overrides) once the schema is confirmed.
-  if (overrides == null || Object.keys(overrides).length === 0) {
-    delete entry.overrides;
-  } else {
-    entry.overrides = overrides;
-  }
-  return getPlaylistById(id);
-}
-
-// Parses a synthetic empty-hour id back into { date, hour }, or null if it
-// isn't one.
-function parseEmptyHourId(id) {
-  const match = /^(\d{4}-\d{2}-\d{2})-(\d{2})$/.exec(id);
-  if (!match) return null;
-  return { date: match[1], hour: Number(match[2]) };
-}
-
-// Finds the playlist record for `id`, creating an empty one from a
-// synthetic empty-hour id if it doesn't exist yet. Returns null if `id` is
-// neither a known playlist nor a valid empty-hour id.
-function getOrCreatePlaylist(id) {
-  let playlist = playlists.find((p) => p.id === id);
-  if (playlist) return playlist;
-
-  const empty = parseEmptyHourId(id);
-  if (!empty) return null;
-  playlist = { id, date: empty.date, hour: empty.hour, entries: [] };
-  playlists.push(playlist);
-  return playlist;
-}
-
-// Recomputes position (1-based, array order) and scheduledStart (cumulative
-// item duration, starting at the top of the playlist's hour) for every entry
-// in place. Called after any reorder/insert/remove so the two always agree
-// with the actual entry order.
-function resequence(playlist) {
-  let cursorSeconds = playlist.hour * 3600;
-  playlist.entries.forEach((entry, i) => {
-    entry.position = i + 1;
-    const h = String(Math.floor(cursorSeconds / 3600) % 24).padStart(2, "0");
-    const m = String(Math.floor((cursorSeconds % 3600) / 60)).padStart(2, "0");
-    const s = String(Math.floor(cursorSeconds % 60)).padStart(2, "0");
-    entry.scheduledStart = `${h}:${m}:${s}`;
-    const item = getItemById(entry.itemId);
-    cursorSeconds += item ? item.duration : 0;
-  });
-}
-
-// Reorders a playlist's entries to match `order` (an array of the entries'
-// current positions, in the desired new order), then recomputes position and
-// scheduledStart for all of them. Returns the resolved playlist, or null if
-// the playlist doesn't exist or `order` doesn't match its entries exactly.
-function reorderPlaylist(id, order) {
-  const playlist = playlists.find((p) => p.id === id);
-  if (!playlist) return null;
-
-  const byPosition = new Map(playlist.entries.map((e) => [e.position, e]));
-  if (order.length !== playlist.entries.length) return null;
-  const reordered = order.map((pos) => byPosition.get(Number(pos)));
-  if (reordered.some((e) => !e)) return null;
-
-  // TODO: replace with a real SQL transaction (bulk position UPDATE) once the schema is confirmed.
-  playlist.entries = reordered;
-  resequence(playlist);
-  return getPlaylistById(id);
-}
-
-// Inserts a new entry for `itemId` right after the entry currently at
-// `afterPosition` (0 to insert at the very top), then recomputes position
-// and scheduledStart for all entries. Returns the resolved playlist, or null
-// if the playlist doesn't exist (or can't be created from `id`) or the item
-// doesn't exist. `id` may be a synthetic empty-hour id, in which case the
-// playlist record is created on first insert.
-function insertPlaylistItem(id, { itemId, afterPosition }) {
-  const playlist = getOrCreatePlaylist(id);
-  if (!playlist) return null;
-  if (!getItemById(itemId)) return null;
-
-  const insertAt = afterPosition == null ? playlist.entries.length : Number(afterPosition);
-  // TODO: replace with a real SQL INSERT (+ position shift) once the schema is confirmed.
-  playlist.entries.splice(insertAt, 0, { position: 0, itemId, scheduledStart: "" });
-  resequence(playlist);
-  return getPlaylistById(id);
-}
-
-// Removes the entry at `position`, then recomputes position and
-// scheduledStart for the remaining entries. Returns the resolved playlist,
-// or null if the playlist doesn't exist or has no entry at that position.
-function removePlaylistItem(id, position) {
-  const playlist = playlists.find((p) => p.id === id);
-  if (!playlist) return null;
-
-  const index = playlist.entries.findIndex((e) => e.position === Number(position));
-  if (index === -1) return null;
-
-  // TODO: replace with a real SQL DELETE (+ position shift) once the schema is confirmed.
-  playlist.entries.splice(index, 1);
-  resequence(playlist);
-  return getPlaylistById(id);
-}
-
-// Predefined attribute schema (key, label, type, options) for the item
-// editor's Attribute tab.
-function getAttributeDefinitions() {
-  return ATTRIBUTE_DEFINITIONS;
-}
-
-// Assumption: internalId is the next integer after the current max, since
-// there is no real ID generator yet. The real DB will assign this instead
-// (auto-increment / sequence), so this logic disappears once SQL is wired up.
-function nextInternalId() {
-  const max = items.reduce((acc, i) => Math.max(acc, i.internalId), 0);
-  return max + 1;
-}
-
-function emptyCue() {
-  const base = {};
-  for (const cp of CUE_POINTS) base[cp.key] = null;
-  return base;
-}
-
-function emptyPlayback() {
-  return {
-    gainDb: 0,
-    normalizedLufs: null,
-    segueMode: "normal",
-  };
-}
-
-function createItem(data = {}) {
-  const internalId = nextInternalId();
-  const item = {
-    id: String(internalId),
-    internalId,
-    externalId: data.externalId ?? null,
-    type: data.type || "music",
-    containerType: data.containerType,
-    title: data.title || "",
-    artist: data.artist || "",
-    duration: data.duration != null ? Number(data.duration) : 0,
-    endTime: data.endTime ?? null,
-    storageId: data.storageId ?? null,
-    relativePath: data.relativePath ?? null,
-    folderId: data.folderId ?? null,
-    comment: data.comment || "",
-    color: data.color ?? null,
-    cover: data.cover ?? null,
-    cue: emptyCue(),
-    playback: emptyPlayback(),
-    attributes: data.attributes || {},
-    updatedAt: new Date().toISOString(),
-  };
-  // TODO: replace with a real SQL INSERT once the schema is confirmed.
-  items.push(item);
-  return item;
-}
-
-function updateItem(id, data = {}) {
-  const item = getItemById(id);
-  if (!item) return null;
-  // TODO: replace with a real SQL UPDATE once the schema is confirmed.
-  Object.assign(item, data, { updatedAt: new Date().toISOString() });
-  return item;
-}
-
-function deleteItem(id) {
-  const index = items.findIndex((i) => i.id === id);
-  if (index === -1) return false;
-  // TODO: replace with a real SQL DELETE once the schema is confirmed.
-  items.splice(index, 1);
-  return true;
-}
-
-// Sanitize an uploaded filename: keep the extension, replace anything that
-// isn't alphanumeric/dot/dash/underscore in the base name with underscores.
-function sanitizeFilename(filename) {
-  const ext = path.extname(filename);
-  const base = path.basename(filename, ext);
-  const safeBase = base.replace(/[^a-zA-Z0-9_-]+/g, "_");
-  return `${safeBase}${ext}`;
-}
-
-// storage.location values are the real (Windows) mAirList paths. On a dev
-// machine those drives don't exist, so UPLOAD_BASE_DIR can redirect writes to
-// a local folder while keeping storage.location as the value stored on the
-// item. Not set in production, where storage.location is used as-is.
-function resolveStorageDir(storage) {
-  const base = process.env.UPLOAD_BASE_DIR;
-  if (!base) return storage.location;
-  return path.join(base, storage.name);
-}
-
-// Writes the uploaded file into the given storage's location and creates a
-// matching item. Returns null if the storage doesn't exist.
-function uploadFile(storageId, filename, buffer, title) {
-  const storage = storages.find((s) => s.id === Number(storageId));
-  if (!storage) return null;
-
-  const safeFilename = sanitizeFilename(filename);
-  const ext = path.extname(safeFilename);
-  const derivedTitle = title && title.trim() !== "" ? title.trim() : path.basename(safeFilename, ext);
-
-  // TODO: replace with real SQL + real file system write
-  const targetDir = resolveStorageDir(storage);
-  fs.mkdirSync(targetDir, { recursive: true });
-  fs.writeFileSync(path.join(targetDir, safeFilename), buffer);
-
-  return createItem({
-    title: derivedTitle,
-    storageId: storage.id,
-    relativePath: safeFilename,
-  });
-}
-
 module.exports = {
   getFolderTree,
   getStorages,
@@ -383,18 +81,6 @@ module.exports = {
   getArtists,
   getItems,
   getItemById,
-  getItemHistory,
   searchItems,
   getCuePoints,
-  getAttributeDefinitions,
-  createItem,
-  updateItem,
-  deleteItem,
-  uploadFile,
-  getPlaylistsByDate,
-  getPlaylistById,
-  reorderPlaylist,
-  insertPlaylistItem,
-  removePlaylistItem,
-  savePlaylistItemOverrides,
 };

@@ -38,12 +38,20 @@ export function getItemById(id) {
   return request(`/items/${id}`);
 }
 
+export function getItemHistory(id) {
+  return request(`/items/${id}/history`);
+}
+
 export function searchItems(q, fields) {
   return request(`/search${qs({ q, fields: fields ? fields.join(",") : undefined })}`);
 }
 
 export function getCuePoints() {
   return request("/cuepoints");
+}
+
+export function getAttributeDefinitions() {
+  return request("/attributes/definitions");
 }
 
 export function createItem(data) {

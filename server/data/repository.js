@@ -13,6 +13,13 @@
 //   getItems(filters)        -> array of items (filtered)
 //   getItemById(id)          -> single item or null
 //   searchItems(query, opts) -> array of items
+//   createItem(data)         -> newly created item
+//   updateItem(id, data)     -> updated item or null
+//   deleteItem(id)           -> true if an item was deleted, false otherwise
+//
+// Writes currently mutate the in-memory mockData array (the "copy" per
+// README's write-only-against-a-copy rule). Once the real schema is proven,
+// only this file is swapped for a SQL-backed implementation.
 
 const { storages, folders, items, ITEM_TYPES, CUE_POINTS } = require("./mockData");
 
@@ -73,6 +80,63 @@ function getCuePoints() {
   return CUE_POINTS;
 }
 
+// Assumption: internalId is the next integer after the current max, since
+// there is no real ID generator yet. The real DB will assign this instead
+// (auto-increment / sequence), so this logic disappears once SQL is wired up.
+function nextInternalId() {
+  const max = items.reduce((acc, i) => Math.max(acc, i.internalId), 0);
+  return max + 1;
+}
+
+function emptyCue() {
+  const base = {};
+  for (const cp of CUE_POINTS) base[cp.key] = null;
+  return base;
+}
+
+function createItem(data = {}) {
+  const internalId = nextInternalId();
+  const item = {
+    id: String(internalId),
+    internalId,
+    externalId: data.externalId ?? null,
+    type: data.type || "music",
+    containerType: data.containerType,
+    title: data.title || "",
+    artist: data.artist || "",
+    duration: data.duration != null ? Number(data.duration) : 0,
+    endTime: data.endTime ?? null,
+    storageId: data.storageId ?? null,
+    relativePath: data.relativePath ?? null,
+    folderId: data.folderId ?? null,
+    comment: data.comment || "",
+    color: data.color ?? null,
+    cover: data.cover ?? null,
+    cue: emptyCue(),
+    attributes: data.attributes || {},
+    updatedAt: new Date().toISOString(),
+  };
+  // TODO: replace with a real SQL INSERT once the schema is confirmed.
+  items.push(item);
+  return item;
+}
+
+function updateItem(id, data = {}) {
+  const item = getItemById(id);
+  if (!item) return null;
+  // TODO: replace with a real SQL UPDATE once the schema is confirmed.
+  Object.assign(item, data, { updatedAt: new Date().toISOString() });
+  return item;
+}
+
+function deleteItem(id) {
+  const index = items.findIndex((i) => i.id === id);
+  if (index === -1) return false;
+  // TODO: replace with a real SQL DELETE once the schema is confirmed.
+  items.splice(index, 1);
+  return true;
+}
+
 module.exports = {
   getFolderTree,
   getStorages,
@@ -82,4 +146,7 @@ module.exports = {
   getItemById,
   searchItems,
   getCuePoints,
+  createItem,
+  updateItem,
+  deleteItem,
 };

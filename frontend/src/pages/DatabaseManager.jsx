@@ -1,62 +1,27 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   LayoutDashboard, Settings, Database, Copy, ListMusic,
   Users, Tag, ScrollText, Folder, FolderOpen, ChevronRight,
   ChevronDown, RefreshCw, Plus, Search, Pencil, Trash2, ArrowUpDown,
+  AlertTriangle, X,
 } from "lucide-react";
-
-// --- Mock data (mirrors the backend repository, embedded for the frontend-only pass) ---
-
-const FOLDERS = [
-  { id: "all", name: "Alle Elemente", parentId: null, special: true },
-  { id: "import", name: "# Import", parentId: null, special: true },
-  { id: 10, name: "Beiträge", parentId: null },
-  { id: 11, name: "aktuell", parentId: 10 },
-  { id: 12, name: "zeitlos", parentId: 10 },
-  { id: 20, name: "Musik", parentId: null },
-  { id: 21, name: "A - Heavy Current", parentId: 20 },
-  { id: 22, name: "B - Medium Current", parentId: 20 },
-  { id: 23, name: "C - Light", parentId: 20 },
-  { id: 24, name: "D - Recurrent", parentId: 20 },
-  { id: 25, name: "E - 2010s", parentId: 20 },
-  { id: 26, name: "N - New Music", parentId: 20 },
-  { id: 27, name: "V - Virale Songs", parentId: 20 },
-  { id: 30, name: "Verpackung", parentId: null },
-  { id: 31, name: "Meme Dropper", parentId: 30 },
-  { id: 32, name: "Showopener", parentId: 30 },
-  { id: 33, name: "Sweeper", parentId: 30 },
-  { id: 34, name: "Themes", parentId: 30 },
-  { id: 35, name: "Vollblock Halbblock", parentId: 30 },
-];
-
-const ITEMS = [
-  { id: 476, title: "Mood", artist: "24kGoldn & Iann Dior", type: "Music", length: 140.533, folderId: 21, updatedAt: "2023-12-19T22:52:59", comment: "" },
-  { id: 492, title: "Your Love (9PM)", artist: "ATB & Topic & A7S", type: "Music", length: 150.053, folderId: 21, updatedAt: "2023-12-19T22:34:10", comment: "" },
-  { id: 598, title: "Sweet Dreams", artist: "Alan Walker & Imanbek", type: "Music", length: 138.819, folderId: 22, updatedAt: "2023-12-19T23:02:56", comment: "" },
-  { id: 477, title: "When I'm Gone", artist: "Alesso & Katy Perry", type: "Music", length: 161.267, folderId: 21, updatedAt: "2023-12-19T23:04:41", comment: "" },
-  { id: 478, title: "Follow You", artist: "Alle Farben & Alexander Tidebrink", type: "Music", length: 170.16, folderId: 24, updatedAt: "2023-12-19T23:06:29", comment: "" },
-  { id: 479, title: "Castle", artist: "Alle Farben & Hugel & Fast Boy", type: "Music", length: 146.586, folderId: 24, updatedAt: "2023-12-19T23:07:50", comment: "" },
-  { id: 480, title: "Fading", artist: "Alle Farben & ILIRA", type: "Music", length: 207.013, folderId: 24, updatedAt: "2023-12-19T23:09:14", comment: "" },
-  { id: 481, title: "Little Hollywood", artist: "Alle Farben & Janieck", type: "Music", length: 184.2, folderId: 24, updatedAt: "2023-12-19T23:10:32", comment: "" },
-  { id: 482, title: "Different for Us", artist: "Alle Farben & Jordan Powers", type: "Music", length: 185.08, folderId: 24, updatedAt: "2023-12-19T23:11:46", comment: "" },
-  { id: 483, title: "As Far as Feelings Go", artist: "Alle Farben & Justin Jesso", type: "Music", length: 209.64, folderId: 24, updatedAt: "2023-12-19T22:33:43", comment: "" },
-  { id: 599, title: "Alright", artist: "Alle Farben & Kiddo", type: "Music", length: 169, folderId: 24, updatedAt: "2023-12-19T22:39:20", comment: "" },
-  { id: 484, title: "Forgot How to Love", artist: "Alle Farben & Moss Kena", type: "Music", length: 149.055, folderId: 24, updatedAt: "2023-12-19T22:33:45", comment: "" },
-  { id: 469, title: "KIDS", artist: "Alle Farben & Vize & Graham Candy", type: "Music", length: 184.691, folderId: 24, updatedAt: "2023-12-19T22:34:02", comment: "" },
-  { id: 616, title: "All By Myself", artist: "Alok & Sigala & Ellie Goulding", type: "Music", length: 171.747, folderId: 26, updatedAt: "2023-12-19T22:42:58", comment: "" },
-  { id: 490, title: "2002", artist: "Anne-Marie", type: "Music", length: 186.987, folderId: 25, updatedAt: "2023-12-19T22:34:05", comment: "" },
-  { id: 701, title: "Showopener Kurz", artist: "", type: "Jingle", length: 4.2, folderId: 32, updatedAt: "2023-12-18T14:10:00", comment: "Standard Opener" },
-  { id: 845, title: "Autohaus Becker Spot", artist: "", type: "Advertising", length: 30.0, folderId: 30, updatedAt: "2026-01-05T09:00:00", comment: "Kampagne Frühjahr 2026" },
-  { id: 901, title: "Hook Pool Heavy Current", artist: "", type: "Container", containerType: "Hook", length: 15.0, folderId: 20, updatedAt: "2026-02-01T10:00:00", comment: "Zufälliger Hook aus A - Heavy Current" },
-  { id: 902, title: "Regio Auseinanderschaltung", artist: "", type: "Container", containerType: "Regio", length: 120.0, folderId: null, updatedAt: "2026-02-01T10:05:00", comment: "Regionale Werbung und Verkehr" },
-  { id: 903, title: "Nachrichten zur vollen Stunde", artist: "", type: "Container", containerType: "Nachrichten", length: 180.0, folderId: null, updatedAt: "2026-02-01T10:10:00", comment: "Lädt aktuelle News beim Abspielen" },
-];
+import { getTree, getItems, createItem, deleteItem } from "../lib/api";
 
 // --- Helpers ---
 
-const collectDescendants = (folderId) => {
-  const direct = FOLDERS.filter((f) => f.parentId === folderId).map((f) => f.id);
-  return direct.reduce((acc, id) => [...acc, id, ...collectDescendants(id)], []);
+const collectDescendants = (folder) =>
+  (folder.children || []).reduce(
+    (acc, child) => [...acc, child.id, ...collectDescendants(child)],
+    []
+  );
+
+const findFolder = (nodes, id) => {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const found = findFolder(node.children || [], id);
+    if (found) return found;
+  }
+  return null;
 };
 
 const formatDate = (iso) => iso.replace("T", "  ");
@@ -68,10 +33,12 @@ const formatLength = (sec) => {
   return `${m}:${String(s).padStart(2, "0")}`;
 };
 
+const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
 // --- Tree node ---
 
 function TreeNode({ folder, level, expanded, onToggle, activeId, onSelect }) {
-  const children = FOLDERS.filter((f) => f.parentId === folder.id);
+  const children = folder.children || [];
   const hasChildren = children.length > 0;
   const isOpen = expanded.has(folder.id);
   const isActive = activeId === folder.id;
@@ -149,16 +116,202 @@ function Th({ label, sortKey, sort, onSort, className = "" }) {
   );
 }
 
+// --- New item types (mirrors server/data/mockData.js ITEM_TYPES) ---
+
+const ITEM_TYPES = [
+  { key: "music", label: "Musik" },
+  { key: "jingle", label: "Jingle" },
+  { key: "advertising", label: "Werbung" },
+  { key: "container", label: "Container" },
+  { key: "stream", label: "Stream" },
+  { key: "dummy", label: "Dummy" },
+];
+
+// --- Dialogs ---
+
+const inputClass =
+  "w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-zinc-700";
+
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+      <div className="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-3.5">
+          <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>
+          <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">
+            <X size={15} />
+          </button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function NewItemDialog({ onClose, onCreate }) {
+  const [title, setTitle] = useState("");
+  const [artist, setArtist] = useState("");
+  const [type, setType] = useState("music");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      await onCreate({ title: title.trim(), artist: artist.trim(), type });
+    } catch (err) {
+      setError(err.message);
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="Neues Element" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <label className="block">
+          <span className="mb-1.5 block text-xs text-zinc-400">Title</span>
+          <input
+            className={inputClass} value={title} autoFocus
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Titel des Elements"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs text-zinc-400">Interpret</span>
+          <input
+            className={inputClass} value={artist}
+            onChange={(e) => setArtist(e.target.value)}
+            placeholder="Interpret"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs text-zinc-400">Type</span>
+          <select className={inputClass} value={type} onChange={(e) => setType(e.target.value)}>
+            {ITEM_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+          </select>
+        </label>
+
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-red-500">
+            <AlertTriangle size={14} />
+            <span>Element konnte nicht angelegt werden: {error}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="rounded-md border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            Abbrechen
+          </button>
+          <button
+            type="submit" disabled={!title.trim() || saving}
+            className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
+          >
+            {saving ? "Wird angelegt…" : "Anlegen"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ConfirmDeleteDialog({ item, onClose, onConfirm }) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const confirm = async () => {
+    setDeleting(true);
+    setError(null);
+    try {
+      await onConfirm();
+    } catch (err) {
+      setError(err.message);
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <Modal title="Element löschen" onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-zinc-300">
+          „{item.title}“{item.artist ? `  ·  ${item.artist}` : ""} (ID {item.internalId}) wird endgültig gelöscht.
+        </p>
+
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-red-500">
+            <AlertTriangle size={14} />
+            <span>Element konnte nicht gelöscht werden: {error}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="rounded-md border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            Abbrechen
+          </button>
+          <button
+            onClick={confirm} disabled={deleting}
+            className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-50"
+          >
+            {deleting ? "Wird gelöscht…" : "Löschen"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // --- Main app ---
 
-export default function MairListDB() {
+export default function MairListDB({ onEditItem }) {
+  const [tree, setTree] = useState([]);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
   const [expanded, setExpanded] = useState(new Set([20, 30]));
   const [activeFolder, setActiveFolder] = useState("all");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState({ key: "id", dir: "asc" });
   const [selected, setSelected] = useState(new Set());
 
-  const roots = FOLDERS.filter((f) => f.parentId === null);
+  const [showNewItem, setShowNewItem] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const loadData = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    return Promise.all([getTree(), getItems()])
+      .then(([treeData, itemsData]) => {
+        setTree(treeData);
+        setItems(itemsData);
+      })
+      .catch((err) => {
+        setError(err.message);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handleCreate = async (data) => {
+    const created = await createItem(data);
+    setShowNewItem(false);
+    await loadData();
+    onEditItem?.(created.internalId);
+  };
+
+  const handleDelete = async () => {
+    await deleteItem(deleteTarget.id);
+    setDeleteTarget(null);
+    await loadData();
+  };
+
+  const rootFolder = { id: "all", name: "Alle Elemente", special: true, children: [] };
 
   const toggle = (id) =>
     setExpanded((prev) => {
@@ -168,18 +321,15 @@ export default function MairListDB() {
     });
 
   const activeFolderName =
-    FOLDERS.find((f) => f.id === activeFolder)?.name || "Alle Elemente";
+    (activeFolder === "all" ? rootFolder : findFolder(tree, activeFolder))?.name || "Alle Elemente";
 
   const visibleItems = useMemo(() => {
-    let list = [...ITEMS];
+    let list = [...items];
 
     if (activeFolder !== "all") {
-      if (activeFolder === "import") {
-        list = [];
-      } else {
-        const ids = new Set([activeFolder, ...collectDescendants(activeFolder)]);
-        list = list.filter((i) => ids.has(i.folderId));
-      }
+      const folder = findFolder(tree, activeFolder);
+      const ids = new Set([activeFolder, ...(folder ? collectDescendants(folder) : [])]);
+      list = list.filter((i) => ids.has(i.folderId));
     }
 
     if (search.trim()) {
@@ -201,7 +351,7 @@ export default function MairListDB() {
     });
 
     return list;
-  }, [activeFolder, search, sort]);
+  }, [items, tree, activeFolder, search, sort]);
 
   const onSort = (key) =>
     setSort((prev) =>
@@ -252,7 +402,16 @@ export default function MairListDB() {
 
       {/* Library tree */}
       <aside className="w-64 shrink-0 overflow-y-auto border-r border-zinc-800 bg-zinc-900/50 py-3 pr-2">
-        {roots.map((folder) => (
+        <TreeNode
+          folder={rootFolder} level={0}
+          expanded={expanded} onToggle={toggle}
+          activeId={activeFolder} onSelect={setActiveFolder}
+        />
+        {loading && <div className="px-3 py-2 text-sm text-zinc-600">Lade Ordner…</div>}
+        {!loading && error && (
+          <div className="px-3 py-2 text-sm text-red-500">Baum nicht verfügbar</div>
+        )}
+        {!loading && !error && tree.map((folder) => (
           <TreeNode
             key={folder.id} folder={folder} level={0}
             expanded={expanded} onToggle={toggle}
@@ -271,14 +430,20 @@ export default function MairListDB() {
             </div>
             <h1 className="text-lg font-semibold">Datenbank-Verwaltung</h1>
           </div>
-          <button className="flex h-9 w-9 items-center justify-center rounded-md border border-green-700/60 text-green-500 transition-colors hover:bg-green-600/10">
-            <RefreshCw size={16} />
+          <button
+            onClick={loadData}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-green-700/60 text-green-500 transition-colors hover:bg-green-600/10"
+          >
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
           </button>
         </header>
 
         {/* Toolbar */}
         <div className="flex items-center justify-between gap-4 px-6 py-3">
-          <button className="flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500">
+          <button
+            onClick={() => setShowNewItem(true)}
+            className="flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
+          >
             <Plus size={16} />
             <span>Neues Element</span>
           </button>
@@ -314,14 +479,31 @@ export default function MairListDB() {
                 <Th label="ID" sortKey="id" sort={sort} onSort={onSort} />
                 <Th label="Title" sortKey="title" sort={sort} onSort={onSort} />
                 <Th label="Typ" sortKey="type" sort={sort} onSort={onSort} />
-                <Th label="Länge" sortKey="length" sort={sort} onSort={onSort} />
+                <Th label="Länge" sortKey="duration" sort={sort} onSort={onSort} />
                 <Th label="Aktualisiert" sortKey="updatedAt" sort={sort} onSort={onSort} />
                 <Th label="Kommentar" sortKey="comment" sort={sort} onSort={onSort} />
                 <th className="px-4 py-3 text-right font-medium text-zinc-400">Aktionen</th>
               </tr>
             </thead>
             <tbody>
-              {visibleItems.map((item) => (
+              {loading && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-16 text-center text-sm text-zinc-600">
+                    Lade Elemente…
+                  </td>
+                </tr>
+              )}
+              {!loading && error && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-16 text-center text-sm">
+                    <div className="flex flex-col items-center gap-2 text-red-500">
+                      <AlertTriangle size={20} />
+                      <span>Elemente konnten nicht geladen werden: {error}</span>
+                    </div>
+                  </td>
+                </tr>
+              )}
+              {!loading && !error && visibleItems.map((item) => (
                 <tr key={item.id} className="border-b border-zinc-800/60 transition-colors hover:bg-zinc-900/50">
                   <td className="px-4 py-3">
                     <input
@@ -335,25 +517,31 @@ export default function MairListDB() {
                     {item.artist && <span className="text-zinc-500">{"  ·  " + item.artist}</span>}
                   </td>
                   <td className="px-4 py-3 text-zinc-400">
-                    {item.type}
-                    {item.containerType && <span className="text-zinc-600">{` (${item.containerType})`}</span>}
+                    {capitalize(item.type)}
+                    {item.containerType && <span className="text-zinc-600">{` (${capitalize(item.containerType)})`}</span>}
                   </td>
-                  <td className="px-4 py-3 text-zinc-400">{formatLength(item.length)}</td>
+                  <td className="px-4 py-3 text-zinc-400">{formatLength(item.duration)}</td>
                   <td className="px-4 py-3 text-zinc-500">{formatDate(item.updatedAt)}</td>
                   <td className="px-4 py-3 text-zinc-500">{item.comment || "-"}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-2">
-                      <button className="flex h-7 w-7 items-center justify-center rounded bg-green-600 text-white transition-colors hover:bg-green-500">
+                      <button
+                        onClick={() => onEditItem?.(item.internalId)}
+                        className="flex h-7 w-7 items-center justify-center rounded bg-green-600 text-white transition-colors hover:bg-green-500"
+                      >
                         <Pencil size={13} />
                       </button>
-                      <button className="flex h-7 w-7 items-center justify-center rounded bg-red-600 text-white transition-colors hover:bg-red-500">
+                      <button
+                        onClick={() => setDeleteTarget(item)}
+                        className="flex h-7 w-7 items-center justify-center rounded bg-red-600 text-white transition-colors hover:bg-red-500"
+                      >
                         <Trash2 size={13} />
                       </button>
                     </div>
                   </td>
                 </tr>
               ))}
-              {visibleItems.length === 0 && (
+              {!loading && !error && visibleItems.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center text-sm text-zinc-600">
                     Keine Elemente in „{activeFolderName}“.
@@ -364,6 +552,17 @@ export default function MairListDB() {
           </table>
         </div>
       </main>
+
+      {showNewItem && (
+        <NewItemDialog onClose={() => setShowNewItem(false)} onCreate={handleCreate} />
+      )}
+      {deleteTarget && (
+        <ConfirmDeleteDialog
+          item={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={handleDelete}
+        />
+      )}
     </div>
   );
 }

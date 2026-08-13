@@ -1,10 +1,11 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   LayoutDashboard, Settings, Database, Copy, ListMusic, Users, Tag, ScrollText,
   RefreshCw, ChevronLeft, Save, LayoutList, Play, Pause, SlidersHorizontal,
   Clock, History, Pencil, Volume2, ZoomIn, ZoomOut, Bookmark, Trash2, Plus,
-  Palette, Image as ImageIcon,
+  Palette, Image as ImageIcon, AlertTriangle,
 } from "lucide-react";
+import { getItemById, updateItem } from "../lib/api";
 
 // --- Shared constants (mirror the backend) ---
 
@@ -44,22 +45,28 @@ const CUE_POINTS = [
   { key: "anchor", label: "Anchor", color: "#f97316" },
 ];
 
-// Example item (Mood), matching the screenshots.
-const INITIAL_ITEM = {
-  internalId: 476,
-  externalId: "",
-  type: "music",
-  containerType: "hook",
-  title: "Mood",
-  artist: "24kGoldn & Iann Dior",
-  duration: 140.533,
-  endTime: "",
-  comment: "",
-  attributes: { Energy: "high", Mood: "uplifting", BPM: "91" },
-  cue: {
-    cueIn: 0.3, hookIn: 45.0, hookOut: 75.0, fadeOut: 136.0, cueOut: 140.533,
-  },
-};
+// Default display order for the cue cards: the points a moderator touches
+// most, shown first. Everything else keeps CUE_POINTS' order below.
+const DEFAULT_CUE_PRIORITY = [
+  "cueIn", "fadeIn", "ramp1", "hookIn", "hookOut", "fadeOut", "cueOut", "startNext",
+];
+
+// Points at the current priority list. Currently just the default; once user
+// settings exist, this becomes a value read from there, and the sorting
+// below (sortByCuePriority) doesn't need to change.
+const cuePriority = DEFAULT_CUE_PRIORITY;
+
+// Priority keys first (in priority order), then the rest in CUE_POINTS order.
+function sortByCuePriority(points, priority) {
+  const rank = new Map(priority.map((key, i) => [key, i]));
+  const prioritised = [];
+  const rest = [];
+  for (const p of points) {
+    (rank.has(p.key) ? prioritised : rest).push(p);
+  }
+  prioritised.sort((a, b) => rank.get(a.key) - rank.get(b.key));
+  return { prioritised, rest };
+}
 
 // --- Helpers ---
 
@@ -72,6 +79,22 @@ const formatTimecode = (sec) => {
 const mmss = (sec) => {
   const t = Math.floor(sec);
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+};
+
+// Cue points are shown and edited as seconds with fractional part (e.g.
+// 140.533). Whether mAirList actually stores them this way internally is
+// unconfirmed (see mockData.js), so the conversion is isolated here. Both
+// are the identity for now; swap the implementation once that's proven.
+const toStorage = (displaySeconds) => displaySeconds;
+const fromStorage = (storedSeconds) => storedSeconds;
+
+const isValidCueValue = (val, duration) => {
+  if (val === null || val === "") return true;
+  const n = Number(val);
+  if (Number.isNaN(n)) return false;
+  if (n < 0) return false;
+  if (duration != null && n > duration) return false;
+  return true;
 };
 
 // Deterministic pseudo waveform, so it never flickers between renders.
@@ -125,7 +148,8 @@ function Field({ label, children, className = "" }) {
 const inputClass =
   "w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-zinc-700";
 
-function CueCard({ point, value, onChange }) {
+function CueCard({ point, value, duration, onChange, onSetMarker, onJump, onClear }) {
+  const invalid = !isValidCueValue(value, duration);
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
       <div className="mb-2 flex items-center justify-between">
@@ -137,15 +161,29 @@ function CueCard({ point, value, onChange }) {
           value={value ?? ""}
           onChange={(e) => onChange(point.key, e.target.value)}
           placeholder="Zeit"
-          className="w-full rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:border-zinc-700"
+          className={`w-full rounded border bg-zinc-950 px-2 py-1 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:border-zinc-700 ${
+            invalid ? "border-red-800/70" : "border-zinc-800"
+          }`}
         />
-        <button className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200" title="Marker setzen">
+        <button
+          onClick={() => onSetMarker(point.key)}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+          title="Marker setzen"
+        >
           <Bookmark size={13} />
         </button>
-        <button className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200" title="Anspringen">
+        <button
+          onClick={() => onJump(point.key)}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+          title="Anspringen"
+        >
           <Volume2 size={13} />
         </button>
-        <button className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-red-400" title="Löschen">
+        <button
+          onClick={() => onClear(point.key)}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
+          title="Löschen"
+        >
           <Trash2 size={13} />
         </button>
       </div>
@@ -178,7 +216,7 @@ function GeneralTab({ item, update }) {
             <input className={inputClass} value={item.duration} onChange={(e) => update("duration", e.target.value)} />
           </Field>
           <Field label="Ende">
-            <input className={inputClass} value={item.endTime} onChange={(e) => update("endTime", e.target.value)} placeholder="" />
+            <input className={inputClass} value={item.endTime ?? ""} onChange={(e) => update("endTime", e.target.value)} placeholder="" />
           </Field>
         </div>
 
@@ -195,12 +233,12 @@ function GeneralTab({ item, update }) {
             <input className={`${inputClass} text-zinc-500`} value={item.internalId} readOnly />
           </Field>
           <Field label="Externe ID">
-            <input className={inputClass} value={item.externalId} onChange={(e) => update("externalId", e.target.value)} />
+            <input className={inputClass} value={item.externalId ?? ""} onChange={(e) => update("externalId", e.target.value)} />
           </Field>
         </div>
 
         <Field label="Kommentar/Beschreibung">
-          <textarea rows={6} className={`${inputClass} resize-none`} value={item.comment} onChange={(e) => update("comment", e.target.value)} />
+          <textarea rows={6} className={`${inputClass} resize-none`} value={item.comment ?? ""} onChange={(e) => update("comment", e.target.value)} />
         </Field>
       </div>
 
@@ -231,53 +269,157 @@ function GeneralTab({ item, update }) {
   );
 }
 
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 16;
+
+// Tick spacing shrinks as we zoom in, so the axis stays readable instead of
+// keeping a fixed 10s grid that would turn into a wall of labels at 16x.
+const tickIntervalFor = (dur, zoomLevel) => {
+  const targetTickCount = 12 * zoomLevel;
+  const rawInterval = dur / targetTickCount;
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+  return steps.find((s) => s >= rawInterval) ?? steps[steps.length - 1];
+};
+
 function CueEditorTab({ item, updateCue }) {
   const [playing, setPlaying] = useState(false);
   const dur = Number(item.duration) || 1;
-  const cursorPct = (2.36 / dur) * 100;
-  const hookStart = ((item.cue.hookIn ?? 0) / dur) * 100;
-  const hookEnd = ((item.cue.hookOut ?? 0) / dur) * 100;
+  const [cursor, setCursor] = useState(Math.min(2.36, dur));
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const viewportRef = useRef(null);
+  const cursorPct = (cursor / dur) * 100;
+  const hookStart = (fromStorage(item.cue.hookIn ?? 0) / dur) * 100;
+  const hookEnd = (fromStorage(item.cue.hookOut ?? 0) / dur) * 100;
 
+  // All positions below are percentages of the zoomed inner track, not the
+  // viewport, so they stay correct regardless of zoomLevel.
   const ticks = useMemo(() => {
+    const interval = tickIntervalFor(dur, zoomLevel);
     const out = [];
-    for (let s = 10; s < dur; s += 10) out.push({ pct: (s / dur) * 100, label: mmss(s) });
+    for (let s = interval; s < dur; s += interval) out.push({ pct: (s / dur) * 100, label: mmss(s) });
     return out;
-  }, [dur]);
+  }, [dur, zoomLevel]);
+
+  const centerViewportOn = (pct) => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const trackWidth = viewport.scrollWidth;
+    const target = (pct / 100) * trackWidth - viewport.clientWidth / 2;
+    viewport.scrollLeft = Math.max(0, Math.min(target, trackWidth - viewport.clientWidth));
+  };
+
+  const zoomIn = () => {
+    setZoomLevel((z) => {
+      const next = Math.min(z * 2, MAX_ZOOM);
+      requestAnimationFrame(() => centerViewportOn(cursorPct));
+      return next;
+    });
+  };
+  const zoomOut = () => {
+    setZoomLevel((z) => Math.max(z / 2, MIN_ZOOM));
+  };
+
+  const seekTo = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+    setCursor(Number((pct * dur).toFixed(3)));
+  };
+
+  const setMarker = (key) => updateCue(key, toStorage(cursor));
+  const jumpTo = (key) => {
+    const val = item.cue[key];
+    if (val == null || val === "") return;
+    setCursor(Math.min(Math.max(fromStorage(Number(val)), 0), dur));
+  };
+  const clearCue = (key) => updateCue(key, "");
+
+  const { prioritised, rest } = useMemo(
+    () => sortByCuePriority(CUE_POINTS, cuePriority),
+    []
+  );
+
+  // Cue points that currently carry a valid, set value, positioned along the
+  // waveform. Sorted by position so nearby markers can be staggered below.
+  const cueMarkers = useMemo(() => {
+    const MIN_GAP_PCT = 4; // labels closer than this get bumped to the next row
+    const active = CUE_POINTS
+      .map((p) => ({ point: p, raw: item.cue[p.key] }))
+      .filter(({ raw }) => raw != null && raw !== "" && isValidCueValue(raw, item.duration))
+      .map(({ point, raw }) => ({
+        point,
+        pct: (fromStorage(Number(raw)) / dur) * 100,
+      }))
+      .sort((a, b) => a.pct - b.pct);
+
+    let lastPct = -Infinity;
+    let row = 0;
+    return active.map((m) => {
+      row = m.pct - lastPct < MIN_GAP_PCT ? row + 1 : 0;
+      lastPct = m.pct;
+      return { ...m, row: row % 3 };
+    });
+  }, [item.cue, item.duration, dur]);
 
   return (
     <div className="space-y-5">
       {/* Waveform */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
-        <div className="relative flex h-32 items-center gap-[1px] overflow-hidden">
-          {/* hook overlay */}
+        {/* scrollable viewport: fixed visible width, horizontal scroll once zoomed in */}
+        <div ref={viewportRef} className="overflow-x-auto overflow-y-hidden">
+          {/* zoomed track: grows to zoomLevel * 100% so bars widen and time positions (in %) stay correct */}
           <div
-            className="absolute top-0 bottom-0 bg-pink-500/15"
-            style={{ left: `${hookStart}%`, width: `${Math.max(hookEnd - hookStart, 0)}%` }}
-          />
-          {/* cursor */}
-          <div className="absolute top-0 bottom-0 z-10 w-px bg-orange-500" style={{ left: `${cursorPct}%` }}>
-            <div className="absolute -top-0.5 -left-[13px] rounded bg-orange-500 px-1 text-[9px] font-medium text-zinc-950">
-              {formatTimecode(2.36)}
+            onClick={seekTo}
+            className="relative cursor-pointer pt-11"
+            style={{ width: `${zoomLevel * 100}%` }}
+          >
+            {/* cue point markers: vertical line + staggered label, own colour per point */}
+            {cueMarkers.map(({ point, pct, row }) => (
+              <div
+                key={point.key}
+                className="absolute bottom-4 z-20 w-px"
+                style={{ left: `${pct}%`, top: `${row * 13}px`, backgroundColor: point.color }}
+              >
+                <div
+                  className="absolute -left-1 top-0 -translate-y-full whitespace-nowrap rounded-sm px-1 text-[9px] font-medium leading-tight"
+                  style={{ color: point.color, backgroundColor: "rgba(9, 9, 11, 0.85)" }}
+                >
+                  {point.label}
+                </div>
+              </div>
+            ))}
+
+            <div className="relative flex h-32 items-center gap-[1px] overflow-hidden">
+              {/* hook overlay */}
+              <div
+                className="absolute top-0 bottom-0 bg-pink-500/15"
+                style={{ left: `${hookStart}%`, width: `${Math.max(hookEnd - hookStart, 0)}%` }}
+              />
+              {/* cursor */}
+              <div className="absolute top-0 bottom-0 z-30 w-px bg-orange-500" style={{ left: `${cursorPct}%` }}>
+                <div className="absolute -top-0.5 -left-[13px] rounded bg-orange-500 px-1 text-[9px] font-medium text-zinc-950">
+                  {formatTimecode(cursor)}
+                </div>
+              </div>
+              {WAVE_BARS.map((h, i) => {
+                const pct = (i / WAVE_BARS.length) * 100;
+                const inHook = pct >= hookStart && pct <= hookEnd;
+                return (
+                  <div
+                    key={i}
+                    className="flex-1 rounded-full"
+                    style={{ height: `${h}%`, backgroundColor: inHook ? "#ec4899" : "#52525b" }}
+                  />
+                );
+              })}
+            </div>
+
+            {/* timeline: same zoomed track, so ticks line up with the waveform under them */}
+            <div className="relative mt-1 h-4 text-[10px] text-zinc-600">
+              {ticks.map((t, i) => (
+                <span key={i} className="absolute -translate-x-1/2" style={{ left: `${t.pct}%` }}>{t.label}</span>
+              ))}
             </div>
           </div>
-          {WAVE_BARS.map((h, i) => {
-            const pct = (i / WAVE_BARS.length) * 100;
-            const inHook = pct >= hookStart && pct <= hookEnd;
-            return (
-              <div
-                key={i}
-                className="flex-1 rounded-full"
-                style={{ height: `${h}%`, backgroundColor: inHook ? "#ec4899" : "#52525b" }}
-              />
-            );
-          })}
-        </div>
-
-        {/* timeline */}
-        <div className="relative mt-1 h-4 text-[10px] text-zinc-600">
-          {ticks.map((t, i) => (
-            <span key={i} className="absolute -translate-x-1/2" style={{ left: `${t.pct}%` }}>{t.label}</span>
-          ))}
         </div>
 
         {/* transport */}
@@ -290,19 +432,58 @@ function CueEditorTab({ item, updateCue }) {
             <input type="range" className="h-1 w-24 accent-orange-500" defaultValue={70} />
           </div>
           <div className="flex items-center gap-1">
-            <button className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800"><ZoomOut size={15} /></button>
-            <button className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800"><ZoomIn size={15} /></button>
-            <button className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800"><RefreshCw size={15} /></button>
+            <button
+              onClick={zoomOut} disabled={zoomLevel <= MIN_ZOOM}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-transparent"
+              title="Verkleinern"
+            >
+              <ZoomOut size={15} />
+            </button>
+            <button
+              onClick={zoomIn} disabled={zoomLevel >= MAX_ZOOM}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-transparent"
+              title="Vergrößern"
+            >
+              <ZoomIn size={15} />
+            </button>
+            <button
+              onClick={() => setZoomLevel(1)}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800"
+              title="Zoom zurücksetzen"
+            >
+              <RefreshCw size={15} />
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Cue point cards */}
+      {/* Cue point cards, priority points first */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
-        {CUE_POINTS.map((p) => (
-          <CueCard key={p.key} point={p} value={item.cue[p.key]} onChange={updateCue} />
+        {prioritised.map((p) => (
+          <CueCard
+            key={p.key} point={p}
+            value={item.cue[p.key] == null ? null : fromStorage(item.cue[p.key])}
+            duration={item.duration}
+            onChange={updateCue} onSetMarker={setMarker} onJump={jumpTo} onClear={clearCue}
+          />
         ))}
       </div>
+
+      {rest.length > 0 && (
+        <>
+          <div className="border-t border-zinc-800" />
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+            {rest.map((p) => (
+              <CueCard
+                key={p.key} point={p}
+                value={item.cue[p.key] == null ? null : fromStorage(item.cue[p.key])}
+                duration={item.duration}
+                onChange={updateCue} onSetMarker={setMarker} onJump={jumpTo} onClear={clearCue}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -369,13 +550,60 @@ const TABS = [
   { key: "cue", label: "Cue-Editor", icon: Pencil },
 ];
 
-export default function ItemEditor() {
-  const [item, setItem] = useState(INITIAL_ITEM);
+export default function ItemEditor({ internalId, onBack }) {
+  const [item, setItem] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [tab, setTab] = useState("general");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setItem(null);
+    getItemById(internalId)
+      .then((data) => {
+        if (cancelled) return;
+        setItem(data);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err.message);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [internalId]);
 
   const update = (key, val) => setItem((prev) => ({ ...prev, [key]: val }));
+  // Keeps the raw input while the user is typing (so "14" on the way to
+  // "140.5" doesn't get clobbered by an early Number() cast); values are
+  // normalised through toStorage()/Number() right before saving.
   const updateCue = (key, val) =>
     setItem((prev) => ({ ...prev, cue: { ...prev.cue, [key]: val === "" ? null : val } }));
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const normalisedCue = {};
+      for (const [key, val] of Object.entries(item.cue)) {
+        normalisedCue[key] = isValidCueValue(val, item.duration) && val !== null && val !== ""
+          ? toStorage(Number(val))
+          : null;
+      }
+      const saved = await updateItem(internalId, { ...item, cue: normalisedCue });
+      setItem(saved);
+    } catch (err) {
+      setSaveError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
@@ -429,24 +657,51 @@ export default function ItemEditor() {
 
         {/* Sub toolbar: back + title + save */}
         <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
-          <button className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200">
+          <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200">
             <ChevronLeft size={16} /> Zurück zur Liste
           </button>
           <div className="truncate px-4 text-sm text-zinc-500">
-            {item.title}{item.artist ? `  ·  ${item.artist}` : ""}  ·  ID {item.internalId}
+            {item && (
+              <>{item.title}{item.artist ? `  ·  ${item.artist}` : ""}  ·  ID {item.internalId}</>
+            )}
           </div>
-          <button className="flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-500">
-            <Save size={15} /> Speichern
+          <button
+            onClick={handleSave} disabled={!item || saving}
+            className="flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-500 disabled:opacity-50"
+          >
+            <Save size={15} /> {saving ? "Speichert…" : "Speichern"}
           </button>
         </div>
 
+        {saveError && (
+          <div className="flex items-center gap-2 border-b border-zinc-800 bg-red-500/5 px-6 py-2.5 text-sm text-red-500">
+            <AlertTriangle size={14} />
+            <span>Element konnte nicht gespeichert werden: {saveError}</span>
+          </div>
+        )}
+
         <div className="flex-1 overflow-auto p-6">
-          {tab === "general" && <GeneralTab item={item} update={update} />}
-          {tab === "playback" && <PlaybackTab />}
-          {tab === "attributes" && <AttributesTab item={item} setItem={setItem} />}
-          {tab === "scheduling" && <PlaceholderTab icon={Clock} title="Sendeplanung" note="Rotationen, Zeitfenster und Scheduling Regeln. Kommt in einer späteren Phase." />}
-          {tab === "history" && <PlaceholderTab icon={History} title="Verlauf" note="Zeigt, wann dieses Item gelaufen ist. Wird aus den Broadcast Logs gespeist." />}
-          {tab === "cue" && <CueEditorTab item={item} updateCue={updateCue} />}
+          {loading && (
+            <div className="flex flex-col items-center justify-center py-20 text-center text-sm text-zinc-600">
+              Lade Element…
+            </div>
+          )}
+          {!loading && error && (
+            <div className="flex flex-col items-center justify-center gap-2 py-20 text-center text-red-500">
+              <AlertTriangle size={20} />
+              <span className="text-sm">Element konnte nicht geladen werden: {error}</span>
+            </div>
+          )}
+          {!loading && !error && item && (
+            <>
+              {tab === "general" && <GeneralTab item={item} update={update} />}
+              {tab === "playback" && <PlaybackTab />}
+              {tab === "attributes" && <AttributesTab item={item} setItem={setItem} />}
+              {tab === "scheduling" && <PlaceholderTab icon={Clock} title="Sendeplanung" note="Rotationen, Zeitfenster und Scheduling Regeln. Kommt in einer späteren Phase." />}
+              {tab === "history" && <PlaceholderTab icon={History} title="Verlauf" note="Zeigt, wann dieses Item gelaufen ist. Wird aus den Broadcast Logs gespeist." />}
+              {tab === "cue" && <CueEditorTab item={item} updateCue={updateCue} />}
+            </>
+          )}
         </div>
       </main>
     </div>

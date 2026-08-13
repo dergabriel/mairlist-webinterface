@@ -23,6 +23,8 @@ Die mAirListDB läuft auf einem echten SQL Server (PostgreSQL, MariaDB/MySQL ode
 
 **Aktueller Arbeitsmodus:** Frontend zuerst, mit Mock Daten. Die ganze Oberfläche spricht nur mit einer Zwischenschicht (`repository.js`). Sobald das echte Schema vorliegt, wird nur diese eine Datei auf SQL umgestellt, Frontend und API bleiben unverändert.
 
+Lesen und Schreiben laufen inzwischen komplett über die Backend API (`GET`/`POST`/`PUT`/`DELETE`), aber `repository.js` hält die Daten weiterhin nur im Speicher (Mock). Jeder Neustart des Servers setzt den Stand zurück, es gibt noch keine echte SQL Anbindung.
+
 ---
 
 ## ✨ Funktionsumfang und Status
@@ -38,8 +40,8 @@ Legende: ✅ fertig · 🚧 in Arbeit · ⬜ offen · 🔽 niedrige Priorität
 | Suche und Filter | ✅ |
 | Mehrfachauswahl | ✅ |
 | Minutenanzeige der Länge | ✅ |
-| Neues Element anlegen | ⬜ |
-| Element löschen | ⬜ |
+| Neues Element anlegen | ✅ (gegen Mock) |
+| Element löschen | ✅ (gegen Mock) |
 | Ordner anlegen, umbenennen, verschieben | ⬜ |
 | Storages verwalten | ⬜ |
 | Synchronisation, Ordner scannen | ⬜ |
@@ -53,10 +55,10 @@ Der Bibliothek müssen alle Typen bewusst sein, nicht nur Tracks und Jingles:
 | Music | normaler Track | ✅ |
 | Jingle | Verpackung, Sweeper, Opener | ✅ |
 | Advertising | Werbespot | ✅ |
-| **Container: Hook** | zufälliger Hook aus einem Pool | ⬜ |
-| **Container: Regio** | regionale Auseinanderschaltung | ⬜ |
-| **Container: Nachrichten** | lädt zur vollen Stunde die News | ⬜ |
-| Container: sonstige | weitere dynamische Container | ⬜ |
+| **Container: Hook** | zufälliger Hook aus einem Pool | ✅ |
+| **Container: Regio** | regionale Auseinanderschaltung | ✅ |
+| **Container: Nachrichten** | lädt zur vollen Stunde die News | ✅ |
+| Container: sonstige | weitere dynamische Container | ✅ |
 | Stream | Livestream Quelle | ⬜ |
 | Dummy | Platzhalter | ⬜ |
 
@@ -64,7 +66,7 @@ Der Bibliothek müssen alle Typen bewusst sein, nicht nur Tracks und Jingles:
 
 | Tab | Inhalt | Status |
 |---|---|---|
-| Allgemein | Titel, Interpret, Type, Länge, Ende, IDs, Kommentar, Farbe, Cover | 🚧 |
+| Allgemein | Titel, Interpret, Type, Länge, Ende, IDs, Kommentar, Farbe, Cover | ✅ (gegen Mock) |
 | Wiedergabe | Abspieleinstellungen, Gain | ⬜ |
 | Attribute | Key Value Attribute (Energy, Mood, BPM) | ⬜ |
 | Sendeplanung | Rotationen, Zeitfenster, Regeln | ⬜ |

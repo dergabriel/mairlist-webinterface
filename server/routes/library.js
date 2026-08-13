@@ -50,4 +50,24 @@ router.get("/cuepoints", (req, res) => {
   res.json(repo.getCuePoints());
 });
 
+// POST /api/items -> create a new item
+router.post("/items", (req, res) => {
+  const item = repo.createItem(req.body);
+  res.status(201).json(item);
+});
+
+// PUT /api/items/:id -> update an existing item
+router.put("/items/:id", (req, res) => {
+  const item = repo.updateItem(req.params.id, req.body);
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  res.json(item);
+});
+
+// DELETE /api/items/:id -> delete an item
+router.delete("/items/:id", (req, res) => {
+  const deleted = repo.deleteItem(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "Item not found" });
+  res.status(204).end();
+});
+
 module.exports = router;

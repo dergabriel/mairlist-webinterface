@@ -31,21 +31,21 @@ Der echte Client hat sieben Wurzelknoten, wir haben bisher nur einen:
 | Knoten | Funktion | Status |
 |---|---|---|
 | Folders | virtuelle Ordner mit Unterordnern | ✅ |
-| Artists | auto-generierte Liste aller Interpreten, Klick filtert | ⬜ |
-| Types | Filter nach Item-Typ | ⬜ |
-| Attributes | alle Attribut-Keys, aufklappbar zu Werten, Klick filtert nach Key+Wert | ⬜ |
-| Storages | Filter nach Storage | ⬜ |
+| Artists | auto-generierte Liste aller Interpreten, Klick filtert | ✅ |
+| Types | Filter nach Item-Typ | ✅ |
+| Attributes | alle Attribut-Keys, aufklappbar zu Werten, Klick filtert nach Key+Wert | ✅ |
+| Storages | Filter nach Storage | ✅ |
 | Advertising | Schnellfilter Werbung, optional nach Kampagne | 🔽 |
-| Everything | komplette Item-Liste | ⬜ |
+| Everything | komplette Item-Liste | ✅ |
 
 ### Suche
 
 | Funktion | Status |
 |---|---|
 | Einfache Suche über Titel/Artist/Kommentar | ✅ |
-| Umschalter: gesamte Bibliothek vs. nur aktueller Ordner/View | ⬜ |
-| Suche auf bestimmte Felder einschränken (nur Artist, nur Titel …) | ⬜ |
-| Volltextsuche an/aus (aus = nur Wortanfang, nutzt SQL-Indizes, schneller) | ⬜ |
+| Umschalter: gesamte Bibliothek vs. nur aktueller Ordner/View | ✅ |
+| Suche auf bestimmte Felder einschränken (nur Artist, nur Titel …) | ✅ |
+| Volltextsuche an/aus (aus = nur Wortanfang, nutzt SQL-Indizes, schneller) | ✅ |
 | Advanced Search: mehrere Begriffe UND-verknüpft über alle Felder | ⬜ |
 
 ### Item-Liste
@@ -63,8 +63,9 @@ Der echte Client hat sieben Wurzelknoten, wir haben bisher nur einen:
 |---|---|
 | Neues Element anlegen (alle Typen) | ✅ |
 | Element bearbeiten, löschen | ✅ |
-| Virtuelle Ordner anlegen, umbenennen, verschieben, löschen | ⬜ |
-| Items zwischen Ordnern verschieben | ⬜ |
+| Virtuelle Ordner anlegen, umbenennen, verschieben, löschen | ✅ |
+| Items zwischen Ordnern verschieben | ✅ (Drag and Drop) |
+| Ordner in Ordner verschieben per Drag and Drop, mit Zirkularitätsprüfung | ✅ |
 | Dummy → File: Audio für Dummy-Item nachträglich hochladen | ❌ nicht geplant |
 | File → Dummy: Audiodatei entfernen, Metadaten bleiben | ❌ nicht geplant |
 | Replace audio file: Datei tauschen, Metadaten bleiben | ❌ nicht geplant |
@@ -115,7 +116,8 @@ mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper
 | Zoom mit korrekt mitwandernden Markern | ✅ |
 | Sortierung nach Wichtigkeit (`DEFAULT_CUE_PRIORITY`), vorbereitet für Benutzereinstellung | ✅ |
 | Visuelle Trennung wichtige/weitere Marker | ✅ |
-| Echte Audio-Wiedergabe und echte Waveform aus der Audiodatei | ⬜ mit Phase Mix Editor |
+| Echte Audio-Wiedergabe und echte Waveform aus der Audiodatei (wavesurfer.js, Audio-Streaming via HTTP, Range-Request Support, Fallback auf synthetische Waveform) | ✅ |
+| Konfigurierbare Cue-Priorität (`DEFAULT_CUE_PRIORITY`), vorbereitet für Benutzereinstellungen | ✅ |
 | Auto Cue: Cue In / Fade Out / Cue Out automatisch aus Audiopegel schätzen | ⬜ |
 
 ---
@@ -130,6 +132,7 @@ mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper
 | Synchronisation: Storage scannen, neue Dateien links / fehlende rechts | ❌ nicht geplant |
 | Umbenannte Dateien reparieren: Join Selected Entries, Auto Repair | ❌ nicht geplant |
 | Hinweis aus der Doku: Dateien nach Import nie umbenennen/verschieben, mAirList speichert Storage-ID + relativen Pfad | 📌 Regel, gilt auch für uns |
+| Audio-Streaming via HTTP: `GET /api/items/:id/audio` mit Range-Request Support (206 Partial Content), `AUDIO_BASE_DIR` Umgebungsvariable für lokale Entwicklung | ✅ |
 
 ---
 
@@ -143,6 +146,9 @@ mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper
 | Einfügen, Löschen, Drag-and-Drop-Umsortierung mit Startzeit-Neuberechnung | ✅ |
 | Doppelklick öffnet Item Editor, Kontextmenü | ✅ |
 | **Lokal vs. global:** Änderungen aus der Playlist sind flüchtige Overrides nur für diese Stunde, expliziter Button schreibt in die DB (wie im Original: "volatile") | ✅ |
+| Kontextmenü pro Eintrag: Nach oben, Nach unten, Bearbeiten, Löschen | ✅ |
+| Strg+Klick Mehrfachauswahl für Mix Editor Aufruf | ✅ |
+| Playlist-Overrides: Änderungen aus dem Mix Editor und Item Editor werden als volatile Overrides pro Playlist-Eintrag gespeichert (`xmldata` Feld in der echten DB), getrennt vom globalen Item-Stand | ✅ |
 | Fix-Zeiten: Item startet zur festen Uhrzeit | ⬜ |
 | Checkpoint: "Prevent auto float around this item" (z.B. volle Stunde) | ⬜ |
 | Konflikt-Erkennung: Warnung wenn zwei Nutzer dieselbe Playlist bearbeiten | ⬜ Phase Mehrbenutzer |
@@ -157,12 +163,13 @@ Der Mix Editor ist im Original sowohl im Playout als auch im DB Client verfügba
 
 | Funktion | Status |
 |---|---|
-| Timeline-Ansicht mehrerer aufeinanderfolgender Playlist-Items | ⬜ |
-| Aufruf aus der Playlist: "Voriges und dieses", "dieses", "dieses und nächstes", oder Mehrfachauswahl | ⬜ |
-| Übergänge verschieben: Items auf der Timeline gegeneinander schieben (Overlap) | ⬜ |
-| **Volume-Hüllkurven** (Envelopes): freie Lautstärkekurven pro Item, nicht nur Fade-Punkte | ⬜ |
-| Cue-Punkte direkt in der Timeline anfassen | ⬜ |
-| Ergebnis zurück in die Playlist schreiben (als Overrides bzw. Envelope-Daten) | ⬜ |
+| Timeline-Ansicht mehrerer aufeinanderfolgender Playlist-Items | ✅ |
+| Aufruf aus der Playlist per Strg+Klick Mehrfachauswahl | ✅ |
+| Übergänge verschieben: Song nach links/rechts ziehen ändert StartNext, Clamp auf [cueIn, duration], keine Gaps | ✅ |
+| Cue-Punkte direkt in der Timeline anfassen und verschieben | ✅ |
+| Fokus-Modus: ±10s um den Übergangspunkt abspielen | ✅ |
+| Ergebnis als Playlist-Override oder global in DB speichern | ✅ |
+| **Volume-Hüllkurven** (Envelopes): freie Lautstärkekurven pro Item, nicht nur Fade-Punkte | ⬜ bleibt offen |
 | Multi-Track Container bearbeiten (frei arrangierte Items) | ❌ nicht geplant |
 
 ---

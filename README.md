@@ -63,10 +63,10 @@ Details je Phase in [`docs/FEATURES.md`](docs/FEATURES.md).
 
 | Phase | Inhalt | Status |
 |---|---|---|
-| **A** | Kern-Oberfläche: Elemente Liste, Item Editor (6 Tabs), Cue Editor, Upload, Playlist Editor, lokale vs. DB Änderungen | ✅ gegen Mock, Audio-Streaming via HTTP |
+| **A** | Kern-Oberfläche: Elemente Liste, Item Editor (6 Tabs), Cue Editor, Upload, Playlist Editor, lokale vs. DB Änderungen, Audio-Streaming via HTTP | ✅ gegen Mock, Audio-Streaming via HTTP |
 | **B** | Bibliothek vervollständigen: Tree-Knoten (Artists, Types, Attribute, Everything), Suchoptionen, Ordnerverwaltung, konfigurierbare Spalten | ✅ fertig |
 | **C** | Storage Verwaltung: Storages anlegen/bearbeiten, Synchronisation mit Abgleich, Import-Optionen, Dummy↔File | ⬜ |
-| **D** | **Mix Editor**: Timeline über mehrere Items, Volume-Hüllkurven, Übergänge programmieren | 🚧 in Arbeit — Mehrfachauswahl und Grundgerüst in Entwicklung |
+| **D** | **Mix Editor**: Timeline über mehrere Items, Volume-Hüllkurven, Übergänge programmieren | ✅ Mix Editor fertig — Song-Drag, alle 17 Cue-Marker draggbar, Overlap-Visualisierung, Audio-Streaming, Fokus-Modus, Speichern als Playlist-Override oder global |
 | **E** | **Voice Tracking**: VT Recorder im Browser, Preroll/Record/StartNext-Ablauf, Einbettung mit Hüllkurve | ⬜ |
 | **F** | Mehrbenutzer: Login, Rollen (Read-only, Studio, DJ, VTDJ, Admin), Konflikt-Erkennung bei Playlists, Logs | ⬜ |
 | **G** | Echte Datenbank: Schema ziehen, Semantik per Diff dokumentieren, Repository auf SQL umstellen, Schreib-Beweis | 🚧 in Arbeit — Schema und Semantik dokumentiert, Repository-Umstellung und Schreib-Beweis ausstehend |

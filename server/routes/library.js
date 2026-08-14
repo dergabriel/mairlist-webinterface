@@ -1,12 +1,22 @@
 // Library API routes. These map HTTP endpoints onto the repository.
 // The routes stay identical whether the repository serves mock or real data.
 
+const fs = require("fs");
+const path = require("path");
 const express = require("express");
 const multer = require("multer");
 const router = express.Router();
 const repo = require("../data/repository");
 
 const ALLOWED_AUDIO_EXTENSIONS = new Set(["wav", "mp3", "aac", "flac", "ogg"]);
+
+const AUDIO_CONTENT_TYPES = {
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".aac": "audio/aac",
+  ".flac": "audio/flac",
+  ".ogg": "audio/ogg",
+};
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -96,6 +106,59 @@ router.get("/items/:id/history", (req, res) => {
   const history = repo.getItemHistory(req.params.id);
   if (history === null) return res.status(404).json({ error: "Item not found" });
   res.json(history);
+});
+
+// GET /api/items/:id/audio -> streams the item's audio file from storage,
+// with Range support so the browser can seek. 404 if the item, its storage,
+// or the file on disk isn't found.
+router.get("/items/:id/audio", (req, res) => {
+  const item = repo.getItemById(req.params.id);
+  if (!item) return res.status(404).json({ error: "Item not found" });
+
+  const filePath = repo.resolveAudioPath(req.params.id);
+  if (!filePath) return res.status(404).json({ error: "Für dieses Element ist keine Audiodatei hinterlegt" });
+
+  let stat;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return res.status(404).json({ error: "Audiodatei nicht gefunden" });
+  }
+
+  const contentType = AUDIO_CONTENT_TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream";
+  const range = req.headers.range;
+
+  if (!range) {
+    res.writeHead(200, {
+      "Content-Type": contentType,
+      "Content-Length": stat.size,
+      "Accept-Ranges": "bytes",
+    });
+    fs.createReadStream(filePath).pipe(res);
+    return;
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!match || (match[1] === "" && match[2] === "")) {
+    res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+    return res.end();
+  }
+
+  const start = match[1] === "" ? stat.size - Number(match[2]) : Number(match[1]);
+  const end = match[2] === "" ? stat.size - 1 : Math.min(Number(match[2]), stat.size - 1);
+
+  if (Number.isNaN(start) || Number.isNaN(end) || start > end || start < 0) {
+    res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+    return res.end();
+  }
+
+  res.writeHead(206, {
+    "Content-Type": contentType,
+    "Content-Length": end - start + 1,
+    "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+    "Accept-Ranges": "bytes",
+  });
+  fs.createReadStream(filePath, { start, end }).pipe(res);
 });
 
 // GET /api/search?q=&fields=title,artist

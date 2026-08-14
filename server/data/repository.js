@@ -312,6 +312,28 @@ function resolveStorageDir(storage) {
   return path.join(base, storage.name);
 }
 
+// Resolves the absolute audio file path for an item: storage.location (the
+// real, Windows-style mAirList path) joined with the item's relativePath.
+// AUDIO_BASE_DIR overrides storage.location for local dev, same idea as
+// UPLOAD_BASE_DIR above, so test MP3s can live under a plain relative folder
+// instead of a Windows drive that doesn't exist locally. Windows separators
+// in relativePath are normalised so it also resolves correctly on macOS/Linux.
+// Returns null if the item doesn't exist, has no storage, or no file path.
+function resolveAudioPath(id) {
+  const item = getItemById(id);
+  if (!item || item.storageId == null || !item.relativePath) return null;
+
+  const storage = storages.find((s) => s.id === item.storageId);
+  if (!storage) return null;
+
+  const base = process.env.AUDIO_BASE_DIR
+    ? path.join(process.env.AUDIO_BASE_DIR, storage.name)
+    : storage.location;
+
+  const relativeParts = item.relativePath.split(/[\\/]+/);
+  return path.join(base, ...relativeParts);
+}
+
 // Writes the uploaded file into the given storage's location and creates a
 // matching item. Returns null if the storage doesn't exist.
 function uploadFile(storageId, filename, buffer, title) {
@@ -509,6 +531,7 @@ module.exports = {
   deleteItem,
   moveItemToFolder,
   uploadFile,
+  resolveAudioPath,
   getPlaylistsByDate,
   getPlaylistById,
   reorderPlaylist,

@@ -88,11 +88,39 @@ const CUE_POINTS = [
   { key: "anchor", label: "Anchor", color: "#f97316" },
 ];
 
+// Predefined attribute schema for the item editor's Attribute tab. This is a
+// fixed catalogue of fields the editor knows how to render (select, number,
+// checkbox, ...). Keys match the casing used in items[].attributes below
+// (and in docs/SCHEMA.md's real item_attributes examples, e.g. "BPM", "Jahr")
+// so the editor can actually read/write the freeform values items carry.
+const ATTRIBUTE_DEFINITIONS = [
+  { key: "Energy", label: "Energy", type: "select", options: ["low", "medium", "high"] },
+  { key: "Mood", label: "Mood", type: "select", options: ["happy", "uplifting", "driving", "melancholic", "calm"] },
+  { key: "BPM", label: "BPM", type: "number" },
+  { key: "Key", label: "Tonart", type: "text" },
+  { key: "Explicit", label: "Explicit", type: "checkbox" },
+  { key: "OnlineOnly", label: "Nur online", type: "checkbox" },
+  { key: "Category", label: "Kategorie", type: "multiselect", options: ["Pop", "Rock", "Dance", "Hip-Hop", "R&B", "Latin"] },
+  { key: "Notes", label: "Notizen", type: "textarea" },
+];
+
 // Helper to build a cue object with all keys, unset ones as null.
 function cue(values = {}) {
   const base = {};
   for (const cp of CUE_POINTS) base[cp.key] = null;
   return { ...base, ...values };
+}
+
+// Default playback settings (Wiedergabe tab): gain in dB and segue mode.
+// Fade and loop are cue points (see CUE_POINTS: fadeIn/fadeOut/loopIn/loopOut),
+// not item-level settings, so they live in `cue`, not here.
+function playback(values = {}) {
+  return {
+    gainDb: 0,
+    normalizedLufs: null,
+    segueMode: "normal",
+    ...values,
+  };
 }
 
 // Items use the fields from the item editor: title, artist (Interpret), type,
@@ -115,8 +143,16 @@ const items = [
     color: null,
     cover: "el-dorado.jpg",
     cue: cue({ cueIn: 0.3, fadeOut: 136.0, cueOut: 140.533, hookIn: 45.0, hookOut: 75.0 }),
+    playback: playback({ gainDb: -1.2, normalizedLufs: -14 }),
     attributes: { Energy: "high", Mood: "uplifting", BPM: "91" },
     updatedAt: "2023-12-19T22:52:59",
+    playHistory: [
+      { playedAt: "2026-08-13T07:42:11", show: "Morningshow", moderator: "Julia Ferrer" },
+      { playedAt: "2026-08-12T16:15:03", show: "Nachmittagsmix", moderator: "Tom Brandt" },
+      { playedAt: "2026-08-11T12:03:47", show: "Mittagsshow", moderator: null },
+      { playedAt: "2026-08-10T08:21:55", show: "Morningshow", moderator: "Julia Ferrer" },
+      { playedAt: "2026-08-08T19:47:32", show: null, moderator: null },
+    ],
   },
   {
     id: "492",
@@ -134,6 +170,7 @@ const items = [
     color: null,
     cover: null,
     cue: cue({ cueIn: 0.0, fadeOut: 146.0, cueOut: 150.053 }),
+    playback: playback(),
     attributes: { Energy: "high", BPM: "126" },
     updatedAt: "2023-12-19T22:34:10",
   },
@@ -153,6 +190,7 @@ const items = [
     color: null,
     cover: null,
     cue: cue({ cueIn: 0.5, fadeOut: 134.0, cueOut: 138.819 }),
+    playback: playback({ gainDb: 0.8, normalizedLufs: -14 }),
     attributes: { Energy: "medium", BPM: "128" },
     updatedAt: "2023-12-19T23:02:56",
   },
@@ -172,6 +210,7 @@ const items = [
     color: null,
     cover: null,
     cue: cue({ cueIn: 0.2, fadeOut: 157.0, cueOut: 161.267 }),
+    playback: playback(),
     attributes: { Energy: "high", BPM: "125" },
     updatedAt: "2023-12-19T23:04:41",
   },
@@ -191,6 +230,7 @@ const items = [
     color: null,
     cover: null,
     cue: cue({ cueIn: 0.0, cueOut: 4.2 }),
+    playback: playback({ segueMode: "immediate" }),
     attributes: { Category: "opener" },
     updatedAt: "2023-12-18T14:10:00",
   },
@@ -210,6 +250,7 @@ const items = [
     color: null,
     cover: null,
     cue: cue({ cueIn: 0.0, cueOut: 30.0 }),
+    playback: playback({ segueMode: "waitForEnd" }),
     attributes: { Campaign: "Fruehjahr 2026", Customer: "Autohaus Becker" },
     updatedAt: "2026-01-05T09:00:00",
   },
@@ -230,6 +271,7 @@ const items = [
     color: null,
     cover: null,
     cue: cue({}),
+    playback: playback(),
     attributes: {},
     updatedAt: "2026-02-01T10:00:00",
   },
@@ -250,6 +292,7 @@ const items = [
     color: null,
     cover: null,
     cue: cue({}),
+    playback: playback(),
     attributes: {},
     updatedAt: "2026-02-01T10:05:00",
   },
@@ -270,9 +313,83 @@ const items = [
     color: null,
     cover: null,
     cue: cue({}),
+    playback: playback(),
     attributes: {},
     updatedAt: "2026-02-01T10:10:00",
   },
 ];
 
-module.exports = { storages, folders, items, ITEM_TYPES, CONTAINER_TYPES, CUE_POINTS };
+// Playlists: one entry per (date, hour), holding an ordered list of items to
+// play that hour. `entries[].itemId` resolves against `items` above.
+//
+// Example data below is generated for today's date across a realistic
+// morning block (06:00-10:59), each hour built from a repeating rotation
+// pattern (Music, Jingle, Music, Music, Container, Music, Jingle, ...) drawn
+// from the item pool already defined above.
+const today = new Date().toISOString().slice(0, 10);
+
+const MUSIC_IDS = ["476", "492", "598", "477"];
+const JINGLE_ID = "701";
+const CONTAINER_IDS = ["901", "902", "903"];
+
+// Builds one hour's entries from a fixed rotation pattern, cycling through
+// the available music pool and container types so hours don't repeat
+// identically, and stamping scheduledStart from each item's duration.
+function buildHourEntries(hour, patternLength, musicOffset, containerOffset) {
+  const pattern = ["music", "jingle", "music", "music", "container", "music", "jingle", "music"].slice(
+    0,
+    patternLength
+  );
+
+  let cursorSeconds = hour * 3600;
+  let musicIndex = musicOffset;
+  let containerIndex = containerOffset;
+  const entries = [];
+
+  pattern.forEach((kind, i) => {
+    let itemId;
+    if (kind === "music") {
+      itemId = MUSIC_IDS[musicIndex % MUSIC_IDS.length];
+      musicIndex += 1;
+    } else if (kind === "jingle") {
+      itemId = JINGLE_ID;
+    } else {
+      itemId = CONTAINER_IDS[containerIndex % CONTAINER_IDS.length];
+      containerIndex += 1;
+    }
+
+    const item = items.find((it) => it.id === itemId);
+    const h = String(Math.floor(cursorSeconds / 3600) % 24).padStart(2, "0");
+    const m = String(Math.floor((cursorSeconds % 3600) / 60)).padStart(2, "0");
+    const s = String(Math.floor(cursorSeconds % 60)).padStart(2, "0");
+
+    entries.push({
+      position: i + 1,
+      itemId,
+      scheduledStart: `${h}:${m}:${s}`,
+    });
+
+    cursorSeconds += item ? item.duration : 0;
+  });
+
+  return entries;
+}
+
+const playlists = [
+  { id: "pl-06", date: today, hour: 6, entries: buildHourEntries(6, 7, 0, 0) },
+  { id: "pl-07", date: today, hour: 7, entries: buildHourEntries(7, 8, 1, 1) },
+  { id: "pl-08", date: today, hour: 8, entries: buildHourEntries(8, 6, 2, 2) },
+  { id: "pl-09", date: today, hour: 9, entries: buildHourEntries(9, 8, 3, 0) },
+  { id: "pl-10", date: today, hour: 10, entries: buildHourEntries(10, 7, 0, 1) },
+];
+
+module.exports = {
+  storages,
+  folders,
+  items,
+  ITEM_TYPES,
+  CONTAINER_TYPES,
+  CUE_POINTS,
+  ATTRIBUTE_DEFINITIONS,
+  playlists,
+};

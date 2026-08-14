@@ -34,8 +34,20 @@ export function getStorages() {
   return request("/storages");
 }
 
-export function getItems({ type, artist, folderId, storageId } = {}) {
-  return request(`/items${qs({ type, artist, folderId, storageId })}`);
+export function getAttributeKeys() {
+  return request("/attributes");
+}
+
+export function getArtists() {
+  return request("/artists");
+}
+
+export function getItemTypes() {
+  return request("/types");
+}
+
+export function getItems({ type, artist, folderId, storageId, attributeKey, attributeValue } = {}) {
+  return request(`/items${qs({ type, artist, folderId, storageId, attributeKey, attributeValue })}`);
 }
 
 export function getItemById(id) {
@@ -64,6 +76,10 @@ export function createItem(data) {
 
 export function updateItem(id, data) {
   return put(`/items/${id}`, data);
+}
+
+export function moveItemToFolder(id, folderId) {
+  return put(`/items/${id}/folder`, { folderId });
 }
 
 export function deleteItem(id) {

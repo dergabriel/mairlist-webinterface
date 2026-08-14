@@ -3,9 +3,12 @@ import {
   LayoutDashboard, Settings, Database, Copy, ListMusic,
   Users, Tag, ScrollText, Folder, FolderOpen, ChevronRight,
   ChevronDown, RefreshCw, Plus, Search, Pencil, Trash2, ArrowUpDown,
-  AlertTriangle, X, Upload,
+  AlertTriangle, X, Upload, SlidersHorizontal, HardDrive, Library, Settings2,
 } from "lucide-react";
-import { getTree, getItems, getStorages, createItem, deleteItem, uploadFile } from "../lib/api";
+import {
+  getTree, getItems, getStorages, createItem, deleteItem, uploadFile,
+  getArtists, getItemTypes, getAttributeKeys, moveItemToFolder,
+} from "../lib/api";
 
 // --- Helpers ---
 
@@ -35,49 +38,196 @@ const formatLength = (sec) => {
 
 const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
-// --- Tree node ---
+// --- Filter state ---
+//
+// One bundled filter object drives the item list, whichever tree section it
+// came from. `kind` says which branch is active; the rest of the fields are
+// only meaningful for their matching kind.
+const ALL_FILTER = { kind: "all" };
 
-function TreeNode({ folder, level, expanded, onToggle, activeId, onSelect }) {
+// --- Generic tree row ---
+//
+// One row shared by every tree section (folders, artists, types, attributes,
+// storages, everything). `dropTarget`/`dropHandlers` are only wired up for
+// virtual folders — the only nodes items can be dropped onto.
+function TreeRow({
+  id, label, level, icon: Icon, openIcon: OpenIcon, hasChildren, isOpen, isActive,
+  muted, onClick, onToggle, isDropTarget, isDragOver, dropHandlers,
+}) {
+  return (
+    <button
+      onClick={onClick}
+      {...(isDropTarget ? dropHandlers : {})}
+      className={`group flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-sm transition-colors ${
+        isActive
+          ? "border-l-2 border-orange-500 bg-zinc-800/60 text-zinc-100"
+          : "border-l-2 border-transparent text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+      } ${isDragOver ? "bg-orange-500/10 outline outline-1 outline-orange-500/70" : ""} ${
+        muted ? "opacity-40" : ""
+      }`}
+      style={{ paddingLeft: `${level * 14 + 8}px` }}
+    >
+      {hasChildren ? (
+        onToggle && isOpen ? <ChevronDown size={14} className="shrink-0 text-zinc-500" />
+               : hasChildren ? <ChevronRight size={14} className="shrink-0 text-zinc-500" />
+               : <span className="w-[14px] shrink-0" />
+      ) : (
+        <span className="w-[14px] shrink-0" />
+      )}
+      {isOpen && OpenIcon ? (
+        <OpenIcon size={15} className="shrink-0 text-orange-500/80" />
+      ) : (
+        <Icon size={15} className="shrink-0 text-zinc-500" />
+      )}
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+// --- Folder tree branch (virtual folders, expandable, drop targets) ---
+
+function FolderNode({
+  folder, level, expanded, onToggle, filterState, onSelect,
+  dragOverFolderId, onDragOverFolder, onDragLeaveFolder, onDropOnFolder,
+}) {
   const children = folder.children || [];
   const hasChildren = children.length > 0;
   const isOpen = expanded.has(folder.id);
-  const isActive = activeId === folder.id;
+  const isActive = filterState.kind === "folder" && filterState.folderId === folder.id;
+  const isDropTarget = !folder.special;
 
   return (
     <div>
-      <button
+      <TreeRow
+        id={folder.id} label={folder.name} level={level}
+        icon={Folder} openIcon={folder.special ? undefined : FolderOpen}
+        hasChildren={hasChildren} isOpen={isOpen} isActive={isActive}
         onClick={() => { onSelect(folder.id); if (hasChildren) onToggle(folder.id); }}
-        className={`group flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-sm transition-colors ${
-          isActive
-            ? "border-l-2 border-orange-500 bg-zinc-800/60 text-zinc-100"
-            : "border-l-2 border-transparent text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
-        }`}
-        style={{ paddingLeft: `${level * 14 + 8}px` }}
-      >
-        {hasChildren ? (
-          isOpen ? <ChevronDown size={14} className="shrink-0 text-zinc-500" />
-                 : <ChevronRight size={14} className="shrink-0 text-zinc-500" />
-        ) : (
-          <span className="w-[14px] shrink-0" />
-        )}
-        {folder.special ? (
-          <Folder size={15} className="shrink-0 text-zinc-500" />
-        ) : isOpen ? (
-          <FolderOpen size={15} className="shrink-0 text-orange-500/80" />
-        ) : (
-          <Folder size={15} className="shrink-0 text-zinc-500" />
-        )}
-        <span className="truncate">{folder.name}</span>
-      </button>
+        onToggle={hasChildren}
+        isDropTarget={isDropTarget}
+        isDragOver={dragOverFolderId === folder.id}
+        dropHandlers={{
+          // dragenter is what reliably marks "over this target" — dragover
+          // fires continuously but dragenter/dragleave pairs can outrun it
+          // while the pointer crosses child elements (icon, label).
+          onDragEnter: (e) => { e.preventDefault(); onDragOverFolder(folder.id); },
+          onDragOver: (e) => e.preventDefault(),
+          // Only clear when actually leaving the row, not when moving
+          // between its children.
+          onDragLeave: (e) => {
+            if (!e.currentTarget.contains(e.relatedTarget)) onDragLeaveFolder(folder.id);
+          },
+          onDrop: (e) => { e.preventDefault(); onDropOnFolder(folder.id); },
+        }}
+      />
       {hasChildren && isOpen && (
         <div>
           {children.map((child) => (
-            <TreeNode
+            <FolderNode
               key={child.id} folder={child} level={level + 1}
               expanded={expanded} onToggle={onToggle}
-              activeId={activeId} onSelect={onSelect}
+              filterState={filterState} onSelect={onSelect}
+              dragOverFolderId={dragOverFolderId}
+              onDragOverFolder={onDragOverFolder}
+              onDragLeaveFolder={onDragLeaveFolder}
+              onDropOnFolder={onDropOnFolder}
             />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Generic section (Artists / Storages): a header node that loads a flat
+// list on first expand, each entry a leaf that sets the filter on click ---
+
+function ListSection({
+  label, icon, sectionKey, expanded, onToggle, entries, loading,
+  renderEntry, level = 0,
+}) {
+  const isOpen = expanded.has(sectionKey);
+  const hasChildren = true;
+
+  return (
+    <div>
+      <TreeRow
+        id={sectionKey} label={label} level={level} icon={icon}
+        hasChildren={hasChildren} isOpen={isOpen} isActive={false}
+        onClick={() => onToggle(sectionKey)}
+        onToggle={hasChildren}
+      />
+      {isOpen && (
+        <div>
+          {loading && (
+            <div className="px-3 py-1.5 text-xs text-zinc-600" style={{ paddingLeft: `${(level + 1) * 14 + 8}px` }}>
+              Lädt…
+            </div>
+          )}
+          {!loading && entries.length === 0 && (
+            <div className="px-3 py-1.5 text-xs text-zinc-600" style={{ paddingLeft: `${(level + 1) * 14 + 8}px` }}>
+              Keine Einträge
+            </div>
+          )}
+          {!loading && entries.map((entry) => renderEntry(entry, level + 1))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Attributes section: keys expand to their distinct values ---
+
+function AttributesSection({ expanded, onToggle, attributeKeys, loading, filterState, onSelectValue, level = 0 }) {
+  const isOpen = expanded.has("attributes");
+
+  return (
+    <div>
+      <TreeRow
+        id="attributes" label="Attributes" level={level} icon={SlidersHorizontal}
+        hasChildren isOpen={isOpen} isActive={false}
+        onClick={() => onToggle("attributes")}
+        onToggle
+      />
+      {isOpen && (
+        <div>
+          {loading && (
+            <div className="px-3 py-1.5 text-xs text-zinc-600" style={{ paddingLeft: `${(level + 1) * 14 + 8}px` }}>
+              Lädt…
+            </div>
+          )}
+          {!loading && attributeKeys.length === 0 && (
+            <div className="px-3 py-1.5 text-xs text-zinc-600" style={{ paddingLeft: `${(level + 1) * 14 + 8}px` }}>
+              Keine Attribute
+            </div>
+          )}
+          {!loading && attributeKeys.map((attr) => {
+            const keyToken = `attr:${attr.key}`;
+            const keyOpen = expanded.has(keyToken);
+            return (
+              <div key={attr.key}>
+                <TreeRow
+                  id={keyToken} label={attr.key} level={level + 1} icon={Tag}
+                  hasChildren isOpen={keyOpen} isActive={false}
+                  onClick={() => onToggle(keyToken)}
+                  onToggle
+                />
+                {keyOpen && attr.values.map((value) => {
+                  const isActive =
+                    filterState.kind === "attribute" &&
+                    filterState.attributeKey === attr.key &&
+                    filterState.attributeValue === value;
+                  return (
+                    <TreeRow
+                      key={value} id={`${keyToken}:${value}`} label={value} level={level + 2}
+                      icon={Tag} hasChildren={false} isOpen={false} isActive={isActive}
+                      onClick={() => onSelectValue(attr.key, value)}
+                    />
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -341,12 +491,21 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const [tree, setTree] = useState([]);
   const [items, setItems] = useState([]);
   const [storages, setStorages] = useState([]);
+  const [artists, setArtists] = useState([]);
+  const [itemTypes, setItemTypes] = useState([]);
+  const [attributeKeys, setAttributeKeys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const [expanded, setExpanded] = useState(new Set([20, 30]));
-  const [activeFolder, setActiveFolder] = useState("all");
+  const [filterState, setFilterState] = useState(ALL_FILTER);
   const [search, setSearch] = useState("");
+  const [searchOptions, setSearchOptions] = useState({
+    scope: "library", // "library" | "view"
+    fields: { title: true, artist: true, comment: true },
+    fullText: true,
+  });
+  const [showSearchOptions, setShowSearchOptions] = useState(false);
   const [sort, setSort] = useState({ key: "id", dir: "asc" });
   const [selected, setSelected] = useState(new Set());
 
@@ -354,14 +513,22 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const [showUpload, setShowUpload] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
+  const [dragItemId, setDragItemId] = useState(null);
+  const [dragOverFolderId, setDragOverFolderId] = useState(null);
+
   const loadData = useCallback(() => {
     setLoading(true);
     setError(null);
-    return Promise.all([getTree(), getItems(), getStorages()])
-      .then(([treeData, itemsData, storagesData]) => {
+    return Promise.all([
+      getTree(), getItems(), getStorages(), getArtists(), getItemTypes(), getAttributeKeys(),
+    ])
+      .then(([treeData, itemsData, storagesData, artistsData, typesData, attrData]) => {
         setTree(treeData);
         setItems(itemsData);
         setStorages(storagesData);
+        setArtists(artistsData);
+        setItemTypes(typesData);
+        setAttributeKeys(attrData);
       })
       .catch((err) => {
         setError(err.message);
@@ -395,6 +562,15 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     await loadData();
   };
 
+  const handleDropOnFolder = async (folderId) => {
+    setDragOverFolderId(null);
+    const itemId = dragItemId;
+    setDragItemId(null);
+    if (!itemId) return;
+    await moveItemToFolder(itemId, folderId);
+    await loadData();
+  };
+
   const rootFolder = { id: "all", name: "Alle Elemente", special: true, children: [] };
 
   const toggle = (id) =>
@@ -404,29 +580,70 @@ export default function MairListDB({ onEditItem, onNavigate }) {
       return next;
     });
 
-  const activeFolderName =
-    (activeFolder === "all" ? rootFolder : findFolder(tree, activeFolder))?.name || "Alle Elemente";
+  const selectFolder = (folderId) =>
+    setFilterState(folderId === "all" ? ALL_FILTER : { kind: "folder", folderId });
+  const selectArtist = (artist) => setFilterState({ kind: "artist", artist });
+  const selectType = (type) => setFilterState({ kind: "type", type });
+  const selectStorage = (storageId) => setFilterState({ kind: "storage", storageId });
+  const selectAttribute = (attributeKey, attributeValue) =>
+    setFilterState({ kind: "attribute", attributeKey, attributeValue });
+  const selectEverything = () => setFilterState({ kind: "everything" });
 
-  const visibleItems = useMemo(() => {
+  const activeFolderName =
+    filterState.kind === "folder"
+      ? findFolder(tree, filterState.folderId)?.name || "Alle Elemente"
+      : filterState.kind === "artist" ? filterState.artist
+      : filterState.kind === "type" ? capitalize(filterState.type)
+      : filterState.kind === "storage" ? storages.find((s) => s.id === filterState.storageId)?.name || "Storage"
+      : filterState.kind === "attribute" ? `${filterState.attributeKey}: ${filterState.attributeValue}`
+      : filterState.kind === "everything" ? "Everything"
+      : "Alle Elemente";
+
+  const filteredByTree = useMemo(() => {
     let list = [...items];
 
-    if (activeFolder !== "all") {
-      const folder = findFolder(tree, activeFolder);
-      const ids = new Set([activeFolder, ...(folder ? collectDescendants(folder) : [])]);
+    if (filterState.kind === "folder") {
+      const folder = findFolder(tree, filterState.folderId);
+      const ids = new Set([filterState.folderId, ...(folder ? collectDescendants(folder) : [])]);
       list = list.filter((i) => ids.has(i.folderId));
+    } else if (filterState.kind === "artist") {
+      list = list.filter((i) => i.artist === filterState.artist);
+    } else if (filterState.kind === "type") {
+      list = list.filter((i) => i.type === filterState.type);
+    } else if (filterState.kind === "storage") {
+      list = list.filter((i) => i.storageId === filterState.storageId);
+    } else if (filterState.kind === "attribute") {
+      list = list.filter(
+        (i) => String(i.attributes?.[filterState.attributeKey] ?? "") === filterState.attributeValue
+      );
     }
+    // "all" and "everything" both mean unfiltered.
+
+    return list;
+  }, [items, tree, filterState]);
+
+  const visibleItems = useMemo(() => {
+    // Advanced search: scope "view" searches within the tree-filtered list,
+    // scope "library" searches the whole library regardless of the active
+    // tree node.
+    let list = search.trim()
+      ? searchOptions.scope === "view" ? filteredByTree : [...items]
+      : filteredByTree;
 
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter(
-        (i) =>
-          i.title.toLowerCase().includes(q) ||
-          i.artist.toLowerCase().includes(q) ||
-          i.comment.toLowerCase().includes(q)
+      const fields = Object.entries(searchOptions.fields)
+        .filter(([, on]) => on)
+        .map(([field]) => field);
+      list = list.filter((i) =>
+        fields.some((field) => {
+          const value = (i[field] || "").toLowerCase();
+          return searchOptions.fullText ? value.includes(q) : value.startsWith(q);
+        })
       );
     }
 
-    list.sort((a, b) => {
+    list = [...list].sort((a, b) => {
       let av = a[sort.key], bv = b[sort.key];
       if (typeof av === "string") { av = av.toLowerCase(); bv = bv.toLowerCase(); }
       if (av < bv) return sort.dir === "asc" ? -1 : 1;
@@ -435,7 +652,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     });
 
     return list;
-  }, [items, tree, activeFolder, search, sort]);
+  }, [items, filteredByTree, search, searchOptions, sort]);
 
   const onSort = (key) =>
     setSort((prev) =>
@@ -486,22 +703,90 @@ export default function MairListDB({ onEditItem, onNavigate }) {
 
       {/* Library tree */}
       <aside className="w-64 shrink-0 overflow-y-auto border-r border-zinc-800 bg-zinc-900/50 py-3 pr-2">
-        <TreeNode
+        <FolderNode
           folder={rootFolder} level={0}
           expanded={expanded} onToggle={toggle}
-          activeId={activeFolder} onSelect={setActiveFolder}
+          filterState={filterState} onSelect={selectFolder}
+          dragOverFolderId={dragOverFolderId}
+          onDragOverFolder={setDragOverFolderId}
+          onDragLeaveFolder={(id) => setDragOverFolderId((cur) => (cur === id ? null : cur))}
+          onDropOnFolder={handleDropOnFolder}
         />
         {loading && <div className="px-3 py-2 text-sm text-zinc-600">Lade Ordner…</div>}
         {!loading && error && (
           <div className="px-3 py-2 text-sm text-red-500">Baum nicht verfügbar</div>
         )}
         {!loading && !error && tree.map((folder) => (
-          <TreeNode
+          <FolderNode
             key={folder.id} folder={folder} level={0}
             expanded={expanded} onToggle={toggle}
-            activeId={activeFolder} onSelect={setActiveFolder}
+            filterState={filterState} onSelect={selectFolder}
+            dragOverFolderId={dragOverFolderId}
+            onDragOverFolder={setDragOverFolderId}
+            onDragLeaveFolder={(id) => setDragOverFolderId((cur) => (cur === id ? null : cur))}
+            onDropOnFolder={handleDropOnFolder}
           />
         ))}
+
+        {!loading && !error && (
+          <>
+            <ListSection
+              label="Artists" icon={Users} sectionKey="artists"
+              expanded={expanded} onToggle={toggle}
+              entries={artists} loading={false}
+              renderEntry={(artist, level) => (
+                <TreeRow
+                  key={artist} id={`artist:${artist}`} label={artist} level={level}
+                  icon={Users} hasChildren={false} isOpen={false}
+                  isActive={filterState.kind === "artist" && filterState.artist === artist}
+                  onClick={() => selectArtist(artist)}
+                />
+              )}
+            />
+
+            <ListSection
+              label="Types" icon={Tag} sectionKey="types"
+              expanded={expanded} onToggle={toggle}
+              entries={itemTypes} loading={false}
+              renderEntry={(t, level) => (
+                <TreeRow
+                  key={t.key} id={`type:${t.key}`} label={t.label} level={level}
+                  icon={Tag} hasChildren={false} isOpen={false}
+                  isActive={filterState.kind === "type" && filterState.type === t.key}
+                  muted={!t.hasItems}
+                  onClick={() => selectType(t.key)}
+                />
+              )}
+            />
+
+            <AttributesSection
+              expanded={expanded} onToggle={toggle}
+              attributeKeys={attributeKeys} loading={false}
+              filterState={filterState} onSelectValue={selectAttribute}
+            />
+
+            <ListSection
+              label="Storages" icon={HardDrive} sectionKey="storages"
+              expanded={expanded} onToggle={toggle}
+              entries={storages} loading={false}
+              renderEntry={(storage, level) => (
+                <TreeRow
+                  key={storage.id} id={`storage:${storage.id}`} label={storage.name} level={level}
+                  icon={HardDrive} hasChildren={false} isOpen={false}
+                  isActive={filterState.kind === "storage" && filterState.storageId === storage.id}
+                  onClick={() => selectStorage(storage.id)}
+                />
+              )}
+            />
+
+            <TreeRow
+              id="everything" label="Everything" level={0} icon={Library}
+              hasChildren={false} isOpen={false}
+              isActive={filterState.kind === "everything"}
+              onClick={selectEverything}
+            />
+          </>
+        )}
       </aside>
 
       {/* Main content */}
@@ -542,14 +827,93 @@ export default function MairListDB({ onEditItem, onNavigate }) {
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="relative">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+            <div className="relative flex items-center">
+              <Search size={15} className="absolute left-3 text-zinc-500" />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Suchen im Ordner"
-                className="w-56 rounded-md border border-zinc-800 bg-zinc-900 py-2 pl-9 pr-3 text-sm text-zinc-200 placeholder-zinc-600 outline-none transition-colors focus:border-zinc-700"
+                placeholder={searchOptions.scope === "view" ? "Suchen im aktuellen View" : "Suchen in der Bibliothek"}
+                className="w-56 rounded-md border border-zinc-800 bg-zinc-900 py-2 pl-9 pr-9 text-sm text-zinc-200 placeholder-zinc-600 outline-none transition-colors focus:border-zinc-700"
               />
+              <button
+                onClick={() => setShowSearchOptions((v) => !v)}
+                className={`absolute right-2 flex h-5 w-5 items-center justify-center rounded transition-colors ${
+                  showSearchOptions ? "text-orange-500" : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                <Settings2 size={14} />
+              </button>
+
+              {showSearchOptions && (
+                <div className="absolute right-0 top-full z-10 mt-2 w-64 rounded-md border border-zinc-800 bg-zinc-900 p-3 text-sm shadow-xl">
+                  <div className="mb-3">
+                    <div className="mb-1.5 text-xs text-zinc-500">Suche in</div>
+                    <div className="flex gap-1.5">
+                      {[
+                        { key: "library", label: "Bibliothek" },
+                        { key: "view", label: "Aktueller View" },
+                      ].map((opt) => (
+                        <button
+                          key={opt.key}
+                          onClick={() => setSearchOptions((prev) => ({ ...prev, scope: opt.key }))}
+                          className={`flex-1 rounded px-2 py-1.5 text-xs transition-colors ${
+                            searchOptions.scope === opt.key
+                              ? "bg-orange-500/10 text-orange-500"
+                              : "bg-zinc-800/60 text-zinc-400 hover:text-zinc-200"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mb-3">
+                    <div className="mb-1.5 text-xs text-zinc-500">Felder</div>
+                    <div className="space-y-1">
+                      {[
+                        { key: "title", label: "Titel" },
+                        { key: "artist", label: "Artist" },
+                        { key: "comment", label: "Kommentar" },
+                      ].map((f) => (
+                        <label key={f.key} className="flex items-center gap-2 text-zinc-300">
+                          <input
+                            type="checkbox"
+                            checked={searchOptions.fields[f.key]}
+                            onChange={(e) =>
+                              setSearchOptions((prev) => {
+                                const fields = { ...prev.fields, [f.key]: e.target.checked };
+                                // Keep at least one field active — an empty
+                                // selection would silently match nothing.
+                                if (!Object.values(fields).some(Boolean)) return prev;
+                                return { ...prev, fields };
+                              })
+                            }
+                            className="h-3.5 w-3.5 rounded border-zinc-700 bg-zinc-900 accent-orange-500"
+                          />
+                          <span>{f.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <label className="flex items-center justify-between">
+                    <span className="text-xs text-zinc-500">Volltext (enthält)</span>
+                    <button
+                      onClick={() => setSearchOptions((prev) => ({ ...prev, fullText: !prev.fullText }))}
+                      className={`relative h-5 w-9 rounded-full transition-colors ${
+                        searchOptions.fullText ? "bg-orange-500" : "bg-zinc-700"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+                          searchOptions.fullText ? "translate-x-4" : "translate-x-0.5"
+                        }`}
+                      />
+                    </button>
+                  </label>
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-400">
               <span>{selected.size} selected</span>
@@ -597,7 +961,13 @@ export default function MairListDB({ onEditItem, onNavigate }) {
                 </tr>
               )}
               {!loading && !error && visibleItems.map((item) => (
-                <tr key={item.id} className="border-b border-zinc-800/60 transition-colors hover:bg-zinc-900/50">
+                <tr
+                  key={item.id}
+                  draggable
+                  onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; setDragItemId(item.id); }}
+                  onDragEnd={() => { setDragItemId(null); setDragOverFolderId(null); }}
+                  className="border-b border-zinc-800/60 transition-colors hover:bg-zinc-900/50"
+                >
                   <td className="px-4 py-3">
                     <input
                       type="checkbox" checked={selected.has(item.id)} onChange={() => toggleOne(item.id)}

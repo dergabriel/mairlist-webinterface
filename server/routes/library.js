@@ -39,10 +39,15 @@ router.get("/artists", (req, res) => {
   res.json(repo.getArtists());
 });
 
-// GET /api/items?type=&artist=&folderId=&storageId=
+// GET /api/attributes -> attribute keys present in the library, each with its distinct values
+router.get("/attributes", (req, res) => {
+  res.json(repo.getAttributeKeys());
+});
+
+// GET /api/items?type=&artist=&folderId=&storageId=&attributeKey=&attributeValue=
 router.get("/items", (req, res) => {
-  const { type, artist, folderId, storageId } = req.query;
-  res.json(repo.getItems({ type, artist, folderId, storageId }));
+  const { type, artist, folderId, storageId, attributeKey, attributeValue } = req.query;
+  res.json(repo.getItems({ type, artist, folderId, storageId, attributeKey, attributeValue }));
 });
 
 // GET /api/items/:id
@@ -85,6 +90,14 @@ router.post("/items", (req, res) => {
 // PUT /api/items/:id -> update an existing item
 router.put("/items/:id", (req, res) => {
   const item = repo.updateItem(req.params.id, req.body);
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  res.json(item);
+});
+
+// PUT /api/items/:id/folder -> move an item into a (virtual) folder. Body: { folderId }
+router.put("/items/:id/folder", (req, res) => {
+  const { folderId } = req.body;
+  const item = repo.moveItemToFolder(req.params.id, folderId);
   if (!item) return res.status(404).json({ error: "Item not found" });
   res.json(item);
 });

@@ -30,6 +30,22 @@ export function getTree() {
   return request("/tree");
 }
 
+export function createFolder(name, parentId) {
+  return post("/folders", { name, parentId });
+}
+
+export function renameFolder(id, name) {
+  return put(`/folders/${id}`, { name });
+}
+
+export function moveFolder(id, newParentId) {
+  return put(`/folders/${id}/move`, { newParentId });
+}
+
+export function deleteFolder(id) {
+  return request(`/folders/${id}`, { method: "DELETE" });
+}
+
 export function getStorages() {
   return request("/storages");
 }

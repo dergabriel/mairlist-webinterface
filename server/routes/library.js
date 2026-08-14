@@ -24,6 +24,40 @@ router.get("/tree", (req, res) => {
   res.json(repo.getFolderTree());
 });
 
+// POST /api/folders -> create a new folder. Body: { name, parentId? }
+router.post("/folders", (req, res) => {
+  const { name, parentId } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: "name ist erforderlich" });
+  const folder = repo.createFolder(name, parentId);
+  res.status(201).json(folder);
+});
+
+// PUT /api/folders/:id -> rename a folder. Body: { name }
+router.put("/folders/:id", (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: "name ist erforderlich" });
+  const folder = repo.renameFolder(req.params.id, name);
+  if (!folder) return res.status(404).json({ error: "Folder not found" });
+  res.json(folder);
+});
+
+// PUT /api/folders/:id/move -> move a folder under a new parent. Body: { newParentId }
+router.put("/folders/:id/move", (req, res) => {
+  const { newParentId } = req.body;
+  const folder = repo.moveFolder(req.params.id, newParentId);
+  if (folder === null) return res.status(404).json({ error: "Folder not found" });
+  if (folder === false) return res.status(400).json({ error: "Ordner kann nicht in sich selbst oder einen Unterordner verschoben werden" });
+  res.json(folder);
+});
+
+// DELETE /api/folders/:id -> delete an empty folder
+router.delete("/folders/:id", (req, res) => {
+  const result = repo.deleteFolder(req.params.id);
+  if (result === "not_found") return res.status(404).json({ error: "Folder not found" });
+  if (result === "not_empty") return res.status(400).json({ error: "Ordner enthält noch Elemente oder Unterordner" });
+  res.status(204).end();
+});
+
 // GET /api/storages
 router.get("/storages", (req, res) => {
   res.json(repo.getStorages());

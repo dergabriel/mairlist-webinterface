@@ -7,6 +7,11 @@
 //
 // Interface (keep stable across implementations):
 //   getFolderTree()          -> nested folder tree
+//   getFolderById(id)        -> single folder or null
+//   createFolder(name, parentId) -> newly created folder
+//   renameFolder(id, name)   -> updated folder or null
+//   moveFolder(id, newParentId) -> updated folder, null if not found, false if it would create a cycle
+//   deleteFolder(id)         -> "ok" | "not_empty" | "not_found"
 //   getStorages()            -> array of storages
 //   getItemTypes()           -> array of type definitions, each flagged hasItems
 //   getArtists()             -> array of distinct artist names
@@ -52,6 +57,76 @@ function getFolderTree() {
       .filter((f) => f.parentId === parentId)
       .map((f) => ({ ...f, children: byParent(f.id) }));
   return byParent(null);
+}
+
+function getFolderById(id) {
+  return folders.find((f) => f.id === Number(id)) || null;
+}
+
+function nextFolderId() {
+  const max = folders.reduce((acc, f) => Math.max(acc, f.id), 0);
+  return max + 1;
+}
+
+// Collects the ids of a folder and every descendant, used to guard against
+// moving/deleting a folder into its own subtree.
+function collectFolderAndDescendants(id) {
+  const ids = [id];
+  const children = folders.filter((f) => f.parentId === id);
+  for (const child of children) ids.push(...collectFolderAndDescendants(child.id));
+  return ids;
+}
+
+function createFolder(name, parentId) {
+  const folder = {
+    id: nextFolderId(),
+    name: (name || "").trim(),
+    parentId: parentId == null ? null : Number(parentId),
+  };
+  // TODO: replace with a real SQL INSERT once the schema is confirmed.
+  folders.push(folder);
+  return folder;
+}
+
+function renameFolder(id, name) {
+  const folder = getFolderById(id);
+  if (!folder) return null;
+  // TODO: replace with a real SQL UPDATE once the schema is confirmed.
+  folder.name = (name || "").trim();
+  return folder;
+}
+
+// Moves a folder under newParentId. Returns null if the folder doesn't
+// exist, or false if the move would create a cycle (target is the folder
+// itself or one of its own descendants).
+function moveFolder(id, newParentId) {
+  const folder = getFolderById(id);
+  if (!folder) return null;
+
+  const targetId = newParentId == null ? null : Number(newParentId);
+  if (targetId != null && collectFolderAndDescendants(folder.id).includes(targetId)) {
+    return false;
+  }
+
+  // TODO: replace with a real SQL UPDATE once the schema is confirmed.
+  folder.parentId = targetId;
+  return folder;
+}
+
+// Deletes a folder. Returns "not_found", "not_empty" (has items or
+// subfolders), or "ok".
+function deleteFolder(id) {
+  const folder = getFolderById(id);
+  if (!folder) return "not_found";
+
+  const hasSubfolders = folders.some((f) => f.parentId === folder.id);
+  const hasItems = items.some((i) => i.folderId === folder.id);
+  if (hasSubfolders || hasItems) return "not_empty";
+
+  // TODO: replace with a real SQL DELETE once the schema is confirmed.
+  const index = folders.findIndex((f) => f.id === folder.id);
+  folders.splice(index, 1);
+  return "ok";
 }
 
 function getStorages() {
@@ -414,6 +489,11 @@ function removePlaylistItem(id, position) {
 
 module.exports = {
   getFolderTree,
+  getFolderById,
+  createFolder,
+  renameFolder,
+  moveFolder,
+  deleteFolder,
   getStorages,
   getItemTypes,
   getArtists,

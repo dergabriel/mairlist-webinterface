@@ -1,13 +1,15 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Settings, Database, Copy, ListMusic,
   Users, Tag, ScrollText, Folder, FolderOpen, ChevronRight,
   ChevronDown, RefreshCw, Plus, Search, Pencil, Trash2, ArrowUpDown,
   AlertTriangle, X, Upload, SlidersHorizontal, HardDrive, Library, Settings2,
+  FolderPlus, FolderInput,
 } from "lucide-react";
 import {
   getTree, getItems, getStorages, createItem, deleteItem, uploadFile,
   getArtists, getItemTypes, getAttributeKeys, moveItemToFolder,
+  createFolder, renameFolder, moveFolder, deleteFolder,
 } from "../lib/api";
 
 // --- Helpers ---
@@ -26,6 +28,13 @@ const findFolder = (nodes, id) => {
   }
   return null;
 };
+
+// Ids of a folder and every one of its descendants — used to stop a folder
+// being dropped/moved into its own subtree.
+const collectFolderAndDescendantIds = (folder) => [
+  folder.id,
+  ...collectDescendants(folder),
+];
 
 const formatDate = (iso) => iso.replace("T", "  ");
 
@@ -84,42 +93,160 @@ function TreeRow({
   );
 }
 
+// --- Folder inline input (new subfolder / rename) ---
+
+function InlineFolderInput({ level, initialValue = "", onSubmit, onCancel }) {
+  const [value, setValue] = useState(initialValue);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+
+  const submit = () => {
+    const trimmed = value.trim();
+    if (trimmed) onSubmit(trimmed);
+    else onCancel();
+  };
+
+  return (
+    <div
+      className="flex items-center gap-1.5 py-1.5 pr-2"
+      style={{ paddingLeft: `${level * 14 + 8}px` }}
+    >
+      <span className="w-[14px] shrink-0" />
+      <Folder size={15} className="shrink-0 text-zinc-500" />
+      <input
+        ref={ref}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={submit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); submit(); }
+          if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+        }}
+        className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-sm text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-zinc-700"
+      />
+    </div>
+  );
+}
+
+// --- Folder right-click context menu ---
+
+function FolderContextMenu({ x, y, onClose, onNewSubfolder, onRename, onMove, onDelete }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const onClickOutside = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    };
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", onClickOutside);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  const itemClass =
+    "flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100";
+
+  return (
+    <div
+      ref={ref}
+      style={{ left: x, top: y }}
+      className="fixed z-50 w-52 overflow-hidden rounded-md border border-zinc-800 bg-zinc-900 py-1 shadow-xl"
+    >
+      <button className={itemClass} onClick={onNewSubfolder}>
+        <FolderPlus size={13} />
+        <span>Neuer Unterordner</span>
+      </button>
+      <button className={itemClass} onClick={onRename}>
+        <Pencil size={13} />
+        <span>Umbenennen</span>
+      </button>
+      <button className={itemClass} onClick={onMove}>
+        <FolderInput size={13} />
+        <span>Verschieben</span>
+      </button>
+      <div className="my-1 border-t border-zinc-800" />
+      <button className={`${itemClass} text-red-500 hover:text-red-400`} onClick={onDelete}>
+        <Trash2 size={13} />
+        <span>Löschen</span>
+      </button>
+    </div>
+  );
+}
+
 // --- Folder tree branch (virtual folders, expandable, drop targets) ---
 
 function FolderNode({
   folder, level, expanded, onToggle, filterState, onSelect,
   dragOverFolderId, onDragOverFolder, onDragLeaveFolder, onDropOnFolder,
+  draggedFolderId, onFolderDragStart, onFolderDragEnd,
+  editingState, onContextMenu, onInlineSubmit, onInlineCancel,
 }) {
   const children = folder.children || [];
   const hasChildren = children.length > 0;
   const isOpen = expanded.has(folder.id);
   const isActive = filterState.kind === "folder" && filterState.folderId === folder.id;
   const isDropTarget = !folder.special;
+  const isEditingThis = editingState && editingState.folderId === folder.id && editingState.mode === "rename";
+  const isAddingChild = editingState && editingState.folderId === folder.id && editingState.mode === "new-child";
 
   return (
     <div>
-      <TreeRow
-        id={folder.id} label={folder.name} level={level}
-        icon={Folder} openIcon={folder.special ? undefined : FolderOpen}
-        hasChildren={hasChildren} isOpen={isOpen} isActive={isActive}
-        onClick={() => { onSelect(folder.id); if (hasChildren) onToggle(folder.id); }}
-        onToggle={hasChildren}
-        isDropTarget={isDropTarget}
-        isDragOver={dragOverFolderId === folder.id}
-        dropHandlers={{
-          // dragenter is what reliably marks "over this target" — dragover
-          // fires continuously but dragenter/dragleave pairs can outrun it
-          // while the pointer crosses child elements (icon, label).
-          onDragEnter: (e) => { e.preventDefault(); onDragOverFolder(folder.id); },
-          onDragOver: (e) => e.preventDefault(),
-          // Only clear when actually leaving the row, not when moving
-          // between its children.
-          onDragLeave: (e) => {
-            if (!e.currentTarget.contains(e.relatedTarget)) onDragLeaveFolder(folder.id);
-          },
-          onDrop: (e) => { e.preventDefault(); onDropOnFolder(folder.id); },
-        }}
-      />
+      {isEditingThis ? (
+        <InlineFolderInput
+          level={level}
+          initialValue={folder.name}
+          onSubmit={(value) => onInlineSubmit(folder.id, "rename", value)}
+          onCancel={onInlineCancel}
+        />
+      ) : (
+        <TreeRow
+          id={folder.id} label={folder.name} level={level}
+          icon={Folder} openIcon={folder.special ? undefined : FolderOpen}
+          hasChildren={hasChildren} isOpen={isOpen} isActive={isActive}
+          onClick={() => { onSelect(folder.id); if (hasChildren) onToggle(folder.id); }}
+          onToggle={hasChildren}
+          isDropTarget={isDropTarget}
+          isDragOver={dragOverFolderId === folder.id}
+          dropHandlers={{
+            // dragenter is what reliably marks "over this target" — dragover
+            // fires continuously but dragenter/dragleave pairs can outrun it
+            // while the pointer crosses child elements (icon, label).
+            onDragEnter: (e) => { e.preventDefault(); onDragOverFolder(folder.id); },
+            onDragOver: (e) => e.preventDefault(),
+            // Only clear when actually leaving the row, not when moving
+            // between its children.
+            onDragLeave: (e) => {
+              if (!e.currentTarget.contains(e.relatedTarget)) onDragLeaveFolder(folder.id);
+            },
+            onDrop: (e) => { e.preventDefault(); onDropOnFolder(folder.id); },
+            ...(isDropTarget
+              ? {
+                  draggable: true,
+                  onDragStart: (e) => {
+                    e.dataTransfer.effectAllowed = "move";
+                    onFolderDragStart(folder.id);
+                  },
+                  onDragEnd: onFolderDragEnd,
+                }
+              : {}),
+            ...(isDropTarget ? { onContextMenu: (e) => onContextMenu(e, folder.id) } : {}),
+          }}
+        />
+      )}
+      {isAddingChild && (
+        <InlineFolderInput
+          level={level + 1}
+          onSubmit={(value) => onInlineSubmit(folder.id, "new-child", value)}
+          onCancel={onInlineCancel}
+        />
+      )}
       {hasChildren && isOpen && (
         <div>
           {children.map((child) => (
@@ -131,6 +258,13 @@ function FolderNode({
               onDragOverFolder={onDragOverFolder}
               onDragLeaveFolder={onDragLeaveFolder}
               onDropOnFolder={onDropOnFolder}
+              draggedFolderId={draggedFolderId}
+              onFolderDragStart={onFolderDragStart}
+              onFolderDragEnd={onFolderDragEnd}
+              editingState={editingState}
+              onContextMenu={onContextMenu}
+              onInlineSubmit={onInlineSubmit}
+              onInlineCancel={onInlineCancel}
             />
           ))}
         </div>
@@ -485,6 +619,163 @@ function ConfirmDeleteDialog({ item, onClose, onConfirm }) {
   );
 }
 
+// --- Move folder dialog: pick a destination from the full folder tree ---
+
+function MoveFolderPickerNode({ folder, level, disabledIds, selectedId, onSelect }) {
+  const children = folder.children || [];
+  const disabled = disabledIds.has(folder.id);
+  const isSelected = selectedId === folder.id;
+
+  return (
+    <div>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onSelect(folder.id)}
+        className={`flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-sm transition-colors ${
+          isSelected
+            ? "border-l-2 border-orange-500 bg-zinc-800/60 text-zinc-100"
+            : disabled
+            ? "border-l-2 border-transparent text-zinc-700"
+            : "border-l-2 border-transparent text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+        }`}
+        style={{ paddingLeft: `${level * 14 + 8}px` }}
+      >
+        <Folder size={15} className="shrink-0 text-zinc-500" />
+        <span className="truncate">{folder.name}</span>
+      </button>
+      {children.map((child) => (
+        <MoveFolderPickerNode
+          key={child.id} folder={child} level={level + 1}
+          disabledIds={disabledIds} selectedId={selectedId} onSelect={onSelect}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MoveFolderDialog({ tree, folder, onClose, onMove }) {
+  const [selectedId, setSelectedId] = useState(folder.parentId ?? null);
+  const [moving, setMoving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const disabledIds = useMemo(() => new Set(collectFolderAndDescendantIds(folder)), [folder]);
+
+  const confirm = async () => {
+    setMoving(true);
+    setError(null);
+    try {
+      await onMove(selectedId);
+    } catch (err) {
+      setError(err.message);
+      setMoving(false);
+    }
+  };
+
+  const unchanged = selectedId === (folder.parentId ?? null);
+
+  return (
+    <Modal title={`„${folder.name}“ verschieben`} onClose={onClose}>
+      <div className="space-y-4">
+        <div className="max-h-72 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 p-2">
+          <button
+            type="button"
+            onClick={() => setSelectedId(null)}
+            className={`flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-sm transition-colors ${
+              selectedId === null
+                ? "border-l-2 border-orange-500 bg-zinc-800/60 text-zinc-100"
+                : "border-l-2 border-transparent text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+            }`}
+            style={{ paddingLeft: "8px" }}
+          >
+            <Folder size={15} className="shrink-0 text-zinc-500" />
+            <span className="truncate">Folders (Wurzel)</span>
+          </button>
+          {tree.map((f) => (
+            <MoveFolderPickerNode
+              key={f.id} folder={f} level={1}
+              disabledIds={disabledIds} selectedId={selectedId} onSelect={setSelectedId}
+            />
+          ))}
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-red-500">
+            <AlertTriangle size={14} />
+            <span>Ordner konnte nicht verschoben werden: {error}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="rounded-md border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            Abbrechen
+          </button>
+          <button
+            onClick={confirm} disabled={moving || unchanged}
+            className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
+          >
+            {moving ? "Wird verschoben…" : "Verschieben"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ConfirmDeleteFolderDialog({ folder, onClose, onConfirm }) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const isEmpty = (folder.children || []).length === 0 && !folder.hasItemsHint;
+
+  const confirm = async () => {
+    setDeleting(true);
+    setError(null);
+    try {
+      await onConfirm();
+    } catch (err) {
+      setError(err.message);
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <Modal title="Ordner löschen" onClose={onClose}>
+      <div className="space-y-4">
+        {isEmpty ? (
+          <p className="text-sm text-zinc-300">
+            Ordner „{folder.name}“ wird endgültig gelöscht.
+          </p>
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-orange-500">
+            <AlertTriangle size={14} />
+            <span>Ordner enthält noch Elemente oder Unterordner</span>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-red-500">
+            <AlertTriangle size={14} />
+            <span>Ordner konnte nicht gelöscht werden: {error}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="rounded-md border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            Abbrechen
+          </button>
+          <button
+            onClick={confirm} disabled={deleting || !isEmpty}
+            className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-50"
+          >
+            {deleting ? "Wird gelöscht…" : "Löschen"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // --- Main app ---
 
 export default function MairListDB({ onEditItem, onNavigate }) {
@@ -515,6 +806,13 @@ export default function MairListDB({ onEditItem, onNavigate }) {
 
   const [dragItemId, setDragItemId] = useState(null);
   const [dragOverFolderId, setDragOverFolderId] = useState(null);
+  const [draggedFolderId, setDraggedFolderId] = useState(null);
+
+  const [folderContextMenu, setFolderContextMenu] = useState(null); // { x, y, folderId }
+  const [editingFolder, setEditingFolder] = useState(null); // { folderId, mode: "rename" | "new-child" }
+  const [moveFolderTarget, setMoveFolderTarget] = useState(null); // folder node
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState(null); // folder node
+  const [folderError, setFolderError] = useState(null);
 
   const loadData = useCallback(() => {
     setLoading(true);
@@ -565,9 +863,63 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const handleDropOnFolder = async (folderId) => {
     setDragOverFolderId(null);
     const itemId = dragItemId;
+    const sourceFolderId = draggedFolderId;
     setDragItemId(null);
+    setDraggedFolderId(null);
+
+    if (sourceFolderId != null) {
+      if (sourceFolderId === folderId) return;
+      const sourceFolder = findFolder(tree, sourceFolderId);
+      if (sourceFolder && collectFolderAndDescendantIds(sourceFolder).includes(folderId)) {
+        setFolderError("Ordner kann nicht in sich selbst oder einen Unterordner verschoben werden");
+        return;
+      }
+      try {
+        await moveFolder(sourceFolderId, folderId);
+        await loadData();
+      } catch (err) {
+        setFolderError(err.message);
+      }
+      return;
+    }
+
     if (!itemId) return;
     await moveItemToFolder(itemId, folderId);
+    await loadData();
+  };
+
+  const handleNewRootFolder = () => setEditingFolder({ folderId: "root", mode: "new-child" });
+
+  const handleFolderContextMenu = (e, folderId) => {
+    e.preventDefault();
+    setFolderContextMenu({ x: e.clientX, y: e.clientY, folderId });
+  };
+
+  const handleInlineFolderSubmit = async (folderId, mode, value) => {
+    setEditingFolder(null);
+    try {
+      if (mode === "rename") {
+        await renameFolder(folderId, value);
+      } else {
+        const parentId = folderId === "root" ? null : folderId;
+        await createFolder(value, parentId);
+        if (parentId != null) setExpanded((prev) => new Set(prev).add(parentId));
+      }
+      await loadData();
+    } catch (err) {
+      setFolderError(err.message);
+    }
+  };
+
+  const handleMoveFolder = async (newParentId) => {
+    await moveFolder(moveFolderTarget.id, newParentId);
+    setMoveFolderTarget(null);
+    await loadData();
+  };
+
+  const handleDeleteFolder = async () => {
+    await deleteFolder(deleteFolderTarget.id);
+    setDeleteFolderTarget(null);
     await loadData();
   };
 
@@ -712,6 +1064,26 @@ export default function MairListDB({ onEditItem, onNavigate }) {
           onDragLeaveFolder={(id) => setDragOverFolderId((cur) => (cur === id ? null : cur))}
           onDropOnFolder={handleDropOnFolder}
         />
+
+        <div className="flex items-center justify-between py-1 pl-2 pr-1">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Folders</span>
+          <button
+            onClick={handleNewRootFolder}
+            title="Neuer Ordner"
+            className="flex h-5 w-5 items-center justify-center rounded text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-orange-500"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+
+        {editingFolder?.folderId === "root" && editingFolder.mode === "new-child" && (
+          <InlineFolderInput
+            level={0}
+            onSubmit={(value) => handleInlineFolderSubmit("root", "new-child", value)}
+            onCancel={() => setEditingFolder(null)}
+          />
+        )}
+
         {loading && <div className="px-3 py-2 text-sm text-zinc-600">Lade Ordner…</div>}
         {!loading && error && (
           <div className="px-3 py-2 text-sm text-red-500">Baum nicht verfügbar</div>
@@ -725,6 +1097,13 @@ export default function MairListDB({ onEditItem, onNavigate }) {
             onDragOverFolder={setDragOverFolderId}
             onDragLeaveFolder={(id) => setDragOverFolderId((cur) => (cur === id ? null : cur))}
             onDropOnFolder={handleDropOnFolder}
+            draggedFolderId={draggedFolderId}
+            onFolderDragStart={setDraggedFolderId}
+            onFolderDragEnd={() => { setDraggedFolderId(null); setDragOverFolderId(null); }}
+            editingState={editingFolder}
+            onContextMenu={handleFolderContextMenu}
+            onInlineSubmit={handleInlineFolderSubmit}
+            onInlineCancel={() => setEditingFolder(null)}
           />
         ))}
 
@@ -1028,6 +1407,62 @@ export default function MairListDB({ onEditItem, onNavigate }) {
           onClose={() => setDeleteTarget(null)}
           onConfirm={handleDelete}
         />
+      )}
+
+      {folderContextMenu && (
+        <FolderContextMenu
+          x={folderContextMenu.x} y={folderContextMenu.y}
+          onClose={() => setFolderContextMenu(null)}
+          onNewSubfolder={() => {
+            setExpanded((prev) => new Set(prev).add(folderContextMenu.folderId));
+            setEditingFolder({ folderId: folderContextMenu.folderId, mode: "new-child" });
+            setFolderContextMenu(null);
+          }}
+          onRename={() => {
+            setEditingFolder({ folderId: folderContextMenu.folderId, mode: "rename" });
+            setFolderContextMenu(null);
+          }}
+          onMove={() => {
+            const folder = findFolder(tree, folderContextMenu.folderId);
+            if (folder) setMoveFolderTarget(folder);
+            setFolderContextMenu(null);
+          }}
+          onDelete={() => {
+            const folder = findFolder(tree, folderContextMenu.folderId);
+            if (folder) {
+              const hasItems = items.some((i) => i.folderId === folder.id);
+              setDeleteFolderTarget({ ...folder, hasItemsHint: hasItems });
+            }
+            setFolderContextMenu(null);
+          }}
+        />
+      )}
+
+      {moveFolderTarget && (
+        <MoveFolderDialog
+          tree={tree}
+          folder={moveFolderTarget}
+          onClose={() => setMoveFolderTarget(null)}
+          onMove={handleMoveFolder}
+        />
+      )}
+
+      {deleteFolderTarget && (
+        <ConfirmDeleteFolderDialog
+          folder={deleteFolderTarget}
+          onClose={() => setDeleteFolderTarget(null)}
+          onConfirm={handleDeleteFolder}
+        />
+      )}
+
+      {folderError && (
+        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-md border border-red-900 bg-zinc-900 px-4 py-3 text-sm text-red-500 shadow-xl">
+          <AlertTriangle size={14} />
+          <span>{folderError}</span>
+          <button onClick={() => setFolderError(null)} className="ml-2 text-zinc-500 hover:text-zinc-300">
+            <X size={14} />
+          </button>
+        </div>
       )}
     </div>
   );

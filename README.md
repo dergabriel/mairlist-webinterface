@@ -26,7 +26,6 @@ Vorbild ist das 2023 begonnene Projekt **TubeLive**. Der Look ist in [`DESIGN.md
 | Datei | Inhalt |
 |---|---|
 | [`docs/FEATURES.md`](docs/FEATURES.md) | Vollständiger Funktionskatalog nach mAirList Doku, mit Status je Funktion |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Detaillierter Phasenplan mit den offenen Brocken |
 | [`DESIGN.md`](DESIGN.md) | Design System (Farben, Layout, Komponenten) |
 | [`SETUP.md`](SETUP.md) | Lokale Entwicklung, Git, Projektstruktur |
 | [`docs/SCHEMA.md`](docs/SCHEMA.md) | Echtes DB-Schema aus einer .mldb Datei |
@@ -48,16 +47,26 @@ Die mAirListDB läuft auf einem echten SQL Server (PostgreSQL, MariaDB/MySQL ode
 
 ---
 
+## 🤝 Mitmachen
+
+- Bugs und Feature-Requests als Issue auf GitHub
+- PRs willkommen, bitte vorher ein Issue öffnen
+- Vor Arbeit am Frontend: [`DESIGN.md`](DESIGN.md) lesen
+- Vor Arbeit am Backend: [`docs/SCHEMA.md`](docs/SCHEMA.md) und [`docs/FIELD-SEMANTICS.md`](docs/FIELD-SEMANTICS.md) lesen
+- Commit Messages auf Deutsch oder Englisch, Format: `feat:`, `fix:`, `docs:`, `refactor:`
+
+---
+
 ## 🚦 Phasenplan (Kurzfassung)
 
-Details je Phase in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Details je Phase in [`docs/FEATURES.md`](docs/FEATURES.md).
 
 | Phase | Inhalt | Status |
 |---|---|---|
-| **A** | Kern-Oberfläche: Elemente Liste, Item Editor (6 Tabs), Cue Editor, Upload, Playlist Editor, lokale vs. DB Änderungen | ✅ gegen Mock |
-| **B** | Bibliothek vervollständigen: Tree-Knoten (Artists, Types, Attribute, Everything), Suchoptionen, Ordnerverwaltung, konfigurierbare Spalten | ⬜ |
+| **A** | Kern-Oberfläche: Elemente Liste, Item Editor (6 Tabs), Cue Editor, Upload, Playlist Editor, lokale vs. DB Änderungen | ✅ gegen Mock, Audio-Streaming via HTTP |
+| **B** | Bibliothek vervollständigen: Tree-Knoten (Artists, Types, Attribute, Everything), Suchoptionen, Ordnerverwaltung, konfigurierbare Spalten | ✅ fertig |
 | **C** | Storage Verwaltung: Storages anlegen/bearbeiten, Synchronisation mit Abgleich, Import-Optionen, Dummy↔File | ⬜ |
-| **D** | **Mix Editor**: Timeline über mehrere Items, Volume-Hüllkurven, Übergänge programmieren | ⬜ |
+| **D** | **Mix Editor**: Timeline über mehrere Items, Volume-Hüllkurven, Übergänge programmieren | 🚧 in Arbeit — Mehrfachauswahl und Grundgerüst in Entwicklung |
 | **E** | **Voice Tracking**: VT Recorder im Browser, Preroll/Record/StartNext-Ablauf, Einbettung mit Hüllkurve | ⬜ |
 | **F** | Mehrbenutzer: Login, Rollen (Read-only, Studio, DJ, VTDJ, Admin), Konflikt-Erkennung bei Playlists, Logs | ⬜ |
 | **G** | Echte Datenbank: Schema ziehen, Semantik per Diff dokumentieren, Repository auf SQL umstellen, Schreib-Beweis | 🚧 in Arbeit — Schema und Semantik dokumentiert, Repository-Umstellung und Schreib-Beweis ausstehend |

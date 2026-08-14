@@ -92,20 +92,26 @@ function trackCues(item) {
   return { duration, cueIn, startNext };
 }
 
-// Lays every selected item on one shared timeline. Track i's audible start
-// is 0 for the first item, and for every later item it's the running
-// timeline position at which the previous item hands off (its startNext),
-// shifted so the previous item's own cueIn lines up at its start offset.
+// Clamp startNext of a track to mAirList's real bounds: it can't start the
+// next track before its own cueIn (no playing "into the past"), and can't
+// leave a gap past its own duration (next track starts at the latest once
+// this one ends).
+function clampStartNext(startNext, duration, cueIn) {
+  return Math.min(Math.max(startNext, cueIn), duration);
+}
+
+// Lays every selected item on one shared timeline. Track 0 starts at 0;
+// every later track starts exactly where the previous track's startNext
+// marker sits on the timeline — no cueIn-relative shifting, no gaps.
 function computeLayout(items) {
   let cursor = 0;
   const tracks = items.map((item, i) => {
-    const { duration, cueIn, startNext } = trackCues(item);
+    const { duration, cueIn, startNext: rawStartNext } = trackCues(item);
+    const startNext = clampStartNext(rawStartNext, duration, cueIn);
     const start = i === 0 ? 0 : cursor;
-    const playLength = Math.max(duration - cueIn, 0);
-    const end = start + playLength;
-    const handoff = start + Math.max(startNext - cueIn, 0);
-    cursor = handoff;
-    return { item, duration, cueIn, startNext, start, end, handoff };
+    const end = start + duration;
+    cursor = start + startNext;
+    return { item, duration, cueIn, startNext, start, end };
   });
   const totalWidth = tracks.length ? Math.max(...tracks.map((t) => t.end)) : 0;
   return { tracks, totalWidth };
@@ -129,15 +135,19 @@ function TrackLabel({ track, focused, onFocus }) {
   );
 }
 
-// Cue points shown as markers on each track's waveform — the ones a
-// moderator actually cares about when lining up a transition, mirroring
-// ItemEditor's DEFAULT_CUE_PRIORITY but trimmed to what fits a compact lane.
-const TRACK_MARKER_KEYS = ["cueIn", "fadeIn", "ramp1", "fadeOut", "cueOut", "startNext", "outro"];
-const TRACK_MARKERS = CUE_POINTS.filter((p) => TRACK_MARKER_KEYS.includes(p.key));
-
 // --- Single waveform track lane ---
+//
+// Track N (index > 0) is draggable as a whole: dragging it left/right edits
+// startNext of the *previous* track (N-1), since that value is what places
+// N on the shared timeline. Individual cue markers on top are separately
+// draggable and take priority over the lane drag (stopPropagation). The
+// startNext marker on a track is a special case: dragging it is identical to
+// dragging the next track's lane, so both write to the same value.
 
-function TrackRow({ track, index, registerWs, onSeekPreview, onFocus, pxPerSec, overlapStartPx, overlapEndPx }) {
+function TrackRow({
+  track, index, registerWs, onSeekPreview, onFocus, pxPerSec,
+  overlapStartPx, overlapEndPx, onDragLane, onDragMarker, cueEdits,
+}) {
   const waveformRef = useRef(null);
   const wsRef = useRef(null);
   const [audioState, setAudioState] = useState("loading");
@@ -145,12 +155,14 @@ function TrackRow({ track, index, registerWs, onSeekPreview, onFocus, pxPerSec, 
   const bars = useMemo(() => syntheticBars(item.internalId), [item.internalId]);
 
   const markers = useMemo(() => {
-    const cue = item.cue || {};
-    return TRACK_MARKERS
-      .map((p) => ({ point: p, raw: cue[p.key] }))
-      .filter(({ raw }) => raw != null && raw !== "")
-      .map(({ point, raw }) => ({ point, pct: (Number(raw) / Math.max(duration, 1)) * 100 }));
-  }, [item.cue, duration]);
+    return CUE_POINTS.filter((p) => {
+      const val = cueEdits[index]?.[p.key] ?? item.cue?.[p.key];
+      return val != null && val !== "";
+    }).map((point) => {
+      const raw = cueEdits[index]?.[point.key] ?? item.cue?.[point.key];
+      return { point, value: Number(raw), pct: (Number(raw) / Math.max(duration, 1)) * 100 };
+    });
+  }, [item.cue, duration, cueEdits, index]);
 
   useEffect(() => {
     if (!waveformRef.current) return;
@@ -161,15 +173,14 @@ function TrackRow({ track, index, registerWs, onSeekPreview, onFocus, pxPerSec, 
       height: TRACK_HEIGHT - 8,
       waveColor: WAVE_COLOR,
       progressColor: PROGRESS_COLOR,
-      cursorColor: PROGRESS_COLOR,
-      cursorWidth: 1,
+      cursorColor: "#f97316",
+      cursorWidth: 2,
       barWidth: 2,
       barGap: 1,
       barRadius: 2,
-      minPxPerSec: pxPerSec,
-      fillParent: false,
+      fillParent: true,
       normalize: true,
-      interact: false,
+      interact: true,
       url: getAudioUrl(item.internalId),
     });
     wsRef.current = ws;
@@ -189,45 +200,55 @@ function TrackRow({ track, index, registerWs, onSeekPreview, onFocus, pxPerSec, 
   const widthPx = Math.max(duration, 1) * pxPerSec;
   const leftPx = start * pxPerSec;
   const audioReady = audioState === "ready";
+  const draggableLane = index > 0;
+  const laneBg = index % 2 === 0 ? "bg-zinc-900" : "bg-zinc-950";
+
+  const handleLaneMouseDown = (e) => {
+    onFocus();
+    if (!draggableLane) return;
+    e.preventDefault();
+    onDragLane(e);
+  };
 
   return (
     <div
-      onMouseDown={onFocus}
-      className="relative border-b border-zinc-800"
+      onMouseDown={handleLaneMouseDown}
+      className={`relative border-b border-zinc-800 ${draggableLane ? "cursor-ew-resize" : ""}`}
       style={{ height: TRACK_HEIGHT }}
     >
       {/* overlap highlight with the neighbouring track(s) */}
       {overlapStartPx != null && (
         <div
-          className="absolute top-0 z-[5] h-full bg-orange-500/10"
+          className="pointer-events-none absolute top-0 z-[5] h-full bg-orange-500/15"
           style={{ left: overlapStartPx, width: Math.max(overlapEndPx - overlapStartPx, 0) }}
         />
       )}
 
       {audioState === "unavailable" && (
         <div
-          className="absolute top-1 z-10 flex items-center gap-1 text-[10px] text-zinc-600"
+          className="pointer-events-none absolute top-1 z-10 flex items-center gap-1 text-[10px] text-zinc-600"
           style={{ left: leftPx + 6 }}
         >
           <AlertTriangle size={10} /> synthetisch
         </div>
       )}
       <div
-        className="absolute top-1 rounded-md border border-zinc-800 bg-zinc-900/40"
+        className={`absolute top-1 rounded-md border border-zinc-800 ${laneBg}`}
         style={{ left: leftPx, width: widthPx, height: TRACK_HEIGHT - 8 }}
       >
         <div
           ref={waveformRef}
           onClick={(e) => {
+            if (draggableLane) return; // clicks on a draggable lane are handled by the drag/seek combo below
             e.stopPropagation();
             const rect = e.currentTarget.getBoundingClientRect();
             const pct = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
             onSeekPreview(index, pct * duration);
           }}
-          className={`h-full w-full cursor-pointer ${audioReady ? "" : "invisible"}`}
+          className={`h-full w-full ${draggableLane ? "" : "cursor-pointer"} ${audioReady ? "" : "invisible"}`}
         />
         {!audioReady && (
-          <div className="absolute inset-0 flex items-center gap-[1px] px-0.5">
+          <div className="pointer-events-none absolute inset-0 flex items-center gap-[1px] px-0.5">
             {bars.map((h, i) => (
               <div
                 key={i}
@@ -239,76 +260,55 @@ function TrackRow({ track, index, registerWs, onSeekPreview, onFocus, pxPerSec, 
         )}
 
         {/* cue point markers: vertical line + label, own colour per point (mirrors ItemEditor's CueEditorTab) */}
-        {markers.map(({ point, pct }) => (
-          <div
-            key={point.key}
-            className="pointer-events-none absolute top-0 z-10 w-px"
-            style={{ left: `${pct}%`, backgroundColor: point.color, height: "100%" }}
-          >
+        {markers.map(({ point, pct }) => {
+          const isEmphasized = point.key === "startNext" || point.key === "cueIn";
+          return (
             <div
-              className="absolute -left-1 top-0 -translate-y-full whitespace-nowrap rounded-sm px-1 text-[9px] font-medium leading-tight"
-              style={{ color: point.color, backgroundColor: "rgba(9, 9, 11, 0.85)" }}
+              key={point.key}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDragMarker(e, point.key);
+              }}
+              className="absolute top-0 z-20 flex h-full cursor-ew-resize items-start"
+              style={{ left: `${pct}%`, width: isEmphasized ? 10 : 6, marginLeft: isEmphasized ? -5 : -3 }}
+              title={`${point.label} verschieben`}
             >
-              {point.label}
+              <div
+                className="mx-auto h-full"
+                style={{ width: isEmphasized ? 2 : 1, backgroundColor: point.color }}
+              />
+              <div
+                className="pointer-events-none absolute -left-1 top-0 -translate-y-full whitespace-nowrap rounded-sm px-1 text-[9px] font-medium leading-tight"
+                style={{ color: point.color, backgroundColor: "rgba(9, 9, 11, 0.85)" }}
+              >
+                {point.label}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
 }
 
-// --- Transition divider between two tracks, draggable, spans the full lane height ---
+// --- Focus button, sits above the overlap zone between two tracks ---
 
-function TransitionDivider({ track, pxPerSec, laneHeight, onDrag, onFocus, focusActive }) {
-  const dragging = useRef(false);
-  const startX = useRef(0);
-  const startHandoff = useRef(0);
-
-  const leftPx = track.handoff * pxPerSec;
-
-  const onMouseDown = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragging.current = true;
-    startX.current = e.clientX;
-    startHandoff.current = track.handoff;
-
-    const onMove = (ev) => {
-      if (!dragging.current) return;
-      const deltaSec = (ev.clientX - startX.current) / pxPerSec;
-      onDrag(startHandoff.current + deltaSec);
-    };
-    const onUp = () => {
-      dragging.current = false;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
+function OverlapFocusButton({ leftPx, onFocus, focusActive }) {
   return (
-    <div
-      className="group pointer-events-auto absolute top-0 z-20 flex cursor-ew-resize items-start"
-      style={{ left: leftPx - 4, width: 8, height: laneHeight }}
-      onMouseDown={onMouseDown}
-      title="Übergang verschieben"
+    <button
+      onClick={(e) => { e.stopPropagation(); onFocus(); }}
+      onMouseDown={(e) => e.stopPropagation()}
+      className={`pointer-events-auto absolute -top-6 z-20 flex h-5 w-5 -translate-x-1/2 items-center justify-center rounded-md border transition-colors ${
+        focusActive
+          ? "border-orange-500 bg-orange-500 text-zinc-950"
+          : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-orange-500 hover:text-orange-400"
+      }`}
+      style={{ left: leftPx }}
+      title="Fokus-Modus: Übergang abspielen"
     >
-      <div className="mx-auto h-full w-px bg-orange-500 group-hover:w-0.5 group-hover:bg-orange-400" />
-      <button
-        onClick={(e) => { e.stopPropagation(); onFocus(); }}
-        onMouseDown={(e) => e.stopPropagation()}
-        className={`absolute -top-6 left-1/2 flex h-5 w-5 -translate-x-1/2 items-center justify-center rounded-md border transition-colors ${
-          focusActive
-            ? "border-orange-500 bg-orange-500 text-zinc-950"
-            : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-orange-500 hover:text-orange-400"
-        }`}
-        title="Fokus-Modus: letzte/erste 10s abspielen"
-      >
-        <Focus size={11} />
-      </button>
-    </div>
+      <Focus size={11} />
+    </button>
   );
 }
 
@@ -369,9 +369,12 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   const items = context?.items ?? [];
   const playlistId = context?.playlistId;
 
-  // Local, editable copy of each item's cue-relevant fields (cueIn/startNext),
-  // keyed by array index — independent of the read-only `items` from context.
-  const [cueEdits, setCueEdits] = useState(() => items.map((it) => ({ ...trackCues(it) })));
+  // Local, editable copy of each item's cue points, keyed by array index —
+  // independent of the read-only `items` from context. Only startNext feeds
+  // the save flow; the other draggable markers (fadeIn, ramp1, fadeOut,
+  // cueOut, outro) are local-only preview edits, mirroring how they're
+  // presented in the timeline without a persistence path defined for them.
+  const [cueEdits, setCueEdits] = useState(() => items.map((it) => ({ ...trackCues(it), fadeIn: it.cue?.fadeIn })));
   const [zoom, setZoom] = useState(1);
   const [playing, setPlaying] = useState(false);
   const [focusTransition, setFocusTransition] = useState(null); // index of the transition, or null
@@ -384,30 +387,91 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   const registerWs = useCallback((index, ws) => { wsRefs.current[index] = ws; }, []);
 
   const pxPerSec = PX_PER_SEC * zoom;
+  const pxPerSecRef = useRef(pxPerSec);
+  pxPerSecRef.current = pxPerSec;
 
   // Build display items with edited cue values layered on top for the layout calc.
   const editedItems = useMemo(
     () => items.map((it, i) => ({
       ...it,
-      cue: { ...it.cue, cueIn: cueEdits[i]?.cueIn, startNext: cueEdits[i]?.startNext },
+      cue: { ...it.cue, ...cueEdits[i] },
     })),
     [items, cueEdits]
   );
 
   const { tracks, totalWidth } = useMemo(() => computeLayout(editedItems), [editedItems]);
+  const tracksRef = useRef(tracks);
+  tracksRef.current = tracks;
 
-  const updateHandoff = (trackIndex, newHandoff) => {
+  // Sets startNext of `trackIndex`, clamped to [cueIn, duration] — the same
+  // bounds mAirList itself enforces (no starting before the track's own
+  // cue-in, no gap past its own end).
+  const setStartNext = useCallback((trackIndex, newValue) => {
     setCueEdits((prev) => {
-      const track = tracks[trackIndex];
+      const track = tracksRef.current[trackIndex];
       if (!track) return prev;
-      const clamped = Math.min(Math.max(newHandoff, track.start), track.end);
-      const newStartNext = clamped - track.start + track.cueIn;
+      const clamped = clampStartNext(newValue, track.duration, track.cueIn);
       const next = [...prev];
-      next[trackIndex] = { ...next[trackIndex], startNext: Math.max(newStartNext, 0) };
+      next[trackIndex] = { ...next[trackIndex], startNext: clamped };
       return next;
     });
     setSaveOk(null);
-  };
+  }, []);
+
+  // Dragging track N's lane (N > 0) edits startNext of track N-1, since that
+  // value is what places N on the timeline.
+  const beginLaneDrag = useCallback((index, e) => {
+    const prevIndex = index - 1;
+    const startX = e.clientX;
+    const startStartNext = tracksRef.current[prevIndex]?.startNext ?? 0;
+
+    const onMove = (ev) => {
+      const deltaSec = (ev.clientX - startX) / pxPerSecRef.current;
+      setStartNext(prevIndex, startStartNext + deltaSec);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [setStartNext]);
+
+  // Dragging an individual cue marker on track `index`. The startNext marker
+  // is a special case: it's the same value the next track's lane drag edits,
+  // so dragging it moves the next track along with it (handled naturally
+  // since both write to cueEdits[index].startNext).
+  const beginMarkerDrag = useCallback((index, cueKey, e) => {
+    const track = tracksRef.current[index];
+    if (!track) return;
+    const startX = e.clientX;
+    const startValue = cueKey === "startNext" ? track.startNext
+      : cueKey === "cueIn" ? track.cueIn
+      : Number(track.item.cue?.[cueKey]) || 0;
+
+    const onMove = (ev) => {
+      const deltaSec = (ev.clientX - startX) / pxPerSecRef.current;
+      const raw = startValue + deltaSec;
+      if (cueKey === "startNext") {
+        setStartNext(index, raw);
+        return;
+      }
+      const t = tracksRef.current[index];
+      const clamped = Math.min(Math.max(raw, 0), t.duration);
+      setCueEdits((prev) => {
+        const next = [...prev];
+        next[index] = { ...next[index], [cueKey]: clamped };
+        return next;
+      });
+      setSaveOk(null);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [setStartNext]);
 
   const stopAll = useCallback(() => {
     wsRefs.current.forEach((ws) => ws?.pause());
@@ -434,7 +498,8 @@ export default function MixEditor({ context, onBack, onNavigate }) {
 
     const prevWs = wsRefs.current[transitionIndex];
     const nextWs = wsRefs.current[transitionIndex + 1];
-    const prevStart = Math.max(prev.handoff - prev.start + prev.cueIn - FOCUS_WINDOW, prev.cueIn);
+    // prev.startNext is prev's own in-track time at the handoff point.
+    const prevStart = Math.max(prev.startNext - FOCUS_WINDOW, prev.cueIn);
     const nextStart = next.cueIn;
 
     wsRefs.current.forEach((ws, i) => {
@@ -446,7 +511,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
       prevWs.play();
       setTimeout(() => prevWs.pause(), FOCUS_WINDOW * 1000);
     }
-    const delayMs = Math.max((prev.handoff - (prev.start + prevStart - prev.cueIn)) * 1000, 0);
+    const delayMs = Math.max((prev.startNext - prevStart) * 1000, 0);
     if (nextWs) {
       nextWs.setTime(nextStart);
       setTimeout(() => nextWs.play(), delayMs);
@@ -702,10 +767,9 @@ export default function MixEditor({ context, onBack, onNavigate }) {
               {tracks.map((track, i) => {
                 const prev = tracks[i - 1];
                 // The overlap is where both waveforms are visually drawn at
-                // once: from where this track starts (== prev.handoff, where
-                // the previous track hands off) to where the previous
-                // track's own audio actually ends (prev.end >= prev.handoff
-                // whenever its startNext is before its duration).
+                // once: from where this track starts (track N's start ==
+                // track N-1's startNext point on the shared timeline) to
+                // where the previous track's own audio actually ends.
                 const overlapStartPx = prev ? track.start * pxPerSec : null;
                 const overlapEndPx = prev ? prev.end * pxPerSec : null;
                 return (
@@ -719,17 +783,17 @@ export default function MixEditor({ context, onBack, onNavigate }) {
                     pxPerSec={pxPerSec}
                     overlapStartPx={prev ? overlapStartPx : null}
                     overlapEndPx={prev ? overlapEndPx : null}
+                    onDragLane={(e) => beginLaneDrag(i, e)}
+                    onDragMarker={(e, cueKey) => beginMarkerDrag(i, cueKey, e)}
+                    cueEdits={cueEdits}
                   />
                 );
               })}
-              <div className="absolute left-0 top-0 h-full w-full">
+              <div className="pointer-events-none absolute left-0 top-0 h-full w-full">
                 {tracks.slice(0, -1).map((track, i) => (
-                  <TransitionDivider
+                  <OverlapFocusButton
                     key={i}
-                    track={track}
-                    pxPerSec={pxPerSec}
-                    laneHeight={laneHeight}
-                    onDrag={(newHandoff) => updateHandoff(i, newHandoff)}
+                    leftPx={tracks[i + 1].start * pxPerSec}
                     onFocus={() => playFocus(i)}
                     focusActive={focusTransition === i}
                   />
@@ -752,7 +816,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
 
         {/* Legend / hint */}
         <div className="border-t border-zinc-800 px-6 py-2 text-xs text-zinc-600">
-          Orange Fläche = Overlap zwischen zwei Spuren. Trennstrich ziehen, um ihn zu ändern.{" "}
+          Orange Fläche = Overlap zwischen zwei Spuren. Spur oder Cue-Marker ziehen, um den Übergang zu ändern.{" "}
           <Focus size={11} className="inline -translate-y-0.5" /> spielt nur den Übergang (±{FOCUS_WINDOW}s) ab.
         </div>
       </main>

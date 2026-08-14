@@ -153,6 +153,7 @@ function Toolbar({
   activeHour, hoursWithData, onHourChange,
   onSave, saving, saveError,
   onInsert, onDelete, deleteDisabled,
+  onMixEditor, mixEditorDisabled,
   loading,
 }) {
   const [showGoTo, setShowGoTo] = useState(false);
@@ -261,7 +262,7 @@ function Toolbar({
         <div className="flex items-center gap-2">
           <ToolbarButton icon={Plus} label="Insert" onClick={onInsert} disabled={activeHour == null} />
           <ToolbarButton icon={Trash2} label="Delete" onClick={onDelete} disabled={deleteDisabled} variant="danger" />
-          <ToolbarButton icon={Sliders} label="Mix Editor" disabled />
+          <ToolbarButton icon={Sliders} label="Mix Editor" onClick={onMixEditor} disabled={mixEditorDisabled} />
           <ToolbarButton
             icon={RefreshCw}
             label={loading ? "Lädt…" : "Refresh"}
@@ -339,7 +340,7 @@ function ContextMenu({ x, y, onEdit, onDelete, onMoveUp, onMoveDown, onClose }) 
 
 function PlaylistTable({
   playlist, loading, error,
-  selectedPosition, onSelect, onEditItem,
+  selectedPositions, onSelect, onEditItem,
   onReorder, onDelete,
 }) {
   const [dragPosition, setDragPosition] = useState(null);
@@ -425,19 +426,19 @@ function PlaylistTable({
           </thead>
           <tbody>
             {playlist.entries.map((entry) => {
-              const isSelected = selectedPosition === entry.position;
+              const isSelected = selectedPositions.has(entry.position);
               const isDragOver = dragOverPosition === entry.position;
               return (
                 <tr
                   key={entry.position}
-                  onClick={() => onSelect(entry.position)}
+                  onClick={(e) => onSelect(entry.position, e)}
                   onDoubleClick={() =>
                     entry.item &&
                     onEditItem?.(entry.item.internalId, { playlistId: playlist.id, position: entry.position })
                   }
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    onSelect(entry.position);
+                    if (!selectedPositions.has(entry.position)) onSelect(entry.position, e);
                     setContextMenu({ x: e.clientX, y: e.clientY, position: entry.position });
                   }}
                   draggable
@@ -456,7 +457,7 @@ function PlaylistTable({
                     setDragOverPosition(null);
                   }}
                   className={`cursor-pointer select-none border-b border-zinc-800/60 transition-colors ${
-                    isSelected ? "bg-orange-500/10 hover:bg-orange-500/15" : "hover:bg-zinc-900/50"
+                    isSelected ? "bg-orange-500/20 hover:bg-orange-500/25" : "hover:bg-zinc-900/50"
                   } ${isDragOver ? "border-t-2 border-t-orange-500" : ""}`}
                 >
                   <td className="px-2 py-2.5 text-zinc-600">
@@ -659,6 +660,9 @@ export default function Playlist({ onEditItem, onNavigate }) {
   const [playlist, setPlaylist] = useState(null);
   const [entriesLoading, setEntriesLoading] = useState(false);
   const [entriesError, setEntriesError] = useState(null);
+  const [selectedPositions, setSelectedPositions] = useState(() => new Set());
+  // Last position clicked without Ctrl, used as the single "primary"
+  // selection anchor for Insert/Delete (which act on one slot).
   const [selectedPosition, setSelectedPosition] = useState(null);
 
   const [saving, setSaving] = useState(false);
@@ -704,6 +708,7 @@ export default function Playlist({ onEditItem, onNavigate }) {
     setActiveHour(null);
     setPlaylist(null);
     setSelectedPosition(null);
+    setSelectedPositions(new Set());
     loadHours(selectedDate).then((summaries) => {
       if (summaries.length > 0) {
         const landingHour = summaries.find((s) => s.hasEntries)?.hour ?? summaries[0].hour;
@@ -716,7 +721,25 @@ export default function Playlist({ onEditItem, onNavigate }) {
   const changeHour = (hour) => {
     setActiveHour(hour);
     setSelectedPosition(null);
+    setSelectedPositions(new Set());
     loadEntries(hour, hourSummaries);
+  };
+
+  // Normal click selects exactly this row; Ctrl/Cmd+click toggles it into
+  // (or out of) the current multi-selection.
+  const handleSelect = (position, e) => {
+    if (e?.ctrlKey || e?.metaKey) {
+      setSelectedPositions((prev) => {
+        const next = new Set(prev);
+        if (next.has(position)) next.delete(position);
+        else next.add(position);
+        return next;
+      });
+      setSelectedPosition(position);
+      return;
+    }
+    setSelectedPositions(new Set([position]));
+    setSelectedPosition(position);
   };
 
   const applyReorder = async (order) => {
@@ -738,9 +761,27 @@ export default function Playlist({ onEditItem, onNavigate }) {
       const updated = await removePlaylistItem(playlist.id, targetPosition);
       setPlaylist(updated);
       setSelectedPosition(null);
+      setSelectedPositions(new Set());
     } catch (err) {
       setEntriesError(err.message);
     }
+  };
+
+  const handleMixEditor = () => {
+    if (!playlist || selectedPositions.size < 2) return;
+    const items = playlist.entries
+      .filter((e) => selectedPositions.has(e.position) && e.item)
+      .sort((a, b) => a.position - b.position)
+      // Flatten each playlist entry into a single object: the global item's
+      // fields, with any per-slot overrides layered on top (mirrors
+      // ItemEditor's applyOverrides), plus the entry's playlist position —
+      // the Mix Editor works with one flat "track" shape, not entry/item pairs.
+      .map((e) => ({
+        ...e.item,
+        cue: { ...e.item.cue, ...(e.overrides?.cue || {}) },
+        position: e.position,
+      }));
+    onNavigate?.("mixeditor", { items, playlistId: playlist.id, hour: activeHour });
   };
 
   const handleInsertResult = async (item) => {
@@ -838,6 +879,8 @@ export default function Playlist({ onEditItem, onNavigate }) {
               onInsert={handleInsertButton}
               onDelete={() => handleDelete()}
               deleteDisabled={selectedPosition == null}
+              onMixEditor={handleMixEditor}
+              mixEditorDisabled={selectedPositions.size < 2}
               loading={hoursLoading || entriesLoading}
             />
 
@@ -845,8 +888,8 @@ export default function Playlist({ onEditItem, onNavigate }) {
               playlist={playlist}
               loading={entriesLoading}
               error={entriesError}
-              selectedPosition={selectedPosition}
-              onSelect={setSelectedPosition}
+              selectedPositions={selectedPositions}
+              onSelect={handleSelect}
               onEditItem={onEditItem}
               onReorder={applyReorder}
               onDelete={handleDelete}

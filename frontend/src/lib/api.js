@@ -74,6 +74,10 @@ export function getItemHistory(id) {
   return request(`/items/${id}/history`);
 }
 
+export function getAudioUrl(itemId) {
+  return `/api/items/${itemId}/audio`;
+}
+
 export function searchItems(q, fields) {
   return request(`/search${qs({ q, fields: fields ? fields.join(",") : undefined })}`);
 }

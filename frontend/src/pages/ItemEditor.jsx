@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import WaveSurfer from "wavesurfer.js";
 import {
   LayoutDashboard, Settings, Database, Copy, ListMusic, Users, Tag, ScrollText,
   RefreshCw, ChevronLeft, LayoutList, Play, Pause, SlidersHorizontal,
@@ -7,7 +8,7 @@ import {
 } from "lucide-react";
 import {
   getItemById, updateItem, getItemHistory, getAttributeDefinitions,
-  getPlaylistById, savePlaylistItemOverrides,
+  getPlaylistById, savePlaylistItemOverrides, getAudioUrl,
 } from "../lib/api";
 
 // Fields a playlist entry is allowed to override locally ("volatile" edits,
@@ -342,18 +343,75 @@ const tickIntervalFor = (dur, zoomLevel) => {
   return steps.find((s) => s >= rawInterval) ?? steps[steps.length - 1];
 };
 
+// wavesurfer's own colours, per DESIGN.md: zinc-600 for the un-played part,
+// orange-500 for the played part (progress).
+const WAVE_COLOR = "#52525b"; // zinc-600
+const PROGRESS_COLOR = "#f97316"; // orange-500
+const BASE_PX_PER_SEC = 40; // zoomLevel 1 baseline; wavesurfer's minPxPerSec scales from here
+
 function CueEditorTab({ item, updateCue }) {
-  const [playing, setPlaying] = useState(false);
   const dur = Number(item.duration) || 1;
-  const [cursor, setCursor] = useState(Math.min(2.36, dur));
+  const [cursor, setCursor] = useState(0);
+  const [playing, setPlaying] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
-  const viewportRef = useRef(null);
+  const [volume, setVolume] = useState(0.7);
+  const [audioState, setAudioState] = useState("loading"); // "loading" | "ready" | "unavailable"
+
+  const waveformRef = useRef(null);
+  const wavesurferRef = useRef(null);
+
   const cursorPct = (cursor / dur) * 100;
   const hookStart = (fromStorage(item.cue.hookIn ?? 0) / dur) * 100;
   const hookEnd = (fromStorage(item.cue.hookOut ?? 0) / dur) * 100;
 
-  // All positions below are percentages of the zoomed inner track, not the
-  // viewport, so they stay correct regardless of zoomLevel.
+  // Mounts wavesurfer once per item. Real waveform + playback via the audio
+  // stream endpoint; falls back to the synthetic bars below if the file
+  // isn't available (404) or fails to decode.
+  useEffect(() => {
+    if (!waveformRef.current) return;
+    setAudioState("loading");
+    setPlaying(false);
+    setCursor(0);
+
+    const ws = WaveSurfer.create({
+      container: waveformRef.current,
+      height: 128,
+      waveColor: WAVE_COLOR,
+      progressColor: PROGRESS_COLOR,
+      cursorColor: PROGRESS_COLOR,
+      cursorWidth: 1,
+      barWidth: 2,
+      barGap: 1,
+      barRadius: 2,
+      minPxPerSec: BASE_PX_PER_SEC,
+      fillParent: true,
+      normalize: true,
+      url: getAudioUrl(item.internalId),
+    });
+    wavesurferRef.current = ws;
+
+    ws.on("ready", () => setAudioState("ready"));
+    ws.on("error", () => setAudioState("unavailable"));
+    ws.on("timeupdate", (t) => setCursor(t));
+    ws.on("play", () => setPlaying(true));
+    ws.on("pause", () => setPlaying(false));
+    ws.on("finish", () => setPlaying(false));
+
+    return () => {
+      ws.destroy();
+      wavesurferRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.internalId]);
+
+  useEffect(() => {
+    wavesurferRef.current?.setVolume(volume);
+  }, [volume]);
+
+  const audioReady = audioState === "ready";
+
+  // All positions below are percentages of the full track, matching
+  // wavesurfer's own zoomed/scrolled internal width.
   const ticks = useMemo(() => {
     const interval = tickIntervalFor(dur, zoomLevel);
     const out = [];
@@ -361,36 +419,39 @@ function CueEditorTab({ item, updateCue }) {
     return out;
   }, [dur, zoomLevel]);
 
-  const centerViewportOn = (pct) => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const trackWidth = viewport.scrollWidth;
-    const target = (pct / 100) * trackWidth - viewport.clientWidth / 2;
-    viewport.scrollLeft = Math.max(0, Math.min(target, trackWidth - viewport.clientWidth));
+  const applyZoom = (level) => {
+    setZoomLevel(level);
+    if (audioReady) wavesurferRef.current?.zoom(BASE_PX_PER_SEC * level);
   };
+  const zoomIn = () => applyZoom(Math.min(zoomLevel * 2, MAX_ZOOM));
+  const zoomOut = () => applyZoom(Math.max(zoomLevel / 2, MIN_ZOOM));
 
-  const zoomIn = () => {
-    setZoomLevel((z) => {
-      const next = Math.min(z * 2, MAX_ZOOM);
-      requestAnimationFrame(() => centerViewportOn(cursorPct));
-      return next;
-    });
-  };
-  const zoomOut = () => {
-    setZoomLevel((z) => Math.max(z / 2, MIN_ZOOM));
+  const togglePlay = () => {
+    if (audioReady) wavesurferRef.current?.playPause();
   };
 
   const seekTo = (e) => {
+    if (!audioReady) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const pct = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+      setCursor(Number((pct * dur).toFixed(3)));
+      return;
+    }
     const rect = e.currentTarget.getBoundingClientRect();
     const pct = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
-    setCursor(Number((pct * dur).toFixed(3)));
+    wavesurferRef.current?.seekTo(pct);
   };
 
   const setMarker = (key) => updateCue(key, toStorage(cursor));
   const jumpTo = (key) => {
     const val = item.cue[key];
     if (val == null || val === "") return;
-    setCursor(Math.min(Math.max(fromStorage(Number(val)), 0), dur));
+    const target = Math.min(Math.max(fromStorage(Number(val)), 0), dur);
+    if (audioReady) {
+      wavesurferRef.current?.setTime(target);
+    } else {
+      setCursor(target);
+    }
   };
   const clearCue = (key) => updateCue(key, "");
 
@@ -425,72 +486,93 @@ function CueEditorTab({ item, updateCue }) {
     <div className="space-y-5">
       {/* Waveform */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
-        {/* scrollable viewport: fixed visible width, horizontal scroll once zoomed in */}
-        <div ref={viewportRef} className="overflow-x-auto overflow-y-hidden">
-          {/* zoomed track: grows to zoomLevel * 100% so bars widen and time positions (in %) stay correct */}
-          <div
-            onClick={seekTo}
-            className="relative cursor-pointer pt-11"
-            style={{ width: `${zoomLevel * 100}%` }}
-          >
-            {/* cue point markers: vertical line + staggered label, own colour per point */}
-            {cueMarkers.map(({ point, pct, row }) => (
+        <div className="relative pt-11">
+          {/* cue point markers: vertical line + staggered label, own colour per point */}
+          {cueMarkers.map(({ point, pct, row }) => (
+            <div
+              key={point.key}
+              className="absolute bottom-4 z-20 w-px"
+              style={{ left: `${pct}%`, top: `${row * 13}px`, backgroundColor: point.color }}
+            >
               <div
-                key={point.key}
-                className="absolute bottom-4 z-20 w-px"
-                style={{ left: `${pct}%`, top: `${row * 13}px`, backgroundColor: point.color }}
+                className="absolute -left-1 top-0 -translate-y-full whitespace-nowrap rounded-sm px-1 text-[9px] font-medium leading-tight"
+                style={{ color: point.color, backgroundColor: "rgba(9, 9, 11, 0.85)" }}
               >
-                <div
-                  className="absolute -left-1 top-0 -translate-y-full whitespace-nowrap rounded-sm px-1 text-[9px] font-medium leading-tight"
-                  style={{ color: point.color, backgroundColor: "rgba(9, 9, 11, 0.85)" }}
-                >
-                  {point.label}
+                {point.label}
+              </div>
+            </div>
+          ))}
+
+          <div onClick={seekTo} className="relative h-32 cursor-pointer overflow-hidden">
+            {/* hook overlay */}
+            <div
+              className="absolute top-0 bottom-0 z-10 bg-pink-500/15"
+              style={{ left: `${hookStart}%`, width: `${Math.max(hookEnd - hookStart, 0)}%` }}
+            />
+
+            {/* real waveform, mounted by wavesurfer.js */}
+            <div ref={waveformRef} className={`h-full w-full ${audioReady ? "" : "invisible"}`} />
+
+            {/* synthetic fallback: shown while loading, or when the audio isn't available */}
+            {!audioReady && (
+              <div className="absolute inset-0 flex items-center gap-[1px]">
+                {WAVE_BARS.map((h, i) => {
+                  const pct = (i / WAVE_BARS.length) * 100;
+                  const inHook = pct >= hookStart && pct <= hookEnd;
+                  const played = pct <= cursorPct;
+                  return (
+                    <div
+                      key={i}
+                      className="flex-1 rounded-full"
+                      style={{ height: `${h}%`, backgroundColor: inHook ? "#ec4899" : played ? PROGRESS_COLOR : WAVE_COLOR }}
+                    />
+                  );
+                })}
+                {/* cursor, only needed for the fallback: wavesurfer draws its own */}
+                <div className="absolute top-0 bottom-0 z-30 w-px bg-orange-500" style={{ left: `${cursorPct}%` }}>
+                  <div className="absolute -top-0.5 -left-[13px] rounded bg-orange-500 px-1 text-[9px] font-medium text-zinc-950">
+                    {formatTimecode(cursor)}
+                  </div>
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* timeline */}
+          <div className="relative mt-1 h-4 text-[10px] text-zinc-600">
+            {ticks.map((t, i) => (
+              <span key={i} className="absolute -translate-x-1/2" style={{ left: `${t.pct}%` }}>{t.label}</span>
             ))}
-
-            <div className="relative flex h-32 items-center gap-[1px] overflow-hidden">
-              {/* hook overlay */}
-              <div
-                className="absolute top-0 bottom-0 bg-pink-500/15"
-                style={{ left: `${hookStart}%`, width: `${Math.max(hookEnd - hookStart, 0)}%` }}
-              />
-              {/* cursor */}
-              <div className="absolute top-0 bottom-0 z-30 w-px bg-orange-500" style={{ left: `${cursorPct}%` }}>
-                <div className="absolute -top-0.5 -left-[13px] rounded bg-orange-500 px-1 text-[9px] font-medium text-zinc-950">
-                  {formatTimecode(cursor)}
-                </div>
-              </div>
-              {WAVE_BARS.map((h, i) => {
-                const pct = (i / WAVE_BARS.length) * 100;
-                const inHook = pct >= hookStart && pct <= hookEnd;
-                return (
-                  <div
-                    key={i}
-                    className="flex-1 rounded-full"
-                    style={{ height: `${h}%`, backgroundColor: inHook ? "#ec4899" : "#52525b" }}
-                  />
-                );
-              })}
-            </div>
-
-            {/* timeline: same zoomed track, so ticks line up with the waveform under them */}
-            <div className="relative mt-1 h-4 text-[10px] text-zinc-600">
-              {ticks.map((t, i) => (
-                <span key={i} className="absolute -translate-x-1/2" style={{ left: `${t.pct}%` }}>{t.label}</span>
-              ))}
-            </div>
           </div>
         </div>
+
+        {audioState === "loading" && (
+          <div className="mt-1 text-xs text-zinc-600">Lade Audio…</div>
+        )}
+        {audioState === "unavailable" && (
+          <div className="mt-1 flex items-center gap-1.5 text-xs text-zinc-600">
+            <AlertTriangle size={12} /> Audio nicht verfügbar — synthetische Wellenform als Platzhalter
+          </div>
+        )}
 
         {/* transport */}
         <div className="mt-2 flex items-center justify-between border-t border-zinc-800 pt-2">
           <div className="flex items-center gap-3">
-            <button onClick={() => setPlaying((p) => !p)} className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-300 hover:bg-zinc-800">
+            <button
+              onClick={togglePlay}
+              disabled={!audioReady}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-transparent"
+            >
               {playing ? <Pause size={16} /> : <Play size={16} />}
             </button>
             <Volume2 size={15} className="text-zinc-500" />
-            <input type="range" className="h-1 w-24 accent-orange-500" defaultValue={70} />
+            <input
+              type="range"
+              min={0} max={1} step={0.01}
+              value={volume}
+              onChange={(e) => setVolume(Number(e.target.value))}
+              className="h-1 w-24 accent-orange-500"
+            />
           </div>
           <div className="flex items-center gap-1">
             <button
@@ -508,7 +590,7 @@ function CueEditorTab({ item, updateCue }) {
               <ZoomIn size={15} />
             </button>
             <button
-              onClick={() => setZoomLevel(1)}
+              onClick={() => applyZoom(1)}
               className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800"
               title="Zoom zurücksetzen"
             >

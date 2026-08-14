@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Settings, Database, Copy, ListMusic, Users, Tag, ScrollText,
   ChevronLeft, ChevronRight, RefreshCw, Pencil, AlertTriangle, Save, Sliders,
   Plus, Trash2, CalendarDays, GripVertical, Search, Music, Megaphone, Box, X,
-  ArrowUp, ArrowDown, CircleDot,
+  ArrowUp, ArrowDown, CircleDot, Wand2, Mic, Download, Upload,
 } from "lucide-react";
 import {
   getPlaylistsByDate, getPlaylistById, reorderPlaylist,
@@ -83,7 +83,7 @@ function NavItem({ icon: Icon, label, active, onClick }) {
 
 // --- Toolbar button ---
 
-function ToolbarButton({ icon: Icon, label, onClick, disabled, variant = "default" }) {
+function ToolbarButton({ icon: Icon, label, onClick, disabled, variant = "default", title }) {
   const variantClass =
     variant === "primary"
       ? "bg-green-600 text-white hover:bg-green-500 disabled:opacity-50"
@@ -95,7 +95,10 @@ function ToolbarButton({ icon: Icon, label, onClick, disabled, variant = "defaul
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed ${variantClass}`}
+      title={title}
+      className={`flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed ${
+        disabled ? "disabled:text-zinc-600" : ""
+      } ${variantClass}`}
     >
       <Icon size={14} />
       <span>{label}</span>

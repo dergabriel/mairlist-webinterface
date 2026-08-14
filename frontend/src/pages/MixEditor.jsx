@@ -53,6 +53,15 @@ const mmss = (sec) => {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 };
 
+// MM:SS.ss — used for chip time labels and the drag drop-time tooltip.
+const mmssHundredths = (sec) => {
+  if (sec == null || Number.isNaN(sec)) return "0:00.00";
+  const t = Math.max(0, sec);
+  const m = Math.floor(t / 60);
+  const s = t - m * 60;
+  return `${m}:${s.toFixed(2).padStart(5, "0")}`;
+};
+
 const WAVE_COLOR = "#52525b"; // zinc-600
 const PROGRESS_COLOR = "#f97316"; // orange-500
 const PX_PER_SEC = 32;
@@ -147,10 +156,13 @@ function TrackLabel({ track, focused, onFocus }) {
 function TrackRow({
   track, index, registerWs, onSeekPreview, onFocus, pxPerSec,
   overlapStartPx, overlapEndPx, onDragLane, onDragMarker, cueEdits,
+  onChipDrop, dragChipColor,
 }) {
   const waveformRef = useRef(null);
   const wsRef = useRef(null);
   const [audioState, setAudioState] = useState("loading");
+  const [chipDragOver, setChipDragOver] = useState(false);
+  const [dropLabel, setDropLabel] = useState(null); // { x, y, text, color }
   const { item, duration, start } = track;
   const bars = useMemo(() => syntheticBars(item.internalId), [item.internalId]);
 
@@ -210,10 +222,48 @@ function TrackRow({
     onDragLane(e);
   };
 
+  const dropTimeFromEvent = (e) => {
+    const waveformLeft = waveformRef.current?.getBoundingClientRect().left ?? leftPx;
+    const raw = (e.clientX - waveformLeft) / pxPerSec;
+    return Math.min(Math.max(raw, 0), duration);
+  };
+
+  const handleChipDragOver = (e) => {
+    if (!e.dataTransfer.types.includes("application/x-cue-chip")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setChipDragOver(true);
+  };
+
+  const handleChipDragMove = (e) => {
+    if (!chipDragOver) return;
+    const t = dropTimeFromEvent(e);
+    setDropLabel({ x: e.clientX, y: e.clientY, text: mmssHundredths(t), color: dragChipColor });
+  };
+
+  const handleChipDragLeave = () => {
+    setChipDragOver(false);
+    setDropLabel(null);
+  };
+
+  const handleChipDrop = (e) => {
+    e.preventDefault();
+    setChipDragOver(false);
+    setDropLabel(null);
+    const cueKey = e.dataTransfer.getData("application/x-cue-chip");
+    if (!cueKey) return;
+    onChipDrop(index, cueKey, dropTimeFromEvent(e));
+  };
+
   return (
     <div
       onMouseDown={handleLaneMouseDown}
-      className={`relative border-b border-zinc-800 ${draggableLane ? "cursor-ew-resize" : ""}`}
+      onDragOver={(e) => { handleChipDragOver(e); handleChipDragMove(e); }}
+      onDragLeave={handleChipDragLeave}
+      onDrop={handleChipDrop}
+      className={`relative border-b transition-colors ${draggableLane ? "cursor-ew-resize" : ""} ${
+        chipDragOver ? "border-orange-500/70" : "border-zinc-800"
+      }`}
       style={{ height: TRACK_HEIGHT }}
     >
       {/* overlap highlight with the neighbouring track(s) */}
@@ -222,6 +272,18 @@ function TrackRow({
           className="pointer-events-none absolute top-0 z-[5] h-full bg-orange-500/15"
           style={{ left: overlapStartPx, width: Math.max(overlapEndPx - overlapStartPx, 0) }}
         />
+      )}
+
+      {chipDragOver && (
+        <div className="pointer-events-none absolute inset-0 z-[6] rounded-md ring-1 ring-inset ring-orange-500/70" />
+      )}
+      {dropLabel && (
+        <div
+          className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full rounded-sm px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-zinc-950 shadow"
+          style={{ left: dropLabel.x, top: dropLabel.y - 8, backgroundColor: dropLabel.color }}
+        >
+          {dropLabel.text}
+        </div>
       )}
 
       {audioState === "unavailable" && (
@@ -335,30 +397,46 @@ function TimelineRuler({ totalWidth, pxPerSec }) {
 
 // --- Cue point chip strip for the focused track ---
 
-function CueChipStrip({ track, onJump }) {
+function CueChipStrip({ track, trackIndex, onJump, onChipDragStart, onChipDragEnd }) {
+  const [draggingKey, setDraggingKey] = useState(null);
   if (!track) {
     return <div className="px-6 py-3 text-xs text-zinc-600">Spur wählen, um Cue-Punkte zu sehen.</div>;
   }
   const cue = track.item.cue || {};
-  const set = CUE_POINTS.filter((p) => cue[p.key] != null && cue[p.key] !== "");
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 px-6 py-3">
       <span className="mr-1 truncate text-xs text-zinc-500" title={track.item.title}>
         {track.item.title}:
       </span>
-      {set.length === 0 && <span className="text-xs text-zinc-600">Keine Cue-Punkte gesetzt.</span>}
-      {set.map((p) => (
-        <button
-          key={p.key}
-          onClick={() => onJump(p)}
-          className="rounded px-2 py-1 text-[11px] font-medium text-zinc-950 transition-opacity hover:opacity-90"
-          style={{ backgroundColor: p.color }}
-          title={mmss(Number(cue[p.key]))}
-        >
-          {p.label}
-        </button>
-      ))}
+      {CUE_POINTS.map((p) => {
+        const rawVal = cue[p.key];
+        const isSet = rawVal != null && rawVal !== "";
+        return (
+          <button
+            key={p.key}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData("application/x-cue-chip", p.key);
+              e.dataTransfer.effectAllowed = "move";
+              setDraggingKey(p.key);
+              onChipDragStart(trackIndex, p.key, p.color);
+            }}
+            onDragEnd={() => {
+              setDraggingKey(null);
+              onChipDragEnd();
+            }}
+            onClick={() => isSet && onJump(p)}
+            className={`cursor-grab select-none rounded px-2 py-1 text-[11px] font-medium transition-opacity active:cursor-grabbing hover:opacity-90 ${
+              isSet ? "text-zinc-950" : "bg-zinc-800 text-zinc-600"
+            } ${draggingKey === p.key ? "opacity-50" : ""}`}
+            style={isSet ? { backgroundColor: p.color } : undefined}
+            title={isSet ? mmssHundredths(Number(rawVal)) : `${p.label} (nicht gesetzt) — auf Spur ziehen zum Setzen`}
+          >
+            {p.label}{isSet ? ` · ${mmssHundredths(Number(rawVal))}` : ""}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -382,6 +460,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   const [savingScope, setSavingScope] = useState(null); // "hour" | "database" | null
   const [saveError, setSaveError] = useState(null);
   const [saveOk, setSaveOk] = useState(null);
+  const [dragChip, setDragChip] = useState(null); // { trackIndex, cueKey, color } while a chip is being dragged
 
   const wsRefs = useRef([]);
   const registerWs = useCallback((index, ws) => { wsRefs.current[index] = ws; }, []);
@@ -471,6 +550,22 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+  }, [setStartNext]);
+
+  // Dropping a cue chip onto a waveform lane sets that cue point's value to
+  // the drop position. startNext is a special case handled by setStartNext,
+  // which also shifts the next track since both read the same value.
+  const setCueByChipDrop = useCallback((trackIndex, cueKey, dropTime) => {
+    if (cueKey === "startNext") {
+      setStartNext(trackIndex, dropTime);
+      return;
+    }
+    setCueEdits((prev) => {
+      const next = [...prev];
+      next[trackIndex] = { ...next[trackIndex], [cueKey]: dropTime };
+      return next;
+    });
+    setSaveOk(null);
   }, [setStartNext]);
 
   const stopAll = useCallback(() => {
@@ -786,6 +881,8 @@ export default function MixEditor({ context, onBack, onNavigate }) {
                     onDragLane={(e) => beginLaneDrag(i, e)}
                     onDragMarker={(e, cueKey) => beginMarkerDrag(i, cueKey, e)}
                     cueEdits={cueEdits}
+                    onChipDrop={setCueByChipDrop}
+                    dragChipColor={dragChip?.color}
                   />
                 );
               })}
@@ -811,7 +908,13 @@ export default function MixEditor({ context, onBack, onNavigate }) {
 
         {/* Cue point chips for the focused track */}
         <div className="border-t border-zinc-800">
-          <CueChipStrip track={tracks[focusedTrack]} onJump={jumpToCue} />
+          <CueChipStrip
+            track={tracks[focusedTrack]}
+            trackIndex={focusedTrack}
+            onJump={jumpToCue}
+            onChipDragStart={(trackIndex, cueKey, color) => setDragChip({ trackIndex, cueKey, color })}
+            onChipDragEnd={() => setDragChip(null)}
+          />
         </div>
 
         {/* Legend / hint */}

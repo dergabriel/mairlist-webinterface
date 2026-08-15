@@ -1,3 +1,7 @@
+// TODO (Phase F): Echte Authentifizierung gegen auth_users / auth_sessions (docs/SCHEMA.md).
+// Aktuell wird jeder Submit ohne Prüfung durchgelassen.
+// Dieser Stub bleibt so lange bestehen, bis das reale Schema angebunden ist.
+
 import { useState } from "react";
 import { Database, User, Lock } from "lucide-react";
 
@@ -10,6 +14,7 @@ export default function Login({ onLogin }) {
 
   const submit = (e) => {
     e.preventDefault();
+    // TODO (Phase F): POST /api/auth/login, Session-Token speichern
     onLogin?.();
   };
 
@@ -25,6 +30,13 @@ export default function Login({ onLogin }) {
             <span className="rounded bg-orange-500 px-1.5 py-0.5 text-xs font-bold text-zinc-950">DB</span>
           </div>
         </div>
+
+        {/* Stub-Hinweis, nur im Dev sichtbar */}
+        {import.meta.env.DEV && (
+          <div className="mb-4 rounded-md border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-xs text-orange-400">
+            Dev-Modus: Anmeldung ohne Prüfung (Phase F offen)
+          </div>
+        )}
 
         <form onSubmit={submit} className="space-y-4">
           <label className="block">

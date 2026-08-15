@@ -13,13 +13,15 @@ export function AppDataProvider({ children }) {
   const cache = useRef({}); // { key: { data, loadedAt } }
   const [version, setVersion] = useState(0);
 
-  const getCached = useCallback((key, fetcher, maxAgeMs = DEFAULT_MAX_AGE_MS) => {
+  const getCached = useCallback(async (key, fetcher, maxAgeMs = DEFAULT_MAX_AGE_MS) => {
     const hit = cache.current[key];
-    if (hit && Date.now() - hit.loadedAt < maxAgeMs) return Promise.resolve(hit.data);
-    return Promise.resolve(fetcher()).then((data) => {
-      cache.current[key] = { data, loadedAt: Date.now() };
-      return data;
-    });
+    if (hit && Date.now() - hit.loadedAt < maxAgeMs) return hit.data;
+    // TEMP: timing instrumentation, remove after measuring.
+    console.time(`fetch:${key}`);
+    const data = await fetcher();
+    console.timeEnd(`fetch:${key}`);
+    cache.current[key] = { data, loadedAt: Date.now() };
+    return data;
   }, []);
 
   const invalidate = useCallback((key) => {

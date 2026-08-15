@@ -1,10 +1,13 @@
+// TODO (Phase F): Logs-Daten von GET /api/logs laden (Backend-Route noch nicht vorhanden).
+// Aktuell werden MOCK_LOGS mit hartkodiertem Inhalt angezeigt.
+// Das hardcodierte Referenzdatum wurde durch Date.now() ersetzt,
+// damit Zeitraumfilter auch nach dem 15.08.2026 noch sinnvoll funktionieren.
+
 import { useMemo, useState } from "react";
 import {
   LayoutDashboard, Settings as SettingsIcon, Database, Copy, ListMusic,
   Users, Tag, ScrollText, LogOut, ArrowUpDown,
 } from "lucide-react";
-
-// --- Nav item (mirrors Dashboard/DatabaseManager/Settings) ---
 
 function NavItem({ icon: Icon, label, active, onClick }) {
   return (
@@ -19,8 +22,6 @@ function NavItem({ icon: Icon, label, active, onClick }) {
     </button>
   );
 }
-
-// --- Mock data ---
 
 const MOCK_LOGS = [
   { id: 1, timestamp: "2026-08-15T08:12:03", user: "admin", action: "Login", details: "Anmeldung erfolgreich" },
@@ -64,7 +65,8 @@ export default function Logs({ onNavigate }) {
   const [sortDir, setSortDir] = useState("desc");
 
   const filtered = useMemo(() => {
-    const now = new Date("2026-08-15T09:00:00");
+    // Kein hardcodiertes Datum: Date.now() als Referenz für Zeitraumfilter
+    const now = new Date();
     return MOCK_LOGS.filter((log) => {
       if (actionFilter !== "all" && log.action !== actionFilter) return false;
       if (periodFilter === "today") {
@@ -84,7 +86,6 @@ export default function Logs({ onNavigate }) {
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
-      {/* Nav sidebar */}
       <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 px-3 py-4">
         <div className="mb-6 px-2 text-sm font-semibold tracking-wide">
           <span className="text-zinc-100">mAirList</span>{" "}
@@ -117,9 +118,7 @@ export default function Logs({ onNavigate }) {
         </div>
       </aside>
 
-      {/* Main content */}
       <main className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
         <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500">
@@ -129,7 +128,13 @@ export default function Logs({ onNavigate }) {
           </div>
         </header>
 
-        {/* Filter bar */}
+        {/* Mock-Banner, nur im Dev sichtbar */}
+        {import.meta.env.DEV && (
+          <div className="border-b border-orange-500/20 bg-orange-500/10 px-6 py-2 text-xs text-orange-400">
+            Dev-Modus: Statische Mock-Logs (Phase F: GET /api/logs noch nicht implementiert)
+          </div>
+        )}
+
         <div className="flex items-center gap-3 border-b border-zinc-800 px-6 py-3">
           <select
             value={actionFilter}
@@ -153,7 +158,6 @@ export default function Logs({ onNavigate }) {
           <span className="ml-auto text-xs text-zinc-500">{sorted.length} Einträge</span>
         </div>
 
-        {/* Table */}
         <div className="flex-1 overflow-auto px-6 py-6">
           <div className="overflow-hidden rounded-lg border border-zinc-800">
             <table className="w-full text-left text-sm">

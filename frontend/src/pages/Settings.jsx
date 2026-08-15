@@ -1,10 +1,13 @@
+// TODO (Phase F/G): Einstellungen per GET /api/settings laden und per POST /api/settings speichern.
+// handleSave ist aktuell ein Stub: zeigt nur einen Toast, persistiert nichts.
+// CUE_POINTS hier lokal definiert, da Settings noch keine Backend-Route hat.
+// Beim SQL-Umstieg: DEFAULT_CUE_PRIORITY als user-Setting in der DB speichern.
+
 import { useState } from "react";
 import {
   LayoutDashboard, Settings as SettingsIcon, Database, Copy, ListMusic,
   Users, Tag, ScrollText, LogOut, Save, Check, GripVertical, Info,
 } from "lucide-react";
-
-// --- Nav item (mirrors Dashboard/DatabaseManager) ---
 
 function NavItem({ icon: Icon, label, active, onClick }) {
   return (
@@ -20,20 +23,26 @@ function NavItem({ icon: Icon, label, active, onClick }) {
   );
 }
 
-// --- Cue points (mirrors ItemEditor/MixEditor) ---
-
+// Alle 17 Cue-Punkte laut FIELD-SEMANTICS.md
 const CUE_POINTS = [
-  { key: "cueIn", label: "Cue In" },
-  { key: "fadeIn", label: "Fade In" },
-  { key: "ramp1", label: "Ramp 1" },
-  { key: "hookIn", label: "Hook In" },
-  { key: "hookOut", label: "Hook Out" },
-  { key: "fadeOut", label: "Fade Out" },
-  { key: "cueOut", label: "Cue Out" },
-  { key: "startNext", label: "Start Next" },
+  { key: "cueIn",    label: "Cue In"    },
+  { key: "fadeIn",   label: "Fade In"   },
+  { key: "ramp1",    label: "Ramp 1"    },
+  { key: "ramp2",    label: "Ramp 2"    },
+  { key: "ramp3",    label: "Ramp 3"    },
+  { key: "loopIn",   label: "Loop In"   },
+  { key: "loopOut",  label: "Loop Out"  },
+  { key: "hookIn",   label: "Hook In"   },
+  { key: "hookFade", label: "Hook Fade" },
+  { key: "hookOut",  label: "Hook Out"  },
+  { key: "outro",    label: "Outro"     },
+  { key: "startNext",label: "Start Next"},
+  { key: "fadeOut",  label: "Fade Out"  },
+  { key: "fadeEnd",  label: "Fade End"  },
+  { key: "cueOut",   label: "Cue Out"   },
+  { key: "preroll",  label: "Preroll"   },
+  { key: "anchor",   label: "Anchor"    },
 ];
-
-// --- Form field wrappers ---
 
 function Field({ label, hint, children }) {
   return (
@@ -78,13 +87,13 @@ export default function Settings({ onNavigate }) {
   };
 
   const handleSave = () => {
+    // TODO (Phase F/G): POST /api/settings mit { language, timezone, dateFormat, defaultGain, normTarget, cuePriority }
     setToast(true);
     setTimeout(() => setToast(false), 2500);
   };
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
-      {/* Nav sidebar */}
       <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 px-3 py-4">
         <div className="mb-6 px-2 text-sm font-semibold tracking-wide">
           <span className="text-zinc-100">mAirList</span>{" "}
@@ -117,9 +126,7 @@ export default function Settings({ onNavigate }) {
         </div>
       </aside>
 
-      {/* Main content */}
       <main className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
         <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500">
@@ -132,13 +139,19 @@ export default function Settings({ onNavigate }) {
         {toast && (
           <div className="flex items-center gap-2 border-b border-zinc-800 bg-green-500/5 px-6 py-2.5 text-sm text-green-500">
             <Check size={14} />
-            <span>Gespeichert</span>
+            <span>Gespeichert (noch nicht persistiert, Phase F/G offen)</span>
+          </div>
+        )}
+
+        {/* Stub-Banner, nur im Dev sichtbar */}
+        {import.meta.env.DEV && (
+          <div className="border-b border-orange-500/20 bg-orange-500/10 px-6 py-2 text-xs text-orange-400">
+            Dev-Modus: Einstellungen werden nicht gespeichert (Phase F/G: POST /api/settings noch nicht implementiert)
           </div>
         )}
 
         <div className="flex-1 overflow-auto px-6 py-6">
           <div className="mx-auto max-w-3xl space-y-6">
-            {/* Allgemein */}
             <Card title="Allgemein">
               <div className="grid grid-cols-2 gap-4">
                 <Field label="Sprache">
@@ -173,7 +186,6 @@ export default function Settings({ onNavigate }) {
               </Field>
             </Card>
 
-            {/* Audio */}
             <Card title="Audio">
               <div className="grid grid-cols-2 gap-4">
                 <Field label="Standard-Gain (dB)">
@@ -211,7 +223,6 @@ export default function Settings({ onNavigate }) {
               </Field>
             </Card>
 
-            {/* Darstellung */}
             <Card title="Darstellung">
               <div>
                 <span className="mb-1.5 block text-sm text-zinc-400">Cue-Priorität</span>
@@ -255,7 +266,6 @@ export default function Settings({ onNavigate }) {
               </div>
             </Card>
 
-            {/* Save */}
             <div className="flex justify-end">
               <button
                 onClick={handleSave}

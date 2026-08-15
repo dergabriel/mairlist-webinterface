@@ -10,6 +10,7 @@ import {
   insertPlaylistItem, removePlaylistItem, searchItems,
   getTree, getItems, getStorages, getArtists, getItemTypes, getAttributeKeys,
 } from "../lib/api";
+import { useAppData } from "../lib/AppDataContext";
 import LibraryTree, { ALL_FILTER, filterItemsByTree } from "../components/LibraryTree";
 
 // --- Helpers ---
@@ -565,10 +566,20 @@ function LibraryPanel({ onInsert, insertDisabled }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState(null);
 
+  const { getCached } = useAppData();
+
   useEffect(() => {
     setTreeLoading(true);
     setTreeError(null);
-    Promise.all([getTree(), getItems(), getStorages(), getArtists(), getItemTypes(), getAttributeKeys()])
+    console.time("loadData:Playlist"); // TEMP: timing instrumentation, remove after measuring.
+    Promise.all([
+      getCached("folders", getTree),
+      getCached("items", getItems),
+      getCached("storages", getStorages),
+      getCached("artists", getArtists),
+      getCached("types", getItemTypes),
+      getCached("attributes", getAttributeKeys),
+    ])
       .then(([treeData, itemsData, storagesData, artistsData, typesData, attrData]) => {
         setTree(treeData);
         setItems(itemsData);
@@ -578,8 +589,11 @@ function LibraryPanel({ onInsert, insertDisabled }) {
         setAttributeKeys(attrData);
       })
       .catch((err) => setTreeError(err.message))
-      .finally(() => setTreeLoading(false));
-  }, []);
+      .finally(() => {
+        setTreeLoading(false);
+        console.timeEnd("loadData:Playlist"); // TEMP
+      });
+  }, [getCached]);
 
   // Free-text query goes to the search API (title/artist/comment); tree
   // selection alone filters the already-loaded item list client-side.

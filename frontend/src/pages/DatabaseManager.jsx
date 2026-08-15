@@ -11,6 +11,7 @@ import {
   getArtists, getItemTypes, getAttributeKeys, moveItemToFolder,
   createFolder, renameFolder, moveFolder, deleteFolder,
 } from "../lib/api";
+import { useAppData } from "../lib/AppDataContext";
 
 // --- Helpers ---
 
@@ -814,11 +815,19 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const [deleteFolderTarget, setDeleteFolderTarget] = useState(null); // folder node
   const [folderError, setFolderError] = useState(null);
 
+  const { getCached, invalidate } = useAppData();
+
   const loadData = useCallback(() => {
     setLoading(true);
     setError(null);
+    console.time("loadData:DatabaseManager"); // TEMP: timing instrumentation, remove after measuring.
     return Promise.all([
-      getTree(), getItems(), getStorages(), getArtists(), getItemTypes(), getAttributeKeys(),
+      getCached("folders", getTree),
+      getCached("items", getItems),
+      getCached("storages", getStorages),
+      getCached("artists", getArtists),
+      getCached("types", getItemTypes),
+      getCached("attributes", getAttributeKeys),
     ])
       .then(([treeData, itemsData, storagesData, artistsData, typesData, attrData]) => {
         setTree(treeData);
@@ -833,8 +842,9 @@ export default function MairListDB({ onEditItem, onNavigate }) {
       })
       .finally(() => {
         setLoading(false);
+        console.timeEnd("loadData:DatabaseManager"); // TEMP
       });
-  }, []);
+  }, [getCached]);
 
   useEffect(() => {
     loadData();
@@ -843,6 +853,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const handleCreate = async (data) => {
     const created = await createItem(data);
     setShowNewItem(false);
+    invalidate("items");
     await loadData();
     onEditItem?.(created.internalId);
   };
@@ -850,6 +861,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const handleUpload = async (data) => {
     const created = await uploadFile(data);
     setShowUpload(false);
+    invalidate("items");
     await loadData();
     onEditItem?.(created.internalId);
   };
@@ -857,6 +869,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const handleDelete = async () => {
     await deleteItem(deleteTarget.id);
     setDeleteTarget(null);
+    invalidate("items");
     await loadData();
   };
 
@@ -876,6 +889,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
       }
       try {
         await moveFolder(sourceFolderId, folderId);
+        invalidate("folders");
         await loadData();
       } catch (err) {
         setFolderError(err.message);
@@ -885,6 +899,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
 
     if (!itemId) return;
     await moveItemToFolder(itemId, folderId);
+    invalidate("items");
     await loadData();
   };
 
@@ -905,6 +920,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
         await createFolder(value, parentId);
         if (parentId != null) setExpanded((prev) => new Set(prev).add(parentId));
       }
+      invalidate("folders");
       await loadData();
     } catch (err) {
       setFolderError(err.message);
@@ -914,12 +930,14 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const handleMoveFolder = async (newParentId) => {
     await moveFolder(moveFolderTarget.id, newParentId);
     setMoveFolderTarget(null);
+    invalidate("folders");
     await loadData();
   };
 
   const handleDeleteFolder = async () => {
     await deleteFolder(deleteFolderTarget.id);
     setDeleteFolderTarget(null);
+    invalidate("folders");
     await loadData();
   };
 
@@ -1183,7 +1201,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
             <h1 className="text-lg font-semibold">Datenbank-Verwaltung</h1>
           </div>
           <button
-            onClick={loadData}
+            onClick={() => { invalidate(); loadData(); }}
             className="flex h-9 w-9 items-center justify-center rounded-md border border-green-700/60 text-green-500 transition-colors hover:bg-green-600/10"
           >
             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />

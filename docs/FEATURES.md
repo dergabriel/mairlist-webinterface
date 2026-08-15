@@ -10,15 +10,24 @@ Legende: ✅ fertig (gegen Mock) · 🚧 in Arbeit · ⬜ offen · 🔽 späte P
 |---|---|---|
 | A | Frontend gegen Mock: Elemente-Liste, Item Editor (alle 6 Tabs), Cue Editor (Marker, Zoom, Prioritätssortierung), Datei-Upload, Playlist im mAirList Layout, leere Stunden, Drag-and-Drop, lokale Overrides vs. DB-Speichern | ✅ vollständig fertig |
 | B–F | siehe Bereichs-Tabellen unten (Bibliothek-Feinheiten, Mix Editor, Voice Tracking, Mehrbenutzer etc.) | ⬜ offen |
-| G | Echte Datenbank: `.mldb` (SQLite) statt Mock anbinden | 🚧 nicht mehr blockiert, siehe unten |
+| G | Echte Datenbank: `.mldb` (SQLite) statt Mock anbinden | ✅ fertig |
 | H, I | unverändert offen | ⬜ offen |
 
-**Phase G – Stand:**
-- Eine echte `.mldb` Datei wurde analysiert.
-- [SCHEMA.md](SCHEMA.md) ist fertig: alle Tabellen dokumentiert.
-- [FIELD-SEMANTICS.md](FIELD-SEMANTICS.md) ist fertig: Einheiten bestätigt (Sekunden als REAL für `duration` und Cue-Punkte), Cue-Typ-Mapping (`cueIn` → `CueIn` etc.), Playlist-Slot-Format, Attribut-Format.
-- Noch offen: `items.color` Format, `items.endtype` Werte, `playlist.xmldata` Format der Overrides, `item_cuedata.xmldata` für Hüllkurven.
-- Nächster konkreter Schritt: `repository.js` auf echtes SQLite umstellen, Schreib-Beweis mit einem Cue-Punkt.
+**Phase G – abgeschlossen:**
+- `server/data/sqlRepository.js` erstellt mit `better-sqlite3`, identische Signaturen zu `repository.js`
+- Spalten-Mapping vollständig: `items`, `item_cuemarkers`, `item_attributes`, `item_folders`, `playlist`
+- Cue-Typ-Mapping implementiert: camelCase Code ↔ PascalCase DB (`cueIn` ↔ `CueIn` etc.)
+- Playlist-Slot-Format korrekt geparst (Mitternacht ohne Uhrzeit, andere Stunden mit `.000`)
+- Umschalten per `DATA_SOURCE=sqlite`, DB-Pfad per `DB_PATH`
+- Write-Beweis bestanden: Item anlegen, Server neu starten, Item noch vorhanden
+- Playlist-Insert ebenfalls getestet und funktioniert
+- `.mldb` Dateien in `.gitignore`, nie ins Repo
+
+**Offene TODOs in sqlRepository.js:**
+- `getItemHistory()` gibt leeres Array zurück (`playlistlog` noch nicht angebunden)
+- `writeHour()` macht DELETE+INSERT der ganzen Stunde statt gezielter Position-Shifts
+- `cover` und `containerType` bleiben `null` (`xmldata`/`options` noch nicht geparst)
+- Noch offen aus FIELD-SEMANTICS.md: `items.color` Format, `items.endtype` Werte, `playlist.xmldata` Override-Format, `item_cuedata.xmldata` für Hüllkurven
 
 ---
 

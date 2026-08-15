@@ -37,7 +37,7 @@ Vorbild ist das 2023 begonnene Projekt **TubeLive**. Der Look ist in [`DESIGN.md
 
 Die mAirListDB läuft auf einem echten SQL Server (PostgreSQL, MariaDB/MySQL oder MSSQL). Direkter Datenbankzugriff ist möglich. Das Schema ist in [`docs/SCHEMA.md`](docs/SCHEMA.md) dokumentiert, Feldbedeutungen und Einheiten in [`docs/FIELD-SEMANTICS.md`](docs/FIELD-SEMANTICS.md).
 
-**Aktueller Modus: Frontend zuerst, gegen Mock.** Die gesamte Oberfläche spricht nur mit der Zwischenschicht `server/data/repository.js`. Die hält die Daten aktuell im Speicher, jeder Serverneustart setzt zurück. Sobald das echte Schema vorliegt, wird nur diese eine Datei auf SQL umgestellt — Frontend und API bleiben unverändert. Alle Schreibfunktionen tragen `// TODO: replace with real SQL` als Markierung.
+**Aktueller Modus: echte SQLite-DB.** Die gesamte Oberfläche spricht nur mit der Zwischenschicht `server/data/repository.js` (Mock) oder `server/data/sqlRepository.js` (SQLite, aktiviert via `DATA_SOURCE=sqlite`). Umschalten per Umgebungsvariable, Frontend und API bleiben unverändert. DB-Pfad über `DB_PATH`, Standard `./mairlist.mldb`. Die `.mldb` Datei gehört nicht ins Repo (`.gitignore`).
 
 ## ⚠️ Grundregeln
 
@@ -69,7 +69,7 @@ Details je Phase in [`docs/FEATURES.md`](docs/FEATURES.md).
 | **D** | **Mix Editor**: Timeline über mehrere Items, Volume-Hüllkurven, Übergänge programmieren | ✅ Mix Editor fertig — Song-Drag, alle 17 Cue-Marker draggbar, Overlap-Visualisierung, Audio-Streaming, Fokus-Modus, Speichern als Playlist-Override oder global |
 | **E** | **Voice Tracking**: VT Recorder im Browser, Preroll/Record/StartNext-Ablauf, Einbettung mit Hüllkurve | ⬜ |
 | **F** | Mehrbenutzer: Login, Rollen (Read-only, Studio, DJ, VTDJ, Admin), Konflikt-Erkennung bei Playlists, Logs | ⬜ |
-| **G** | Echte Datenbank: Schema ziehen, Semantik per Diff dokumentieren, Repository auf SQL umstellen, Schreib-Beweis | 🚧 in Arbeit — Schema und Semantik dokumentiert, Repository-Umstellung und Schreib-Beweis ausstehend |
+| **G** | Echte Datenbank: Schema ziehen, Semantik per Diff dokumentieren, Repository auf SQL umstellen, Schreib-Beweis | ✅ fertig — `sqlRepository.js` mit better-sqlite3, Write-Beweis bestanden, `DATA_SOURCE=sqlite` aktiviert |
 | **H** | Produktivbetrieb: Backup, Caddy, TLS, eingeschränkter DB User | ⬜ |
 | **I** 🔽 | Mini Scheduler (Vorlagen, automatische Planung), Werbung/Kampagnen | ⬜ späte Phase |
 
@@ -84,3 +84,18 @@ Backend Node.js und Express, Frontend React mit Tailwind im Look des `DESIGN.md`
 - **Kontext mitgeben:** `DESIGN.md`, `docs/FEATURES.md` und das Datenmodell (`server/data/mockData.js`) bei jedem Prompt referenzieren, sonst driftet der Look oder das Modell erfindet Felder. Für die DB-Anbindung zusätzlich `docs/SCHEMA.md` und `docs/FIELD-SEMANTICS.md` referenzieren.
 - **Schreiboperationen nie ohne Testfall:** direkt wieder auslesen und vergleichen, bei Cue Punkten zählt Millisekunden Genauigkeit.
 - **Flaschenhals ist nicht das Frontend**, sondern Schema Verständnis und korrektes Rückschreiben.
+- **Repository ist die einzige Datenquelle**, nie direkt aus Routen oder Frontend in die DB schreiben.
+- **Schreiben nur gegen eine Kopie** (`mairlist.test.mldb`), nie gegen die echte DB bis der Write-Beweis steht.
+- **`.mldb` Dateien gehören nicht ins Repo**, immer in `.gitignore` prüfen bevor `git add`.
+
+## 🔒 Sicherheitsstand
+
+Folgendes ist bereits gehärtet (nicht nochmal anfassen):
+- CORS eingeschränkt auf konkrete Origins, per `ALLOWED_ORIGINS` Env konfigurierbar
+- JSON-Body auf 1 MB begrenzt
+- Globaler Error Handler in `server/index.js`
+- `ITEM_WRITABLE_FIELDS` Whitelist in `server/routes/library.js` und `server/data/repository.js`
+- Multer Upload-Limit 500 MB, Extension-Filter
+- Path-Traversal-Schutz in `resolveAudioPath()` und `uploadFile()`
+- Strukturierte Fehlermeldungen vom Server in `frontend/src/lib/api.js`
+- Datumsformat-Validierung bei `GET /api/playlists?date=`

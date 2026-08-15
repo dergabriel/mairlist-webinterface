@@ -571,7 +571,6 @@ function LibraryPanel({ onInsert, insertDisabled }) {
   useEffect(() => {
     setTreeLoading(true);
     setTreeError(null);
-    console.time("loadData:Playlist"); // TEMP: timing instrumentation, remove after measuring.
     Promise.all([
       getCached("folders", getTree),
       getCached("items", getItems),
@@ -589,10 +588,7 @@ function LibraryPanel({ onInsert, insertDisabled }) {
         setAttributeKeys(attrData);
       })
       .catch((err) => setTreeError(err.message))
-      .finally(() => {
-        setTreeLoading(false);
-        console.timeEnd("loadData:Playlist"); // TEMP
-      });
+      .finally(() => setTreeLoading(false));
   }, [getCached]);
 
   // Free-text query goes to the search API (title/artist/comment); tree

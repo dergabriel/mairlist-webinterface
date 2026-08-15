@@ -11,6 +11,7 @@ import Logs from './pages/Logs'
 
 function App() {
   const [view, setView] = useState('login')
+  const isLoggedIn = view !== 'login'
   const [previousView, setPreviousView] = useState('dashboard')
   const [selectedItemId, setSelectedItemId] = useState(null)
   // Set only when the editor is opened from a playlist row: which slot the
@@ -40,25 +41,39 @@ function App() {
   return (
     <AppDataProvider>
       {view === 'login' && <Login onLogin={() => setView('dashboard')} />}
-      {view === 'dashboard' && <Dashboard onEditItem={openEditor} onNavigate={navigate} />}
-      {view === 'list' && <DatabaseManager onEditItem={openEditor} onNavigate={navigate} />}
-      {view === 'playlist' && <Playlist onEditItem={openEditor} onNavigate={navigate} />}
-      {view === 'settings' && <Settings onNavigate={navigate} />}
-      {view === 'logs' && <Logs onNavigate={navigate} />}
-      {view === 'mixeditor' && (
-        <MixEditor
-          context={mixEditorContext}
-          onBack={() => setView('playlist')}
-          onNavigate={navigate}
-        />
-      )}
-      {view === 'editor' && (
-        <ItemEditor
-          internalId={selectedItemId}
-          playlistContext={playlistContext}
-          onBack={backToList}
-          onNavigate={navigate}
-        />
+      {isLoggedIn && (
+        <>
+          <div style={{ display: view === 'dashboard' ? 'contents' : 'none' }}>
+            <Dashboard onEditItem={openEditor} onNavigate={navigate} />
+          </div>
+          <div style={{ display: view === 'list' ? 'contents' : 'none' }}>
+            <DatabaseManager onEditItem={openEditor} onNavigate={navigate} />
+          </div>
+          <div style={{ display: view === 'playlist' ? 'contents' : 'none' }}>
+            <Playlist onEditItem={openEditor} onNavigate={navigate} />
+          </div>
+          <div style={{ display: view === 'settings' ? 'contents' : 'none' }}>
+            <Settings onNavigate={navigate} />
+          </div>
+          <div style={{ display: view === 'logs' ? 'contents' : 'none' }}>
+            <Logs onNavigate={navigate} />
+          </div>
+          <div style={{ display: view === 'mixeditor' ? 'contents' : 'none' }}>
+            <MixEditor
+              context={mixEditorContext}
+              onBack={() => setView('playlist')}
+              onNavigate={navigate}
+            />
+          </div>
+          <div style={{ display: view === 'editor' ? 'contents' : 'none' }}>
+            <ItemEditor
+              internalId={selectedItemId}
+              playlistContext={playlistContext}
+              onBack={backToList}
+              onNavigate={navigate}
+            />
+          </div>
+        </>
       )}
     </AppDataProvider>
   )

@@ -1,0 +1,689 @@
+// SQL-backed repository. Same interface as repository.js (see comments
+// there), backed by the real mAirList SQLite database via better-sqlite3.
+//
+// Only single station/subplaylist is used in practice (station=1,
+// subplaylist=0) — the real DB only ever has one row for each, so both are
+// hardcoded rather than threaded through every function signature.
+
+const Database = require("better-sqlite3");
+const path = require("path");
+const fs = require("fs");
+const { ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
+
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, "../mairlist.mldb");
+const db = new Database(DB_PATH, { readonly: false });
+db.pragma("journal_mode = WAL");
+db.pragma("foreign_keys = ON");
+
+const STATION = 1;
+const SUBPLAYLIST = 0;
+
+// Fields a caller may set via createItem / updateItem. Mirrors repository.js.
+const ITEM_WRITABLE_FIELDS = new Set([
+  "type", "containerType", "title", "artist", "duration", "endTime",
+  "storageId", "relativePath", "folderId", "comment", "color", "cover",
+  "cue", "playback", "attributes",
+  "scheduledStart", "scheduledEnd", "scheduledDays",
+]);
+
+function pickWritable(data) {
+  return Object.fromEntries(
+    Object.entries(data).filter(([k]) => ITEM_WRITABLE_FIELDS.has(k))
+  );
+}
+
+// camelCase (code) <-> PascalCase (DB) cue marker types
+const CUE_TO_DB = {
+  cueIn: "CueIn", fadeIn: "FadeIn", ramp1: "Ramp1", ramp2: "Ramp2", ramp3: "Ramp3",
+  loopIn: "LoopIn", loopOut: "LoopOut", hookIn: "HookIn", hookFade: "HookFade",
+  hookOut: "HookOut", outro: "Outro", startNext: "StartNext", fadeOut: "FadeOut",
+  fadeEnd: "FadeEnd", cueOut: "CueOut", preroll: "Preroll", anchor: "Anchor",
+};
+const DB_TO_CUE = Object.fromEntries(Object.entries(CUE_TO_DB).map(([k, v]) => [v, k]));
+
+// item.type: DB PascalCase <-> code lowercase
+const typeToCode = (t) => (t || "").toLowerCase();
+const typeToDb = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+
+// Slot string -> { date, hour }. Midnight is stored bare ("2026-03-21"),
+// every other hour carries a time component ("2026-03-21 08:00:00.000").
+function parseSlot(slot) {
+  if (!slot) return null;
+  const dateStr = slot.slice(0, 10);
+  if (slot.length === 10) return { date: dateStr, hour: 0 };
+  const hourMatch = slot.match(/\s(\d{2}):/);
+  return { date: dateStr, hour: hourMatch ? parseInt(hourMatch[1], 10) : 0 };
+}
+
+function buildSlot(date, hour) {
+  if (hour === 0) return date;
+  return `${date} ${String(hour).padStart(2, "0")}:00:00.000`;
+}
+
+function parsePlaylistId(id) {
+  const match = /^(\d{4}-\d{2}-\d{2})-(\d{2})$/.exec(id);
+  if (!match) return null;
+  return { date: match[1], hour: parseInt(match[2], 10) };
+}
+
+const playlistId = (date, hour) => `${date}-${String(hour).padStart(2, "0")}`;
+
+// ---- folders ----
+
+function rowToFolder(row) {
+  if (!row) return null;
+  return { id: row.idx, name: row.name || "", parentId: row.parent == null ? null : row.parent };
+}
+
+function getFolderTree() {
+  const all = db.prepare("SELECT idx, parent, name FROM folders").all();
+  const byParent = (parentId) =>
+    all
+      .filter((f) => (f.parent == null ? null : f.parent) === parentId)
+      .map((f) => ({ ...rowToFolder(f), children: byParent(f.idx) }));
+  return byParent(null);
+}
+
+function getFolderById(id) {
+  const row = db.prepare("SELECT idx, parent, name FROM folders WHERE idx = ?").get(Number(id));
+  return rowToFolder(row);
+}
+
+function collectFolderAndDescendants(id) {
+  const ids = [id];
+  const children = db.prepare("SELECT idx FROM folders WHERE parent = ?").all(id);
+  for (const child of children) ids.push(...collectFolderAndDescendants(child.idx));
+  return ids;
+}
+
+function createFolder(name, parentId) {
+  const info = db
+    .prepare("INSERT INTO folders (parent, name) VALUES (?, ?)")
+    .run(parentId == null ? null : Number(parentId), (name || "").trim());
+  return getFolderById(info.lastInsertRowid);
+}
+
+function renameFolder(id, name) {
+  const folder = getFolderById(id);
+  if (!folder) return null;
+  db.prepare("UPDATE folders SET name = ? WHERE idx = ?").run((name || "").trim(), folder.id);
+  return getFolderById(id);
+}
+
+function moveFolder(id, newParentId) {
+  const folder = getFolderById(id);
+  if (!folder) return null;
+
+  const targetId = newParentId == null ? null : Number(newParentId);
+  if (targetId != null && collectFolderAndDescendants(folder.id).includes(targetId)) {
+    return false;
+  }
+
+  db.prepare("UPDATE folders SET parent = ? WHERE idx = ?").run(targetId, folder.id);
+  return getFolderById(id);
+}
+
+function deleteFolder(id) {
+  const folder = getFolderById(id);
+  if (!folder) return "not_found";
+
+  const hasSubfolders = db.prepare("SELECT 1 FROM folders WHERE parent = ? LIMIT 1").get(folder.id);
+  const hasItems = db.prepare("SELECT 1 FROM item_folders WHERE folder = ? LIMIT 1").get(folder.id);
+  if (hasSubfolders || hasItems) return "not_empty";
+
+  db.prepare("DELETE FROM folders WHERE idx = ?").run(folder.id);
+  return "ok";
+}
+
+// ---- storages ----
+
+function rowToStorage(row) {
+  if (!row) return null;
+  return { id: row.idx, name: row.name || "", location: row.defaultLocation || "" };
+}
+
+function getStorages() {
+  return db.prepare("SELECT idx, name, defaultLocation FROM storages").all().map(rowToStorage);
+}
+
+// ---- types / artists / attribute keys (static catalogues + derived) ----
+
+function getItemTypes() {
+  const used = new Set(
+    db.prepare("SELECT DISTINCT type FROM items").all().map((r) => typeToCode(r.type))
+  );
+  return ITEM_TYPES.map((t) => ({ ...t, hasItems: used.has(t.key) }));
+}
+
+function getArtists() {
+  const rows = db
+    .prepare("SELECT DISTINCT artist FROM items WHERE artist IS NOT NULL AND trim(artist) != ''")
+    .all();
+  return rows.map((r) => r.artist).sort((a, b) => a.localeCompare(b));
+}
+
+function getAttributeKeys() {
+  const rows = db
+    .prepare("SELECT DISTINCT name, value FROM item_attributes WHERE value IS NOT NULL AND value != ''")
+    .all();
+  const byKey = new Map();
+  for (const row of rows) {
+    if (!byKey.has(row.name)) byKey.set(row.name, new Set());
+    byKey.get(row.name).add(String(row.value));
+  }
+  return [...byKey.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, values]) => ({ key, values: [...values].sort((a, b) => a.localeCompare(b)) }));
+}
+
+// ---- items ----
+
+function rowToItem(row) {
+  if (!row) return null;
+
+  const cueRows = db.prepare("SELECT type, value FROM item_cuemarkers WHERE item = ?").all(row.idx);
+  const cue = {};
+  for (const cp of CUE_POINTS) cue[cp.key] = null;
+  for (const cr of cueRows) {
+    const key = DB_TO_CUE[cr.type];
+    if (key) cue[key] = cr.value;
+  }
+
+  const attrRows = db.prepare("SELECT name, value FROM item_attributes WHERE item = ?").all(row.idx);
+  const attributes = {};
+  for (const ar of attrRows) attributes[ar.name] = ar.value;
+
+  const folderRow = db.prepare("SELECT folder FROM item_folders WHERE item = ? LIMIT 1").get(row.idx);
+
+  return {
+    id: String(row.idx),
+    internalId: row.idx,
+    externalId: row.externalid || null,
+    type: typeToCode(row.type),
+    containerType: null,
+    title: row.title || "",
+    artist: row.artist || "",
+    duration: row.duration || 0,
+    endTime: null,
+    storageId: row.storage || null,
+    relativePath: row.filename || null,
+    folderId: folderRow ? folderRow.folder : null,
+    comment: row.comment || "",
+    color: row.color || null,
+    cover: null,
+    cue,
+    playback: {
+      gainDb: row.amplification || 0,
+      normalizedLufs: row.level_loudness || null,
+      segueMode: row.endtype || "normal",
+    },
+    attributes,
+    updatedAt: row.updated || new Date().toISOString(),
+    playHistory: [],
+  };
+}
+
+const ITEM_COLUMNS =
+  "idx, externalid, title, artist, type, duration, amplification, level_loudness, endtype, comment, color, storage, filename, updated";
+
+function getItems(filters = {}) {
+  const clauses = [];
+  const params = [];
+
+  if (filters.type) {
+    clauses.push("type = ?");
+    params.push(typeToDb(filters.type));
+  }
+  if (filters.artist) {
+    clauses.push("artist = ?");
+    params.push(filters.artist);
+  }
+  if (filters.storageId != null) {
+    clauses.push("storage = ?");
+    params.push(Number(filters.storageId));
+  }
+
+  let rows = db
+    .prepare(`SELECT ${ITEM_COLUMNS} FROM items${clauses.length ? " WHERE " + clauses.join(" AND ") : ""}`)
+    .all(...params);
+
+  let result = rows.map(rowToItem);
+
+  if (filters.folderId != null) {
+    result = result.filter((i) => i.folderId === Number(filters.folderId));
+  }
+  if (filters.attributeKey) {
+    result = result.filter(
+      (i) => String(i.attributes?.[filters.attributeKey] ?? "") === String(filters.attributeValue)
+    );
+  }
+
+  return result;
+}
+
+function getItemById(id) {
+  const row = db.prepare(`SELECT ${ITEM_COLUMNS} FROM items WHERE idx = ?`).get(Number(id));
+  return rowToItem(row);
+}
+
+// TODO: playlistlog holds real play history — wire this up once the
+// join (playlistlog.item -> items.idx, filtered/sorted by starttime) and
+// the "show"/"moderator" mapping are confirmed against real data.
+function getItemHistory(id) {
+  const item = getItemById(id);
+  if (!item) return null;
+  return [];
+}
+
+function searchItems(query, opts = {}) {
+  if (!query || query.trim() === "") return [];
+  const q = `%${query.toLowerCase()}%`;
+  const fields = opts.fields || ["title", "artist", "comment"];
+  const validFields = fields.filter((f) => ["title", "artist", "comment"].includes(f));
+  if (validFields.length === 0) return [];
+
+  const where = validFields.map((f) => `lower(${f}) LIKE ?`).join(" OR ");
+  const rows = db
+    .prepare(`SELECT ${ITEM_COLUMNS} FROM items WHERE ${where}`)
+    .all(...validFields.map(() => q));
+  return rows.map(rowToItem);
+}
+
+function getCuePoints() {
+  return CUE_POINTS;
+}
+
+function getAttributeDefinitions() {
+  return ATTRIBUTE_DEFINITIONS;
+}
+
+function createItem(data = {}) {
+  const safe = pickWritable(data);
+
+  const insertItem = db.prepare(`
+    INSERT INTO items (externalid, title, artist, type, duration, amplification, level_loudness, endtype, comment, color, storage, filename, created, updated)
+    VALUES (@externalid, @title, @artist, @type, @duration, @amplification, @level_loudness, @endtype, @comment, @color, @storage, @filename, @now, @now)
+  `);
+
+  const run = db.transaction(() => {
+    const now = new Date().toISOString();
+    const info = insertItem.run({
+      externalid: safe.externalId ?? null,
+      title: safe.title || "",
+      artist: safe.artist || "",
+      type: typeToDb(safe.type || "music"),
+      duration: safe.duration != null ? Number(safe.duration) : 0,
+      amplification: safe.playback?.gainDb ?? 0,
+      level_loudness: safe.playback?.normalizedLufs ?? null,
+      endtype: safe.playback?.segueMode || "normal",
+      comment: safe.comment || "",
+      color: safe.color ?? null,
+      storage: safe.storageId ?? null,
+      filename: safe.relativePath ?? null,
+      now,
+    });
+    const internalId = info.lastInsertRowid;
+
+    if (safe.cue) writeCueMarkers(internalId, safe.cue);
+    if (safe.attributes) writeAttributes(internalId, safe.attributes);
+    if (safe.folderId != null) writeFolder(internalId, safe.folderId);
+
+    return internalId;
+  });
+
+  const internalId = run();
+  return getItemById(internalId);
+}
+
+function writeCueMarkers(itemId, cue) {
+  const del = db.prepare("DELETE FROM item_cuemarkers WHERE item = ?");
+  const ins = db.prepare("INSERT INTO item_cuemarkers (item, type, value) VALUES (?, ?, ?)");
+  del.run(itemId);
+  for (const [key, value] of Object.entries(cue)) {
+    if (value == null) continue;
+    const dbType = CUE_TO_DB[key];
+    if (!dbType) continue;
+    ins.run(itemId, dbType, Number(value));
+  }
+}
+
+function writeAttributes(itemId, attributes) {
+  const del = db.prepare("DELETE FROM item_attributes WHERE item = ?");
+  const ins = db.prepare("INSERT INTO item_attributes (item, name, value) VALUES (?, ?, ?)");
+  del.run(itemId);
+  for (const [key, value] of Object.entries(attributes)) {
+    if (value == null || value === "") continue;
+    ins.run(itemId, key, String(value));
+  }
+}
+
+function writeFolder(itemId, folderId) {
+  const del = db.prepare("DELETE FROM item_folders WHERE item = ?");
+  del.run(itemId);
+  if (folderId != null) {
+    db.prepare("INSERT OR IGNORE INTO item_folders (item, folder) VALUES (?, ?)").run(itemId, Number(folderId));
+  }
+}
+
+function updateItem(id, data = {}) {
+  const existing = getItemById(id);
+  if (!existing) return null;
+  const safe = pickWritable(data);
+  const internalId = Number(id);
+
+  const run = db.transaction(() => {
+    const now = new Date().toISOString();
+    const fields = [];
+    const params = { idx: internalId, now };
+
+    if (safe.title !== undefined) { fields.push("title = @title"); params.title = safe.title; }
+    if (safe.artist !== undefined) { fields.push("artist = @artist"); params.artist = safe.artist; }
+    if (safe.type !== undefined) { fields.push("type = @type"); params.type = typeToDb(safe.type); }
+    if (safe.duration !== undefined) { fields.push("duration = @duration"); params.duration = Number(safe.duration); }
+    if (safe.comment !== undefined) { fields.push("comment = @comment"); params.comment = safe.comment; }
+    if (safe.color !== undefined) { fields.push("color = @color"); params.color = safe.color; }
+    if (safe.storageId !== undefined) { fields.push("storage = @storage"); params.storage = safe.storageId; }
+    if (safe.relativePath !== undefined) { fields.push("filename = @filename"); params.filename = safe.relativePath; }
+    if (safe.externalId !== undefined) { fields.push("externalid = @externalid"); params.externalid = safe.externalId; }
+    if (safe.playback?.gainDb !== undefined) { fields.push("amplification = @amplification"); params.amplification = safe.playback.gainDb; }
+    if (safe.playback?.normalizedLufs !== undefined) { fields.push("level_loudness = @level_loudness"); params.level_loudness = safe.playback.normalizedLufs; }
+    if (safe.playback?.segueMode !== undefined) { fields.push("endtype = @endtype"); params.endtype = safe.playback.segueMode; }
+
+    fields.push("updated = @now");
+
+    db.prepare(`UPDATE items SET ${fields.join(", ")} WHERE idx = @idx`).run(params);
+
+    if (safe.cue) writeCueMarkers(internalId, safe.cue);
+    if (safe.attributes) writeAttributes(internalId, safe.attributes);
+    if (safe.folderId !== undefined) writeFolder(internalId, safe.folderId);
+  });
+
+  run();
+  return getItemById(id);
+}
+
+function deleteItem(id) {
+  const internalId = Number(id);
+  const existing = db.prepare("SELECT 1 FROM items WHERE idx = ?").get(internalId);
+  if (!existing) return false;
+
+  const run = db.transaction(() => {
+    db.prepare("DELETE FROM item_cuemarkers WHERE item = ?").run(internalId);
+    db.prepare("DELETE FROM item_attributes WHERE item = ?").run(internalId);
+    db.prepare("DELETE FROM item_folders WHERE item = ?").run(internalId);
+    db.prepare("DELETE FROM items WHERE idx = ?").run(internalId);
+  });
+  run();
+  return true;
+}
+
+function moveItemToFolder(id, folderId) {
+  const item = getItemById(id);
+  if (!item) return null;
+  writeFolder(Number(id), folderId == null ? null : Number(folderId));
+  db.prepare("UPDATE items SET updated = ? WHERE idx = ?").run(new Date().toISOString(), Number(id));
+  return getItemById(id);
+}
+
+// ---- upload ----
+
+function sanitizeFilename(filename) {
+  const ext = path.extname(filename);
+  const base = path.basename(filename, ext);
+  const safeBase = base.replace(/[^a-zA-Z0-9_-]+/g, "_");
+  return `${safeBase}${ext}`;
+}
+
+function resolveStorageDir(storage) {
+  const base = process.env.UPLOAD_BASE_DIR;
+  if (!base) return storage.location;
+  return path.join(base, storage.name);
+}
+
+function resolveAudioPath(id) {
+  const item = getItemById(id);
+  if (!item || item.storageId == null || !item.relativePath) return null;
+
+  const storage = getStorages().find((s) => s.id === item.storageId);
+  if (!storage) return null;
+
+  const base = process.env.AUDIO_BASE_DIR
+    ? path.join(process.env.AUDIO_BASE_DIR, storage.name)
+    : storage.location;
+
+  const relativeParts = item.relativePath.split(/[\\/]+/);
+  const resolvedBase = path.resolve(base);
+  const resolvedFile = path.resolve(path.join(base, ...relativeParts));
+
+  if (!resolvedFile.startsWith(resolvedBase + path.sep)) return null;
+
+  return resolvedFile;
+}
+
+function uploadFile(storageId, filename, buffer, title) {
+  const storage = getStorages().find((s) => s.id === Number(storageId));
+  if (!storage) return null;
+
+  const safeFilename = sanitizeFilename(filename);
+  const ext = path.extname(safeFilename);
+  const derivedTitle = title && title.trim() !== "" ? title.trim() : path.basename(safeFilename, ext);
+
+  const targetDir = resolveStorageDir(storage);
+
+  if (process.env.UPLOAD_BASE_DIR) {
+    const resolvedBase = path.resolve(process.env.UPLOAD_BASE_DIR);
+    const resolvedTarget = path.resolve(targetDir);
+    if (!resolvedTarget.startsWith(resolvedBase + path.sep)) return null;
+  }
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.writeFileSync(path.join(targetDir, safeFilename), buffer);
+
+  return createItem({
+    title: derivedTitle,
+    storageId: storage.id,
+    relativePath: safeFilename,
+  });
+}
+
+// ---- playlists ----
+
+const emptyHourId = (date, hour) => `${date}-${String(hour).padStart(2, "0")}`;
+
+function getPlaylistsByDate(date) {
+  const rows = db
+    .prepare("SELECT DISTINCT slot FROM playlist WHERE station = ? AND subplaylist = ? AND slot LIKE ?")
+    .all(STATION, SUBPLAYLIST, `${date}%`);
+
+  const hoursWithEntries = new Set();
+  for (const row of rows) {
+    const parsed = parseSlot(row.slot);
+    if (parsed && parsed.date === date) {
+      const hasEntries = db
+        .prepare("SELECT 1 FROM playlist WHERE station = ? AND subplaylist = ? AND slot = ? AND item IS NOT NULL AND item != '' LIMIT 1")
+        .get(STATION, SUBPLAYLIST, row.slot);
+      if (hasEntries) hoursWithEntries.add(parsed.hour);
+    }
+  }
+
+  return Array.from({ length: 24 }, (_, hour) => ({
+    id: emptyHourId(date, hour),
+    date,
+    hour,
+    hasEntries: hoursWithEntries.has(hour),
+  }));
+}
+
+function getPlaylistById(id) {
+  const parsed = parsePlaylistId(id);
+  if (!parsed) return null;
+  const { date, hour } = parsed;
+  const slot = buildSlot(date, hour);
+
+  const rows = db
+    .prepare("SELECT pos, item, xmldata FROM playlist WHERE station = ? AND subplaylist = ? AND slot = ? ORDER BY pos")
+    .all(STATION, SUBPLAYLIST, slot);
+
+  const entries = rows
+    .filter((r) => r.item != null && r.item !== "")
+    .map((r) => {
+      let overrides;
+      if (r.xmldata) {
+        try {
+          overrides = JSON.parse(r.xmldata);
+        } catch {
+          overrides = undefined;
+        }
+      }
+      return {
+        position: r.pos + 1,
+        itemId: String(r.item),
+        scheduledStart: "",
+        overrides,
+        item: getItemById(String(r.item)),
+      };
+    });
+
+  resequenceEntries(entries, hour);
+
+  return { id, date, hour, entries };
+}
+
+// In-memory recompute of scheduledStart, mirrors repository.js's resequence
+// but operates on already-loaded entries (position stays DB-order based).
+function resequenceEntries(entries, hour) {
+  let cursorSeconds = hour * 3600;
+  for (const entry of entries) {
+    const h = String(Math.floor(cursorSeconds / 3600) % 24).padStart(2, "0");
+    const m = String(Math.floor((cursorSeconds % 3600) / 60)).padStart(2, "0");
+    const s = String(Math.floor(cursorSeconds % 60)).padStart(2, "0");
+    entry.scheduledStart = `${h}:${m}:${s}`;
+    cursorSeconds += entry.item ? entry.item.duration : 0;
+  }
+}
+
+// Rewrites all rows for (date,hour) from an ordered list of { itemId, overrides? }.
+// TODO: this is a full delete+reinsert of the hour, adequate for Phase G's
+// proof of writes; a real implementation would prefer targeted position
+// shifts to avoid clobbering starttime/state/uniqueid on live/aired slots.
+function writeHour(date, hour, entryList) {
+  const slot = buildSlot(date, hour);
+  const del = db.prepare("DELETE FROM playlist WHERE station = ? AND subplaylist = ? AND slot = ?");
+  const ins = db.prepare(
+    "INSERT INTO playlist (station, subplaylist, slot, pos, item, duration, xmldata) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  );
+  const run = db.transaction(() => {
+    del.run(STATION, SUBPLAYLIST, slot);
+    entryList.forEach((entry, i) => {
+      const item = getItemById(entry.itemId);
+      ins.run(
+        STATION,
+        SUBPLAYLIST,
+        slot,
+        i,
+        Number(entry.itemId),
+        item ? item.duration : null,
+        entry.overrides ? JSON.stringify(entry.overrides) : null
+      );
+    });
+  });
+  run();
+}
+
+function reorderPlaylist(id, order) {
+  const parsed = parsePlaylistId(id);
+  if (!parsed) return null;
+  const existing = getPlaylistById(id);
+  if (!existing) return null;
+
+  const byPosition = new Map(existing.entries.map((e) => [e.position, e]));
+  if (order.length !== existing.entries.length) return null;
+  const reordered = order.map((pos) => byPosition.get(Number(pos)));
+  if (reordered.some((e) => !e)) return null;
+
+  writeHour(parsed.date, parsed.hour, reordered);
+  return getPlaylistById(id);
+}
+
+function insertPlaylistItem(id, { itemId, afterPosition }) {
+  const parsed = parsePlaylistId(id);
+  if (!parsed) return null;
+  if (!getItemById(itemId)) return null;
+
+  const existing = getPlaylistById(id);
+  if (!existing) return null;
+
+  const insertAt = afterPosition == null ? existing.entries.length : Number(afterPosition);
+  const list = existing.entries.map((e) => ({ itemId: e.itemId, overrides: e.overrides }));
+  list.splice(insertAt, 0, { itemId: String(itemId) });
+
+  writeHour(parsed.date, parsed.hour, list);
+  return getPlaylistById(id);
+}
+
+function removePlaylistItem(id, position) {
+  const parsed = parsePlaylistId(id);
+  if (!parsed) return null;
+  const existing = getPlaylistById(id);
+  if (!existing) return null;
+
+  const index = existing.entries.findIndex((e) => e.position === Number(position));
+  if (index === -1) return null;
+
+  const list = existing.entries.map((e) => ({ itemId: e.itemId, overrides: e.overrides }));
+  list.splice(index, 1);
+
+  writeHour(parsed.date, parsed.hour, list);
+  return getPlaylistById(id);
+}
+
+function savePlaylistItemOverrides(id, position, overrides) {
+  const parsed = parsePlaylistId(id);
+  if (!parsed) return null;
+  const existing = getPlaylistById(id);
+  if (!existing) return null;
+
+  const entry = existing.entries.find((e) => e.position === Number(position));
+  if (!entry) return null;
+
+  const list = existing.entries.map((e) => ({
+    itemId: e.itemId,
+    overrides: e.position === Number(position)
+      ? (overrides == null || Object.keys(overrides).length === 0 ? undefined : overrides)
+      : e.overrides,
+  }));
+
+  writeHour(parsed.date, parsed.hour, list);
+  return getPlaylistById(id);
+}
+
+module.exports = {
+  getFolderTree,
+  getFolderById,
+  createFolder,
+  renameFolder,
+  moveFolder,
+  deleteFolder,
+  getStorages,
+  getItemTypes,
+  getArtists,
+  getAttributeKeys,
+  getItems,
+  getItemById,
+  getItemHistory,
+  searchItems,
+  getCuePoints,
+  getAttributeDefinitions,
+  createItem,
+  updateItem,
+  deleteItem,
+  moveItemToFolder,
+  uploadFile,
+  resolveAudioPath,
+  getPlaylistsByDate,
+  getPlaylistById,
+  reorderPlaylist,
+  insertPlaylistItem,
+  removePlaylistItem,
+  savePlaylistItemOverrides,
+};

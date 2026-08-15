@@ -34,3 +34,7 @@ smoke.mjs
 smoke-playlist-tmp.mjs
 playwright-report/
 test-results/
+# mAirList Datenbank
+*.mldb
+*.mldb-wal
+*.mldb-shm

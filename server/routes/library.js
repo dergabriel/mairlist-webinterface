@@ -6,7 +6,9 @@ const path = require("path");
 const express = require("express");
 const multer = require("multer");
 const router = express.Router();
-const repo = require("../data/repository");
+const repo = process.env.DATA_SOURCE === "sqlite"
+  ? require("../data/sqlRepository")
+  : require("../data/repository");
 
 const ALLOWED_AUDIO_EXTENSIONS = new Set(["wav", "mp3", "aac", "flac", "ogg"]);
 

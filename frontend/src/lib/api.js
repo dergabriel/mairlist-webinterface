@@ -4,7 +4,15 @@
 async function request(path, options) {
   const res = await fetch(`/api${path}`, options);
   if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText}`);
+    // Strukturierte Fehlermeldung vom Server nutzen, Fallback auf HTTP-Status
+    let message;
+    try {
+      const body = await res.json();
+      message = body.error || `${res.status} ${res.statusText}`;
+    } catch {
+      message = `${res.status} ${res.statusText}`;
+    }
+    throw new Error(message);
   }
   if (res.status === 204) return null;
   return res.json();

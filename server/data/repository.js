@@ -51,6 +51,21 @@ const fs = require("fs");
 const path = require("path");
 const { storages, folders, items, ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS, playlists } = require("./mockData");
 
+// Fields a caller may set via createItem / updateItem.
+// Prevents accidental overwrite of id, internalId, updatedAt etc.
+const ITEM_WRITABLE_FIELDS = new Set([
+  "type", "containerType", "title", "artist", "duration", "endTime",
+  "storageId", "relativePath", "folderId", "comment", "color", "cover",
+  "cue", "playback", "attributes",
+  "scheduledStart", "scheduledEnd", "scheduledDays",
+]);
+
+function pickWritable(data) {
+  return Object.fromEntries(
+    Object.entries(data).filter(([k]) => ITEM_WRITABLE_FIELDS.has(k))
+  );
+}
+
 function getFolderTree() {
   const byParent = (parentId) =>
     folders
@@ -239,26 +254,27 @@ function emptyPlayback() {
 }
 
 function createItem(data = {}) {
+  const safe = pickWritable(data);
   const internalId = nextInternalId();
   const item = {
     id: String(internalId),
     internalId,
-    externalId: data.externalId ?? null,
-    type: data.type || "music",
-    containerType: data.containerType,
-    title: data.title || "",
-    artist: data.artist || "",
-    duration: data.duration != null ? Number(data.duration) : 0,
-    endTime: data.endTime ?? null,
-    storageId: data.storageId ?? null,
-    relativePath: data.relativePath ?? null,
-    folderId: data.folderId ?? null,
-    comment: data.comment || "",
-    color: data.color ?? null,
-    cover: data.cover ?? null,
+    externalId: safe.externalId ?? null,
+    type: safe.type || "music",
+    containerType: safe.containerType,
+    title: safe.title || "",
+    artist: safe.artist || "",
+    duration: safe.duration != null ? Number(safe.duration) : 0,
+    endTime: safe.endTime ?? null,
+    storageId: safe.storageId ?? null,
+    relativePath: safe.relativePath ?? null,
+    folderId: safe.folderId ?? null,
+    comment: safe.comment || "",
+    color: safe.color ?? null,
+    cover: safe.cover ?? null,
     cue: emptyCue(),
     playback: emptyPlayback(),
-    attributes: data.attributes || {},
+    attributes: safe.attributes || {},
     updatedAt: new Date().toISOString(),
   };
   // TODO: replace with a real SQL INSERT once the schema is confirmed.
@@ -270,7 +286,7 @@ function updateItem(id, data = {}) {
   const item = getItemById(id);
   if (!item) return null;
   // TODO: replace with a real SQL UPDATE once the schema is confirmed.
-  Object.assign(item, data, { updatedAt: new Date().toISOString() });
+  Object.assign(item, pickWritable(data), { updatedAt: new Date().toISOString() });
   return item;
 }
 
@@ -330,8 +346,15 @@ function resolveAudioPath(id) {
     ? path.join(process.env.AUDIO_BASE_DIR, storage.name)
     : storage.location;
 
+  // Normalise Windows-style separators, then resolve.
+  // Path-Traversal-Schutz: aufgelöster Pfad muss innerhalb von base liegen.
   const relativeParts = item.relativePath.split(/[\\/]+/);
-  return path.join(base, ...relativeParts);
+  const resolvedBase = path.resolve(base);
+  const resolvedFile = path.resolve(path.join(base, ...relativeParts));
+
+  if (!resolvedFile.startsWith(resolvedBase + path.sep)) return null;
+
+  return resolvedFile;
 }
 
 // Writes the uploaded file into the given storage's location and creates a
@@ -346,6 +369,14 @@ function uploadFile(storageId, filename, buffer, title) {
 
   // TODO: replace with real SQL + real file system write
   const targetDir = resolveStorageDir(storage);
+
+  // Path-Traversal-Schutz: Zielverzeichnis muss innerhalb von UPLOAD_BASE_DIR liegen
+  if (process.env.UPLOAD_BASE_DIR) {
+    const resolvedBase = path.resolve(process.env.UPLOAD_BASE_DIR);
+    const resolvedTarget = path.resolve(targetDir);
+    if (!resolvedTarget.startsWith(resolvedBase + path.sep)) return null;
+  }
+
   fs.mkdirSync(targetDir, { recursive: true });
   fs.writeFileSync(path.join(targetDir, safeFilename), buffer);
 

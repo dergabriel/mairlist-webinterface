@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AppDataProvider } from './lib/AppDataContext'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import DatabaseManager from './pages/DatabaseManager'
@@ -37,7 +38,7 @@ function App() {
   }
 
   return (
-    <>
+    <AppDataProvider>
       {view === 'login' && <Login onLogin={() => setView('dashboard')} />}
       {view === 'dashboard' && <Dashboard onEditItem={openEditor} onNavigate={navigate} />}
       {view === 'list' && <DatabaseManager onEditItem={openEditor} onNavigate={navigate} />}
@@ -59,7 +60,7 @@ function App() {
           onNavigate={navigate}
         />
       )}
-    </>
+    </AppDataProvider>
   )
 }
 

@@ -1,12 +1,16 @@
 import { useState } from 'react'
+import Login from './pages/Login'
+import Dashboard from './pages/Dashboard'
 import DatabaseManager from './pages/DatabaseManager'
 import ItemEditor from './pages/ItemEditor'
 import Playlist from './pages/Playlist'
 import MixEditor from './pages/MixEditor'
+import Settings from './pages/Settings'
+import Logs from './pages/Logs'
 
 function App() {
-  const [view, setView] = useState('list')
-  const [previousView, setPreviousView] = useState('list')
+  const [view, setView] = useState('login')
+  const [previousView, setPreviousView] = useState('dashboard')
   const [selectedItemId, setSelectedItemId] = useState(null)
   // Set only when the editor is opened from a playlist row: which slot the
   // "volatile" (per-instance) edits should be saved against. Null when
@@ -34,8 +38,12 @@ function App() {
 
   return (
     <>
+      {view === 'login' && <Login onLogin={() => setView('dashboard')} />}
+      {view === 'dashboard' && <Dashboard onEditItem={openEditor} onNavigate={navigate} />}
       {view === 'list' && <DatabaseManager onEditItem={openEditor} onNavigate={navigate} />}
       {view === 'playlist' && <Playlist onEditItem={openEditor} onNavigate={navigate} />}
+      {view === 'settings' && <Settings onNavigate={navigate} />}
+      {view === 'logs' && <Logs onNavigate={navigate} />}
       {view === 'mixeditor' && (
         <MixEditor
           context={mixEditorContext}

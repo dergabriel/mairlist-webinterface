@@ -4,7 +4,7 @@ import {
   Users, Tag, ScrollText, Folder, FolderOpen, ChevronRight,
   ChevronDown, RefreshCw, Plus, Search, Pencil, Trash2, ArrowUpDown,
   AlertTriangle, X, Upload, SlidersHorizontal, HardDrive, Library, Settings2,
-  FolderPlus, FolderInput,
+  FolderPlus, FolderInput, LogOut,
 } from "lucide-react";
 import {
   getTree, getItems, getStorages, createItem, deleteItem, uploadFile,
@@ -1034,7 +1034,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
 
         <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Playout</div>
         <nav className="mb-5 space-y-0.5">
-          <NavItem icon={LayoutDashboard} label="Übersicht" />
+          <NavItem icon={LayoutDashboard} label="Übersicht" onClick={() => onNavigate?.("dashboard")} />
           <NavItem icon={Settings} label="Einstellungen" />
         </nav>
 
@@ -1051,6 +1051,10 @@ export default function MairListDB({ onEditItem, onNavigate }) {
           <NavItem icon={Tag} label="Gruppen" />
           <NavItem icon={ScrollText} label="Logs" />
         </nav>
+
+        <div className="mt-auto pt-4">
+          <NavItem icon={LogOut} label="Abmelden" onClick={() => onNavigate?.("login")} />
+        </div>
       </aside>
 
       {/* Library tree */}

@@ -3,12 +3,14 @@ import {
   LayoutDashboard, Settings, Database, Copy, ListMusic, Users, Tag, ScrollText,
   ChevronLeft, ChevronRight, RefreshCw, Pencil, AlertTriangle, Save, Sliders,
   Plus, Trash2, CalendarDays, GripVertical, Search, Music, Megaphone, Box, X,
-  ArrowUp, ArrowDown, CircleDot, Wand2, Mic, Download, Upload,
+  ArrowUp, ArrowDown, CircleDot, Wand2, Mic, Download, Upload, LogOut,
 } from "lucide-react";
 import {
   getPlaylistsByDate, getPlaylistById, reorderPlaylist,
   insertPlaylistItem, removePlaylistItem, searchItems,
+  getTree, getItems, getStorages, getArtists, getItemTypes, getAttributeKeys,
 } from "../lib/api";
+import LibraryTree, { ALL_FILTER, filterItemsByTree } from "../components/LibraryTree";
 
 // --- Helpers ---
 
@@ -263,9 +265,13 @@ function Toolbar({
 
         {/* Actions */}
         <div className="flex items-center gap-2">
+          <ToolbarButton icon={Wand2} label="Generate" disabled title="Kommt in Phase Mini Scheduler" />
+          <ToolbarButton icon={Mic} label="VT" disabled title="Kommt in Phase Voice Tracking" />
           <ToolbarButton icon={Plus} label="Insert" onClick={onInsert} disabled={activeHour == null} />
           <ToolbarButton icon={Trash2} label="Delete" onClick={onDelete} disabled={deleteDisabled} variant="danger" />
           <ToolbarButton icon={Sliders} label="Mix Editor" onClick={onMixEditor} disabled={mixEditorDisabled} />
+          <ToolbarButton icon={Download} label="Import" disabled title="Nicht geplant" />
+          <ToolbarButton icon={Upload} label="Export" disabled title="Nicht geplant" />
           <ToolbarButton
             icon={RefreshCw}
             label={loading ? "Lädt…" : "Refresh"}
@@ -537,115 +543,161 @@ function PlaylistTable({
   );
 }
 
-// --- Database search (bottom panel) ---
+// --- Library panel (bottom): tree on the left, filtered item list on the
+// right with a search field beneath it that narrows within the tree
+// selection (falls back to a full-text DB search when no tree filter is
+// picked and a query is typed). ---
 
-function SearchPanel({ onInsert, insertDisabled }) {
+function LibraryPanel({ onInsert, insertDisabled }) {
+  const [tree, setTree] = useState([]);
+  const [items, setItems] = useState([]);
+  const [storages, setStorages] = useState([]);
+  const [artists, setArtists] = useState([]);
+  const [itemTypes, setItemTypes] = useState([]);
+  const [attributeKeys, setAttributeKeys] = useState([]);
+  const [treeLoading, setTreeLoading] = useState(true);
+  const [treeError, setTreeError] = useState(null);
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [filterState, setFilterState] = useState(ALL_FILTER);
+
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [searched, setSearched] = useState(false);
+  const [searchResults, setSearchResults] = useState(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState(null);
 
   useEffect(() => {
+    setTreeLoading(true);
+    setTreeError(null);
+    Promise.all([getTree(), getItems(), getStorages(), getArtists(), getItemTypes(), getAttributeKeys()])
+      .then(([treeData, itemsData, storagesData, artistsData, typesData, attrData]) => {
+        setTree(treeData);
+        setItems(itemsData);
+        setStorages(storagesData);
+        setArtists(artistsData);
+        setItemTypes(typesData);
+        setAttributeKeys(attrData);
+      })
+      .catch((err) => setTreeError(err.message))
+      .finally(() => setTreeLoading(false));
+  }, []);
+
+  // Free-text query goes to the search API (title/artist/comment); tree
+  // selection alone filters the already-loaded item list client-side.
+  useEffect(() => {
     if (!query.trim()) {
-      setResults([]);
-      setSearched(false);
-      setError(null);
+      setSearchResults(null);
+      setSearchError(null);
       return;
     }
-    setLoading(true);
-    setError(null);
+    setSearchLoading(true);
+    setSearchError(null);
     const handle = setTimeout(() => {
       searchItems(query, ["title", "artist", "comment"])
-        .then((data) => {
-          setResults(data);
-          setSearched(true);
-        })
-        .catch((err) => setError(err.message))
-        .finally(() => setLoading(false));
+        .then(setSearchResults)
+        .catch((err) => setSearchError(err.message))
+        .finally(() => setSearchLoading(false));
     }, 250);
     return () => clearTimeout(handle);
   }, [query]);
 
+  const visibleItems = useMemo(() => {
+    const base = searchResults != null ? searchResults : items;
+    if (filterState.kind === "all" || searchResults != null) return base;
+    return filterItemsByTree(base, tree, filterState);
+  }, [items, tree, filterState, searchResults]);
+
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-2.5">
-        <Search size={14} className="text-zinc-500" />
-        <input
-          id="playlist-search-input"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Datenbank durchsuchen (Titel, Artist, Kommentar)…"
-          className="flex-1 bg-transparent text-sm text-zinc-200 placeholder-zinc-600 outline-none"
+    <div className="flex h-full">
+      <aside className="w-[180px] shrink-0 overflow-y-auto border-r border-zinc-800 bg-zinc-900/50 py-2 pr-1">
+        <LibraryTree
+          tree={tree} storages={storages} artists={artists}
+          itemTypes={itemTypes} attributeKeys={attributeKeys}
+          filterState={filterState} onFilterChange={setFilterState}
+          expanded={expanded} onExpandedChange={setExpanded}
+          loading={treeLoading} error={treeError}
         />
-        {query && (
-          <button
-            onClick={() => setQuery("")}
-            className="flex h-6 w-6 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-          >
-            <X size={13} />
-          </button>
-        )}
-        {insertDisabled && (
-          <span className="text-xs text-zinc-600">Stunde wählen, um Ergebnisse einzufügen</span>
-        )}
-      </div>
-      <div className="flex-1 overflow-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead className="sticky top-0 bg-zinc-950">
-            <tr className="border-b border-zinc-800">
-              <th className="px-4 py-2 text-left font-medium text-zinc-400">ID</th>
-              <th className="px-4 py-2 text-left font-medium text-zinc-400">Titel</th>
-              <th className="px-4 py-2 text-left font-medium text-zinc-400">Artist</th>
-              <th className="w-10 px-4 py-2 text-left font-medium text-zinc-400">Typ</th>
-              <th className="px-4 py-2 text-left font-medium text-zinc-400">Dauer</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-sm text-zinc-600">Suche…</td>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex-1 overflow-auto">
+          <table className="w-full border-collapse text-sm">
+            <thead className="sticky top-0 bg-zinc-950">
+              <tr className="border-b border-zinc-800">
+                <th className="px-4 py-2 text-left font-medium text-zinc-400">ID</th>
+                <th className="px-4 py-2 text-left font-medium text-zinc-400">Ext. ID</th>
+                <th className="px-4 py-2 text-left font-medium text-zinc-400">Titel</th>
+                <th className="px-4 py-2 text-left font-medium text-zinc-400">Artist</th>
+                <th className="w-10 px-4 py-2 text-left font-medium text-zinc-400">Typ</th>
+                <th className="px-4 py-2 text-left font-medium text-zinc-400">Dauer</th>
               </tr>
-            )}
-            {!loading && error && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-sm text-red-500">
-                  Suche fehlgeschlagen: {error}
-                </td>
-              </tr>
-            )}
-            {!loading && !error && searched && results.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-sm text-zinc-600">Keine Treffer.</td>
-              </tr>
-            )}
-            {!loading && !error && !searched && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-sm text-zinc-600">
-                  Suchbegriff eingeben, um die Datenbank zu durchsuchen.
-                </td>
-              </tr>
-            )}
-            {!loading && !error && results.map((item) => (
-              <tr
-                key={item.id}
-                onDoubleClick={() => !insertDisabled && onInsert(item)}
-                title={insertDisabled ? undefined : "Doppelklick zum Einfügen"}
-                className={`border-b border-zinc-800/60 transition-colors ${
-                  insertDisabled ? "text-zinc-600" : "cursor-pointer hover:bg-zinc-900/50"
-                }`}
-              >
-                <td className="px-4 py-2 text-zinc-500">{item.internalId}</td>
-                <td className="px-4 py-2 text-zinc-100">{item.title}</td>
-                <td className="px-4 py-2 text-zinc-500">{item.artist || "-"}</td>
-                <td className="px-4 py-2">
-                  <TypeIcon type={item.type} />
-                </td>
-                <td className="px-4 py-2 text-zinc-400">{formatLength(item.duration)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {searchLoading && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-sm text-zinc-600">Suche…</td>
+                </tr>
+              )}
+              {!searchLoading && searchError && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-sm text-red-500">
+                    Suche fehlgeschlagen: {searchError}
+                  </td>
+                </tr>
+              )}
+              {!searchLoading && !searchError && treeLoading && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-sm text-zinc-600">Lade Elemente…</td>
+                </tr>
+              )}
+              {!searchLoading && !searchError && !treeLoading && visibleItems.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-sm text-zinc-600">Keine Treffer.</td>
+                </tr>
+              )}
+              {!searchLoading && !searchError && !treeLoading && visibleItems.map((item) => (
+                <tr
+                  key={item.id}
+                  onDoubleClick={() => !insertDisabled && onInsert(item)}
+                  title={insertDisabled ? undefined : "Doppelklick zum Einfügen"}
+                  className={`border-b border-zinc-800/60 transition-colors ${
+                    insertDisabled ? "text-zinc-600" : "cursor-pointer hover:bg-zinc-900/50"
+                  }`}
+                >
+                  <td className="px-4 py-2 text-zinc-500">{item.internalId}</td>
+                  <td className="px-4 py-2 text-zinc-600">{item.externalId ?? "-"}</td>
+                  <td className="px-4 py-2 text-zinc-100">{item.title}</td>
+                  <td className="px-4 py-2 text-zinc-500">{item.artist || "-"}</td>
+                  <td className="px-4 py-2">
+                    <TypeIcon type={item.type} />
+                  </td>
+                  <td className="px-4 py-2 text-zinc-400">{formatLength(item.duration)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex items-center gap-2 border-t border-zinc-800 px-4 py-2">
+          <Search size={14} className="text-zinc-500" />
+          <input
+            id="playlist-search-input"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Elemente durchsuchen (Titel, Artist, Kommentar)…"
+            className="flex-1 bg-transparent text-sm text-zinc-200 placeholder-zinc-600 outline-none"
+          />
+          {query && (
+            <button
+              onClick={() => setQuery("")}
+              className="flex h-6 w-6 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+            >
+              <X size={13} />
+            </button>
+          )}
+          {insertDisabled && (
+            <span className="text-xs text-zinc-600">Stunde wählen, um Elemente einzufügen</span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -831,7 +883,7 @@ export default function Playlist({ onEditItem, onNavigate }) {
 
         <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Playout</div>
         <nav className="mb-5 space-y-0.5">
-          <NavItem icon={LayoutDashboard} label="Übersicht" />
+          <NavItem icon={LayoutDashboard} label="Übersicht" onClick={() => onNavigate?.("dashboard")} />
           <NavItem icon={Settings} label="Einstellungen" />
         </nav>
 
@@ -848,6 +900,10 @@ export default function Playlist({ onEditItem, onNavigate }) {
           <NavItem icon={Tag} label="Gruppen" />
           <NavItem icon={ScrollText} label="Logs" />
         </nav>
+
+        <div className="mt-auto pt-4">
+          <NavItem icon={LogOut} label="Abmelden" onClick={() => onNavigate?.("login")} />
+        </div>
       </aside>
 
       {/* Main content */}
@@ -898,8 +954,8 @@ export default function Playlist({ onEditItem, onNavigate }) {
               onDelete={handleDelete}
             />
 
-            <div className="h-[200px] shrink-0 border-t border-zinc-800 bg-zinc-900/30">
-              <SearchPanel onInsert={handleInsertResult} insertDisabled={!playlist} />
+            <div className="h-[220px] shrink-0 border-t border-zinc-800 bg-zinc-900/30">
+              <LibraryPanel onInsert={handleInsertResult} insertDisabled={!playlist} />
             </div>
           </>
         )}

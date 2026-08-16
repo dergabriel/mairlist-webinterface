@@ -12,7 +12,9 @@ async function request(path, options) {
     } catch {
       message = `${res.status} ${res.statusText}`;
     }
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = res.status;
+    throw error;
   }
   if (res.status === 204) return null;
   return res.json();
@@ -60,6 +62,18 @@ export function deleteFolder(id) {
 
 export function getStorages() {
   return request("/storages");
+}
+
+export function createStorage(name, path) {
+  return post("/storages", { name, path });
+}
+
+export function updateStorage(id, name, path) {
+  return put(`/storages/${id}`, { name, path });
+}
+
+export function deleteStorage(id) {
+  return request(`/storages/${id}`, { method: "DELETE" });
 }
 
 export function getAttributeKeys() {

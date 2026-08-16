@@ -14,6 +14,9 @@
 //   moveFolder(id, newParentId) -> updated folder, null if not found, false if it would create a cycle
 //   deleteFolder(id)         -> "ok" | "not_empty" | "not_found"
 //   getStorages()            -> array of storages
+//   createStorage(name, location) -> newly created storage
+//   updateStorage(id, name, location) -> updated storage or null
+//   deleteStorage(id)        -> { status: "ok" | "in_use" | "not_found", count? }
 //   getItemTypes()           -> array of type definitions, each flagged hasItems
 //   getArtists()             -> array of distinct artist names
 //   getAttributeKeys()       -> array of { key, values } computed from items in the library
@@ -205,6 +208,37 @@ function deleteFolder(id) {
 
 function getStorages() {
   return storages;
+}
+
+function nextStorageId() {
+  const max = storages.reduce((acc, s) => Math.max(acc, s.id), 0);
+  return max + 1;
+}
+
+function createStorage(name, location) {
+  const storage = { id: nextStorageId(), name: (name || "").trim(), location: location || "" };
+  storages.push(storage);
+  return storage;
+}
+
+function updateStorage(id, name, location) {
+  const storage = storages.find((s) => s.id === Number(id));
+  if (!storage) return null;
+  storage.name = (name || "").trim();
+  storage.location = location || "";
+  return storage;
+}
+
+function deleteStorage(id) {
+  const storage = storages.find((s) => s.id === Number(id));
+  if (!storage) return { status: "not_found" };
+
+  const count = items.filter((i) => i.storageId === storage.id).length;
+  if (count > 0) return { status: "in_use", count };
+
+  const index = storages.findIndex((s) => s.id === storage.id);
+  storages.splice(index, 1);
+  return { status: "ok" };
 }
 
 function getItemTypes() {
@@ -608,6 +642,9 @@ module.exports = {
   moveFolder,
   deleteFolder,
   getStorages,
+  createStorage,
+  updateStorage,
+  deleteStorage,
   getItemTypes,
   getArtists,
   getAttributeKeys,

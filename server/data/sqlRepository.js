@@ -159,6 +159,40 @@ function getStorages() {
   return db.prepare("SELECT idx, name, defaultLocation FROM storages").all().map(rowToStorage);
 }
 
+function getStorageById(id) {
+  const row = db.prepare("SELECT idx, name, defaultLocation FROM storages WHERE idx = ?").get(Number(id));
+  return rowToStorage(row);
+}
+
+function createStorage(name, location) {
+  const info = db
+    .prepare("INSERT INTO storages (name, defaultLocation) VALUES (?, ?)")
+    .run((name || "").trim(), location || "");
+  return getStorageById(info.lastInsertRowid);
+}
+
+function updateStorage(id, name, location) {
+  const storage = getStorageById(id);
+  if (!storage) return null;
+  db.prepare("UPDATE storages SET name = ?, defaultLocation = ? WHERE idx = ?").run(
+    (name || "").trim(),
+    location || "",
+    storage.id
+  );
+  return getStorageById(id);
+}
+
+function deleteStorage(id) {
+  const storage = getStorageById(id);
+  if (!storage) return { status: "not_found" };
+
+  const { count } = db.prepare("SELECT COUNT(*) AS count FROM items WHERE storage = ?").get(storage.id);
+  if (count > 0) return { status: "in_use", count };
+
+  db.prepare("DELETE FROM storages WHERE idx = ?").run(storage.id);
+  return { status: "ok" };
+}
+
 // ---- types / artists / attribute keys (static catalogues + derived) ----
 
 function getItemTypes() {
@@ -776,6 +810,9 @@ module.exports = {
   moveFolder,
   deleteFolder,
   getStorages,
+  createStorage,
+  updateStorage,
+  deleteStorage,
   getItemTypes,
   getArtists,
   getAttributeKeys,

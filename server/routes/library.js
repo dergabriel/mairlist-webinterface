@@ -114,6 +114,39 @@ router.get("/storages", requireScope("library.read"), (req, res, next) => {
   try { res.json(repo.getStorages()); } catch (e) { next(e); }
 });
 
+// POST /api/storages -> create a new storage. Body: { name, path }
+router.post("/storages", requireScope("admin"), (req, res, next) => {
+  try {
+    const { name, path: location } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: "name ist erforderlich" });
+    const storage = repo.createStorage(name.trim(), location);
+    res.status(201).json(storage);
+  } catch (e) { next(e); }
+});
+
+// PUT /api/storages/:id -> rename/relocate a storage. Body: { name, path }
+router.put("/storages/:id", requireScope("admin"), (req, res, next) => {
+  try {
+    const { name, path: location } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: "name ist erforderlich" });
+    const storage = repo.updateStorage(req.params.id, name.trim(), location);
+    if (!storage) return res.status(404).json({ error: "Storage not found" });
+    res.json(storage);
+  } catch (e) { next(e); }
+});
+
+// DELETE /api/storages/:id -> delete a storage (409 if items still reference it)
+router.delete("/storages/:id", requireScope("admin"), (req, res, next) => {
+  try {
+    const result = repo.deleteStorage(req.params.id);
+    if (result.status === "not_found") return res.status(404).json({ error: "Storage not found" });
+    if (result.status === "in_use") {
+      return res.status(409).json({ error: `Storage hat noch ${result.count} Items` });
+    }
+    res.status(204).end();
+  } catch (e) { next(e); }
+});
+
 // GET /api/types
 router.get("/types", requireScope("library.read"), (req, res, next) => {
   try { res.json(repo.getItemTypes()); } catch (e) { next(e); }

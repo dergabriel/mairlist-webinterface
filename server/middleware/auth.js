@@ -16,6 +16,8 @@ function permissionGrantsScope(permission, scopeName) {
   if (!permission) return false;
   if (permission.UserLevel === "Admin" || permission.GeneralPermissions === "All") return true;
 
+  if (scopeName === "admin") return permission.LibraryPermissions === "All";
+
   const lib = permission.LibraryPermissions;
   if (lib === "All") return true;
   if (scopeName === "library.read" && (lib === "Read" || lib === "ReadWrite")) return true;

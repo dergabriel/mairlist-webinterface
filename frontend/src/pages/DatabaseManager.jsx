@@ -10,8 +10,10 @@ import {
   getTree, getItems, getStorages, createItem, deleteItem, uploadFile,
   getArtists, getItemTypes, getAttributeKeys, moveItemToFolder,
   createFolder, renameFolder, moveFolder, deleteFolder, getFolderChildren,
+  createStorage, updateStorage, deleteStorage,
 } from "../lib/api";
 import { useAppData } from "../lib/AppDataContext";
+import { useAuth } from "../lib/AuthContext";
 import {
   ALL_FILTER, collectFolderAndDescendantIds,
   findFolder, TreeRow, ListSection, AttributesSection,
@@ -29,6 +31,13 @@ const formatLength = (sec) => {
 };
 
 const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+// Mirrors the server's permissionGrantsScope("admin"): UserLevel "Admin",
+// GeneralPermissions "All", or LibraryPermissions "All" on any scope blob.
+const canManageStorages = (user) =>
+  (user?.scopes || []).some(
+    (p) => p.UserLevel === "Admin" || p.GeneralPermissions === "All" || p.LibraryPermissions === "All"
+  );
 
 // --- Folder inline input (new subfolder / rename) ---
 
@@ -65,6 +74,85 @@ function InlineFolderInput({ level, initialValue = "", onSubmit, onCancel }) {
         }}
         className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-sm text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-zinc-700"
       />
+    </div>
+  );
+}
+
+// --- Storage inline input (rename) ---
+
+function InlineStorageInput({ level, initialValue = "", onSubmit, onCancel }) {
+  const [value, setValue] = useState(initialValue);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+
+  const submit = () => {
+    const trimmed = value.trim();
+    if (trimmed) onSubmit(trimmed);
+    else onCancel();
+  };
+
+  return (
+    <div
+      className="flex items-center gap-1.5 py-1.5 pr-2"
+      style={{ paddingLeft: `${level * 14 + 8}px` }}
+    >
+      <span className="w-[14px] shrink-0" />
+      <HardDrive size={15} className="shrink-0 text-zinc-500" />
+      <input
+        ref={ref}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={submit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); submit(); }
+          if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+        }}
+        className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-sm text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-zinc-700"
+      />
+    </div>
+  );
+}
+
+// --- Storage right-click context menu ---
+
+function StorageContextMenu({ x, y, onClose, onRename, onDelete }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const onClickOutside = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    };
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", onClickOutside);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  const itemClass =
+    "flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100";
+
+  return (
+    <div
+      ref={ref}
+      style={{ left: x, top: y }}
+      className="fixed z-50 w-52 overflow-hidden rounded-md border border-zinc-800 bg-zinc-900 py-1 shadow-xl"
+    >
+      <button className={itemClass} onClick={onRename}>
+        <Pencil size={13} />
+        <span>Umbenennen</span>
+      </button>
+      <div className="my-1 border-t border-zinc-800" />
+      <button className={`${itemClass} text-red-500 hover:text-red-400`} onClick={onDelete}>
+        <Trash2 size={13} />
+        <span>Löschen</span>
+      </button>
     </div>
   );
 }
@@ -618,6 +706,114 @@ function ConfirmDeleteFolderDialog({ folder, onClose, onConfirm }) {
   );
 }
 
+// --- New storage dialog (no <form> tag, plain onChange/onClick handlers) ---
+
+function NewStorageDialog({ onClose, onCreate }) {
+  const [name, setName] = useState("");
+  const [path, setPath] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async () => {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onCreate({ name: name.trim(), path: path.trim() });
+    } catch (err) {
+      setError(err.message);
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="Neuer Storage" onClose={onClose}>
+      <div className="space-y-4">
+        <label className="block">
+          <span className="mb-1.5 block text-xs text-zinc-400">Name</span>
+          <input
+            className={inputClass} value={name} autoFocus
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Name des Storage"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs text-zinc-400">Pfad</span>
+          <input
+            className={inputClass} value={path}
+            onChange={(e) => setPath(e.target.value)}
+            placeholder="z. B. D:\Audios oder \\Server\Freigabe"
+          />
+        </label>
+
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-red-500">
+            <AlertTriangle size={14} />
+            <span>Storage konnte nicht angelegt werden: {error}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="rounded-md border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            Abbrechen
+          </button>
+          <button
+            type="button" onClick={submit} disabled={!name.trim() || saving}
+            className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
+          >
+            {saving ? "Wird angelegt…" : "Speichern"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ConfirmDeleteStorageDialog({ storage, onClose, onConfirm }) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const confirm = async () => {
+    setDeleting(true);
+    setError(null);
+    try {
+      await onConfirm();
+    } catch (err) {
+      setError(err.message);
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <Modal title="Storage löschen" onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-zinc-300">
+          Storage „{storage.name}“ wirklich löschen?
+        </p>
+
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-red-500">
+            <AlertTriangle size={14} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="rounded-md border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            Abbrechen
+          </button>
+          <button
+            onClick={confirm} disabled={deleting}
+            className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-50"
+          >
+            {deleting ? "Wird gelöscht…" : "Löschen"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // --- Main app ---
 
 export default function MairListDB({ onEditItem, onNavigate }) {
@@ -658,7 +854,15 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const [deleteFolderTarget, setDeleteFolderTarget] = useState(null); // folder node
   const [folderError, setFolderError] = useState(null);
 
+  const [showNewStorage, setShowNewStorage] = useState(false);
+  const [storageContextMenu, setStorageContextMenu] = useState(null); // { x, y, storageId }
+  const [editingStorageId, setEditingStorageId] = useState(null);
+  const [deleteStorageTarget, setDeleteStorageTarget] = useState(null); // storage
+  const [storageError, setStorageError] = useState(null);
+
   const { getCached, invalidate } = useAppData();
+  const { user } = useAuth();
+  const canManageStorage = canManageStorages(user);
 
   const loadData = useCallback(() => {
     setLoading(true);
@@ -805,6 +1009,47 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     invalidate("folders");
     invalidate("folder:*");
     await loadData();
+  };
+
+  const handleCreateStorage = async ({ name, path }) => {
+    await createStorage(name, path);
+    setShowNewStorage(false);
+    invalidate("storages");
+    invalidate("tree");
+    await loadData();
+  };
+
+  const handleStorageContextMenu = (e, storageId) => {
+    e.preventDefault();
+    setStorageContextMenu({ x: e.clientX, y: e.clientY, storageId });
+  };
+
+  const handleRenameStorage = async (storageId, name) => {
+    setEditingStorageId(null);
+    const storage = storages.find((s) => s.id === storageId);
+    try {
+      await updateStorage(storageId, name, storage?.location || "");
+      invalidate("storages");
+      invalidate("tree");
+      await loadData();
+    } catch (err) {
+      setStorageError(err.message);
+    }
+  };
+
+  const handleDeleteStorage = async () => {
+    try {
+      await deleteStorage(deleteStorageTarget.id);
+      setDeleteStorageTarget(null);
+      invalidate("storages");
+      invalidate("tree");
+      await loadData();
+    } catch (err) {
+      if (err.status === 409) {
+        throw new Error("Dieser Storage enthält noch Items und kann nicht gelöscht werden.");
+      }
+      throw err;
+    }
   };
 
   const rootFolder = { id: "all", name: "Alle Elemente", special: true, children: [] };
@@ -1032,19 +1277,55 @@ export default function MairListDB({ onEditItem, onNavigate }) {
               filterState={filterState} onSelectValue={selectAttribute}
             />
 
-            <ListSection
-              label="Storages" icon={HardDrive} sectionKey="storages"
-              expanded={expanded} onToggle={toggle}
-              entries={storages} loading={false}
-              renderEntry={(storage, level) => (
+            <div>
+              <div className="flex items-center justify-between py-1 pl-2 pr-1">
                 <TreeRow
-                  key={storage.id} id={`storage:${storage.id}`} label={storage.name} level={level}
-                  icon={HardDrive} hasChildren={false} isOpen={false}
-                  isActive={filterState.kind === "storage" && filterState.storageId === storage.id}
-                  onClick={() => selectStorage(storage.id)}
+                  id="storages" label="Storages" level={0} icon={HardDrive}
+                  hasChildren isOpen={expanded.has("storages")} isActive={false}
+                  onClick={() => toggle("storages")}
+                  onToggle
                 />
+                {canManageStorage && expanded.has("storages") && (
+                  <button
+                    onClick={() => setShowNewStorage(true)}
+                    title="Neuer Storage"
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-orange-500"
+                  >
+                    <Plus size={13} />
+                  </button>
+                )}
+              </div>
+              {expanded.has("storages") && (
+                <div>
+                  {storages.length === 0 && (
+                    <div className="px-3 py-1.5 text-xs text-zinc-600" style={{ paddingLeft: "22px" }}>
+                      Keine Einträge
+                    </div>
+                  )}
+                  {storages.map((storage) =>
+                    editingStorageId === storage.id ? (
+                      <InlineStorageInput
+                        key={storage.id} level={1} initialValue={storage.name}
+                        onSubmit={(value) => handleRenameStorage(storage.id, value)}
+                        onCancel={() => setEditingStorageId(null)}
+                      />
+                    ) : (
+                      <div
+                        key={storage.id}
+                        onContextMenu={canManageStorage ? (e) => handleStorageContextMenu(e, storage.id) : undefined}
+                      >
+                        <TreeRow
+                          id={`storage:${storage.id}`} label={storage.name} level={1}
+                          icon={HardDrive} hasChildren={false} isOpen={false}
+                          isActive={filterState.kind === "storage" && filterState.storageId === storage.id}
+                          onClick={() => selectStorage(storage.id)}
+                        />
+                      </div>
+                    )
+                  )}
+                </div>
               )}
-            />
+            </div>
 
             <TreeRow
               id="everything" label="Everything" level={0} icon={Library}
@@ -1348,6 +1629,44 @@ export default function MairListDB({ onEditItem, onNavigate }) {
           <AlertTriangle size={14} />
           <span>{folderError}</span>
           <button onClick={() => setFolderError(null)} className="ml-2 text-zinc-500 hover:text-zinc-300">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {showNewStorage && (
+        <NewStorageDialog onClose={() => setShowNewStorage(false)} onCreate={handleCreateStorage} />
+      )}
+
+      {storageContextMenu && (
+        <StorageContextMenu
+          x={storageContextMenu.x} y={storageContextMenu.y}
+          onClose={() => setStorageContextMenu(null)}
+          onRename={() => {
+            setEditingStorageId(storageContextMenu.storageId);
+            setStorageContextMenu(null);
+          }}
+          onDelete={() => {
+            const storage = storages.find((s) => s.id === storageContextMenu.storageId);
+            if (storage) setDeleteStorageTarget(storage);
+            setStorageContextMenu(null);
+          }}
+        />
+      )}
+
+      {deleteStorageTarget && (
+        <ConfirmDeleteStorageDialog
+          storage={deleteStorageTarget}
+          onClose={() => setDeleteStorageTarget(null)}
+          onConfirm={handleDeleteStorage}
+        />
+      )}
+
+      {storageError && (
+        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-md border border-red-900 bg-zinc-900 px-4 py-3 text-sm text-red-500 shadow-xl">
+          <AlertTriangle size={14} />
+          <span>{storageError}</span>
+          <button onClick={() => setStorageError(null)} className="ml-2 text-zinc-500 hover:text-zinc-300">
             <X size={14} />
           </button>
         </div>

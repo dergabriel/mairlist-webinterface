@@ -1,21 +1,32 @@
-// TODO (Phase F): Echte Authentifizierung gegen auth_users / auth_sessions (docs/SCHEMA.md).
-// Aktuell wird jeder Submit ohne Prüfung durchgelassen.
-// Dieser Stub bleibt so lange bestehen, bis das reale Schema angebunden ist.
-
 import { useState } from "react";
 import { Database, User, Lock } from "lucide-react";
+import { useAuth } from "../lib/AuthContext";
 
 const inputClass =
   "w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-zinc-700";
 
 export default function Login({ onLogin }) {
+  const { login } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const submit = (e) => {
-    e.preventDefault();
-    // TODO (Phase F): POST /api/auth/login, Session-Token speichern
-    onLogin?.();
+  const submit = async () => {
+    setError("");
+    setSubmitting(true);
+    try {
+      await login(username, password);
+      onLogin?.();
+    } catch (e) {
+      setError(e.message === "Ungültige Zugangsdaten" ? e.message : "Ungültige Zugangsdaten");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Enter") submit();
   };
 
   return (
@@ -31,14 +42,7 @@ export default function Login({ onLogin }) {
           </div>
         </div>
 
-        {/* Stub-Hinweis, nur im Dev sichtbar */}
-        {import.meta.env.DEV && (
-          <div className="mb-4 rounded-md border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-xs text-orange-400">
-            Dev-Modus: Anmeldung ohne Prüfung (Phase F offen)
-          </div>
-        )}
-
-        <form onSubmit={submit} className="space-y-4">
+        <div className="space-y-4">
           <label className="block">
             <span className="mb-1.5 block text-xs text-zinc-400">Benutzername</span>
             <div className="relative flex items-center">
@@ -48,6 +52,7 @@ export default function Login({ onLogin }) {
                 value={username}
                 autoFocus
                 onChange={(e) => setUsername(e.target.value)}
+                onKeyDown={onKeyDown}
                 placeholder="Benutzername"
               />
             </div>
@@ -62,18 +67,23 @@ export default function Login({ onLogin }) {
                 className={`${inputClass} pl-9`}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={onKeyDown}
                 placeholder="Passwort"
               />
             </div>
           </label>
 
+          {error && <div className="text-xs text-red-500">{error}</div>}
+
           <button
-            type="submit"
-            className="w-full rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
+            type="button"
+            onClick={submit}
+            disabled={submitting}
+            className="w-full rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-60"
           >
             Anmelden
           </button>
-        </form>
+        </div>
       </div>
     </div>
   );

@@ -9,6 +9,9 @@ const router = express.Router();
 const repo = process.env.DATA_SOURCE === "sqlite"
   ? require("../data/sqlRepository")
   : require("../data/repository");
+const { requireAuth, requireScope } = require("../middleware/auth");
+
+router.use(requireAuth);
 
 const ALLOWED_AUDIO_EXTENSIONS = new Set(["wav", "mp3", "aac", "flac", "ogg"]);
 
@@ -51,12 +54,12 @@ function pickWritableFields(body) {
 }
 
 // GET /api/tree -> folder tree for the sidebar
-router.get("/tree", (req, res, next) => {
+router.get("/tree", requireScope("library.read"), (req, res, next) => {
   try { res.json(repo.getFolderTree()); } catch (e) { next(e); }
 });
 
 // POST /api/folders -> create a new folder. Body: { name, parentId? }
-router.post("/folders", (req, res, next) => {
+router.post("/folders", requireScope("library.write"), (req, res, next) => {
   try {
     const { name, parentId } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: "name ist erforderlich" });
@@ -66,7 +69,7 @@ router.post("/folders", (req, res, next) => {
 });
 
 // PUT /api/folders/:id -> rename a folder. Body: { name }
-router.put("/folders/:id", (req, res, next) => {
+router.put("/folders/:id", requireScope("library.write"), (req, res, next) => {
   try {
     const { name } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: "name ist erforderlich" });
@@ -77,7 +80,7 @@ router.put("/folders/:id", (req, res, next) => {
 });
 
 // PUT /api/folders/:id/move -> move a folder under a new parent. Body: { newParentId }
-router.put("/folders/:id/move", (req, res, next) => {
+router.put("/folders/:id/move", requireScope("library.write"), (req, res, next) => {
   try {
     const { newParentId } = req.body;
     const folder = repo.moveFolder(req.params.id, newParentId);
@@ -88,7 +91,7 @@ router.put("/folders/:id/move", (req, res, next) => {
 });
 
 // DELETE /api/folders/:id -> delete an empty folder
-router.delete("/folders/:id", (req, res, next) => {
+router.delete("/folders/:id", requireScope("library.write"), (req, res, next) => {
   try {
     const result = repo.deleteFolder(req.params.id);
     if (result === "not_found") return res.status(404).json({ error: "Folder not found" });
@@ -98,7 +101,7 @@ router.delete("/folders/:id", (req, res, next) => {
 });
 
 // GET /api/folders/:id/children -> direct items and subfolders of a folder (not recursive)
-router.get("/folders/:id/children", (req, res, next) => {
+router.get("/folders/:id/children", requireScope("library.read"), (req, res, next) => {
   try {
     const folder = repo.getFolderById(req.params.id);
     if (!folder) return res.status(404).json({ error: "Folder not found" });
@@ -107,27 +110,27 @@ router.get("/folders/:id/children", (req, res, next) => {
 });
 
 // GET /api/storages
-router.get("/storages", (req, res, next) => {
+router.get("/storages", requireScope("library.read"), (req, res, next) => {
   try { res.json(repo.getStorages()); } catch (e) { next(e); }
 });
 
 // GET /api/types
-router.get("/types", (req, res, next) => {
+router.get("/types", requireScope("library.read"), (req, res, next) => {
   try { res.json(repo.getItemTypes()); } catch (e) { next(e); }
 });
 
 // GET /api/artists
-router.get("/artists", (req, res, next) => {
+router.get("/artists", requireScope("library.read"), (req, res, next) => {
   try { res.json(repo.getArtists()); } catch (e) { next(e); }
 });
 
 // GET /api/attributes -> attribute keys present in the library, each with its distinct values
-router.get("/attributes", (req, res, next) => {
+router.get("/attributes", requireScope("library.read"), (req, res, next) => {
   try { res.json(repo.getAttributeKeys()); } catch (e) { next(e); }
 });
 
 // GET /api/items?type=&artist=&folderId=&storageId=&attributeKey=&attributeValue=
-router.get("/items", (req, res, next) => {
+router.get("/items", requireScope("library.read"), (req, res, next) => {
   try {
     const { type, artist, folderId, storageId, attributeKey, attributeValue } = req.query;
     res.json(repo.getItems({ type, artist, folderId, storageId, attributeKey, attributeValue }));
@@ -135,7 +138,7 @@ router.get("/items", (req, res, next) => {
 });
 
 // GET /api/items/:id
-router.get("/items/:id", (req, res, next) => {
+router.get("/items/:id", requireScope("library.read"), (req, res, next) => {
   try {
     const item = repo.getItemById(req.params.id);
     if (!item) return res.status(404).json({ error: "Item not found" });
@@ -144,7 +147,7 @@ router.get("/items/:id", (req, res, next) => {
 });
 
 // GET /api/items/:id/history -> play history, newest first
-router.get("/items/:id/history", (req, res, next) => {
+router.get("/items/:id/history", requireScope("library.read"), (req, res, next) => {
   try {
     const history = repo.getItemHistory(req.params.id);
     if (history === null) return res.status(404).json({ error: "Item not found" });
@@ -155,7 +158,7 @@ router.get("/items/:id/history", (req, res, next) => {
 // GET /api/items/:id/audio -> streams the item's audio file from storage,
 // with Range support so the browser can seek. 404 if the item, its storage,
 // or the file on disk isn't found.
-router.get("/items/:id/audio", (req, res, next) => {
+router.get("/items/:id/audio", requireScope("library.read"), (req, res, next) => {
   try {
     const item = repo.getItemById(req.params.id);
     if (!item) return res.status(404).json({ error: "Item not found" });
@@ -218,7 +221,7 @@ router.get("/items/:id/audio", (req, res, next) => {
 });
 
 // GET /api/search?q=&fields=title,artist
-router.get("/search", (req, res, next) => {
+router.get("/search", requireScope("library.read"), (req, res, next) => {
   try {
     const { q, fields } = req.query;
     const opts = fields ? { fields: fields.split(",") } : {};
@@ -227,17 +230,17 @@ router.get("/search", (req, res, next) => {
 });
 
 // GET /api/cuepoints -> cue point definitions for the cue editor
-router.get("/cuepoints", (req, res, next) => {
+router.get("/cuepoints", requireScope("library.read"), (req, res, next) => {
   try { res.json(repo.getCuePoints()); } catch (e) { next(e); }
 });
 
 // GET /api/attributes/definitions -> predefined attribute schema for the item editor
-router.get("/attributes/definitions", (req, res, next) => {
+router.get("/attributes/definitions", requireScope("library.read"), (req, res, next) => {
   try { res.json(repo.getAttributeDefinitions()); } catch (e) { next(e); }
 });
 
 // POST /api/items -> create a new item
-router.post("/items", (req, res, next) => {
+router.post("/items", requireScope("library.write"), (req, res, next) => {
   try {
     const item = repo.createItem(pickWritableFields(req.body));
     res.status(201).json(item);
@@ -245,7 +248,7 @@ router.post("/items", (req, res, next) => {
 });
 
 // PUT /api/items/:id -> update an existing item
-router.put("/items/:id", (req, res, next) => {
+router.put("/items/:id", requireScope("library.write"), (req, res, next) => {
   try {
     const item = repo.updateItem(req.params.id, pickWritableFields(req.body));
     if (!item) return res.status(404).json({ error: "Item not found" });
@@ -254,7 +257,7 @@ router.put("/items/:id", (req, res, next) => {
 });
 
 // PUT /api/items/:id/folder -> move an item into a (virtual) folder. Body: { folderId }
-router.put("/items/:id/folder", (req, res, next) => {
+router.put("/items/:id/folder", requireScope("library.write"), (req, res, next) => {
   try {
     const { folderId } = req.body;
     const item = repo.moveItemToFolder(req.params.id, folderId);
@@ -265,7 +268,7 @@ router.put("/items/:id/folder", (req, res, next) => {
 
 // POST /api/upload -> upload an audio file (multipart/form-data), copy it into
 // the chosen storage, and create a matching item. Fields: file, storageId, title?
-router.post("/upload", (req, res, next) => {
+router.post("/upload", requireScope("library.write"), (req, res, next) => {
   upload.single("file")(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: "Keine Datei übermittelt" });
@@ -282,7 +285,7 @@ router.post("/upload", (req, res, next) => {
 });
 
 // GET /api/playlists?date=YYYY-MM-DD -> all 24 hours for that date, each flagged hasEntries
-router.get("/playlists", (req, res, next) => {
+router.get("/playlists", requireScope("library.read"), (req, res, next) => {
   try {
     const { date } = req.query;
     if (!date) return res.status(400).json({ error: "date ist erforderlich" });
@@ -292,7 +295,7 @@ router.get("/playlists", (req, res, next) => {
 });
 
 // GET /api/playlists/:id -> one hour's playlist with resolved items
-router.get("/playlists/:id", (req, res, next) => {
+router.get("/playlists/:id", requireScope("library.read"), (req, res, next) => {
   try {
     const playlist = repo.getPlaylistById(req.params.id);
     if (!playlist) return res.status(404).json({ error: "Playlist not found" });
@@ -301,7 +304,7 @@ router.get("/playlists/:id", (req, res, next) => {
 });
 
 // PUT /api/playlists/:id/reorder -> apply a new entry order. Body: { order: [position, ...] }
-router.put("/playlists/:id/reorder", (req, res, next) => {
+router.put("/playlists/:id/reorder", requireScope("library.write"), (req, res, next) => {
   try {
     const { order } = req.body;
     if (!Array.isArray(order)) return res.status(400).json({ error: "order (Array) ist erforderlich" });
@@ -312,7 +315,7 @@ router.put("/playlists/:id/reorder", (req, res, next) => {
 });
 
 // POST /api/playlists/:id/items -> insert an item. Body: { itemId, afterPosition? }
-router.post("/playlists/:id/items", (req, res, next) => {
+router.post("/playlists/:id/items", requireScope("library.write"), (req, res, next) => {
   try {
     const { itemId, afterPosition } = req.body;
     if (!itemId) return res.status(400).json({ error: "itemId ist erforderlich" });
@@ -323,7 +326,7 @@ router.post("/playlists/:id/items", (req, res, next) => {
 });
 
 // DELETE /api/playlists/:id/items/:position -> remove the entry at that position
-router.delete("/playlists/:id/items/:position", (req, res, next) => {
+router.delete("/playlists/:id/items/:position", requireScope("library.write"), (req, res, next) => {
   try {
     const playlist = repo.removePlaylistItem(req.params.id, req.params.position);
     if (!playlist) return res.status(404).json({ error: "Playlist oder Eintrag nicht gefunden" });
@@ -333,7 +336,7 @@ router.delete("/playlists/:id/items/:position", (req, res, next) => {
 
 // PUT /api/playlists/:id/items/:position/overrides -> set (or clear, with {}) this
 // entry's volatile per-instance overrides. Body: { overrides: { cue?: {...}, attributes?: {...}, ... } }
-router.put("/playlists/:id/items/:position/overrides", (req, res, next) => {
+router.put("/playlists/:id/items/:position/overrides", requireScope("library.write"), (req, res, next) => {
   try {
     const { overrides } = req.body;
     const playlist = repo.savePlaylistItemOverrides(req.params.id, req.params.position, overrides);
@@ -343,7 +346,7 @@ router.put("/playlists/:id/items/:position/overrides", (req, res, next) => {
 });
 
 // DELETE /api/items/:id -> delete an item
-router.delete("/items/:id", (req, res, next) => {
+router.delete("/items/:id", requireScope("library.write"), (req, res, next) => {
   try {
     const deleted = repo.deleteItem(req.params.id);
     if (!deleted) return res.status(404).json({ error: "Item not found" });

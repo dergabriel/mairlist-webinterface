@@ -2,7 +2,7 @@
 // Vite proxies /api to the backend on port 3001.
 
 async function request(path, options) {
-  const res = await fetch(`/api${path}`, options);
+  const res = await fetch(`/api${path}`, { credentials: "include", ...options });
   if (!res.ok) {
     // Strukturierte Fehlermeldung vom Server nutzen, Fallback auf HTTP-Status
     let message;

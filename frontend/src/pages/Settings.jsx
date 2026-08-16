@@ -8,6 +8,7 @@ import {
   LayoutDashboard, Settings as SettingsIcon, Database, Copy, ListMusic,
   Users, Tag, ScrollText, LogOut, Save, Check, GripVertical, Info,
 } from "lucide-react";
+import { useAuth } from "../lib/AuthContext";
 
 function NavItem({ icon: Icon, label, active, onClick }) {
   return (
@@ -69,6 +70,7 @@ function Card({ title, children }) {
 }
 
 export default function Settings({ onNavigate }) {
+  const { logout } = useAuth();
   const [language, setLanguage] = useState("de");
   const [timezone, setTimezone] = useState("");
   const [dateFormat, setDateFormat] = useState("DD.MM.YYYY");
@@ -122,7 +124,14 @@ export default function Settings({ onNavigate }) {
         </nav>
 
         <div className="mt-auto pt-4">
-          <NavItem icon={LogOut} label="Abmelden" onClick={() => onNavigate?.("login")} />
+          <NavItem
+            icon={LogOut}
+            label="Abmelden"
+            onClick={async () => {
+              await logout();
+              onNavigate?.("login");
+            }}
+          />
         </div>
       </aside>
 

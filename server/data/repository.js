@@ -52,6 +52,53 @@ const fs = require("fs");
 const path = require("path");
 const { storages, folders, items, ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS, playlists } = require("./mockData");
 
+// ---- auth (mock) ----
+//
+// Mirrors the real sqlRepository's shape (permissions = array of JSON-like
+// blobs), but with a single hardcoded admin user and no group. See
+// server/lib/passwordHash.js for why the real repo can't use bcrypt.
+
+const MOCK_USER = { id: 1, username: "admin" };
+const MOCK_PERMISSIONS = [
+  { Type: "TDBPermissions", UserLevel: "Admin", GeneralPermissions: "All", LibraryPermissions: "All" },
+];
+const mockSessions = new Map(); // sid -> { userId, expiresAt }
+
+function getUserByUsername(username) {
+  if (username !== MOCK_USER.username) return null;
+  return { id: MOCK_USER.id, username: MOCK_USER.username };
+}
+
+function getUserById(id) {
+  return id === MOCK_USER.id ? { id: MOCK_USER.id, username: MOCK_USER.username } : null;
+}
+
+function getScopesByUserId(userId) {
+  return userId === MOCK_USER.id ? MOCK_PERMISSIONS : [];
+}
+
+function getScopesByGroupId() {
+  return [];
+}
+
+function createSession(userId, sid, expiresAt) {
+  mockSessions.set(sid, { userId, expiresAt });
+}
+
+function getSessionBySid(sid) {
+  return mockSessions.get(sid) || null;
+}
+
+function deleteSession(sid) {
+  mockSessions.delete(sid);
+}
+
+// Mock login only ever has one user/password ("admin"/"admin"), so a
+// plaintext compare is enough — no need to pull bcrypt into the request path.
+function verifyUserPassword(user, password) {
+  return user.username === MOCK_USER.username && password === "admin";
+}
+
 // Fields a caller may set via createItem / updateItem.
 // Prevents accidental overwrite of id, internalId, updatedAt etc.
 const ITEM_WRITABLE_FIELDS = new Set([
@@ -582,4 +629,12 @@ module.exports = {
   insertPlaylistItem,
   removePlaylistItem,
   savePlaylistItemOverrides,
+  getUserByUsername,
+  getUserById,
+  getScopesByUserId,
+  getScopesByGroupId,
+  createSession,
+  getSessionBySid,
+  deleteSession,
+  verifyUserPassword,
 };

@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const libraryRoutes = require("./routes/library");
+const authRoutes = require("./routes/auth");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -20,17 +22,20 @@ app.use(
     },
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type"],
+    credentials: true,
   })
 );
 
 // JSON-Body auf 1 MB begrenzen, verhindert Memory-DoS
 app.use(express.json({ limit: "1mb" }));
+app.use(cookieParser());
 
 // Health check
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", dataSource: process.env.DATA_SOURCE || "mock" });
 });
 
+app.use("/api/auth", authRoutes);
 app.use("/api", libraryRoutes);
 
 // Globaler Error Handler — fängt alle unbehandelten Fehler aus Routen.

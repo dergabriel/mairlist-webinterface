@@ -9,6 +9,7 @@ const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
 const { ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
+const { verifyPassword } = require("../lib/passwordHash");
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "../mairlist.mldb");
 const db = new Database(DB_PATH, { readonly: false });
@@ -685,6 +686,87 @@ function savePlaylistItemOverrides(id, position, overrides) {
   return getPlaylistById(id);
 }
 
+// ---- auth ----
+//
+// Real schema (see docs/SCHEMA.md / PRAGMA table_info, Phase F):
+//   auth_users(id, name, description, pw_salt, pw_hash)
+//   auth_user_scopes(user_id, scope_id, permissions)  -- permissions is a
+//     JSON blob, e.g. {"LibraryPermissions":"All", "UserLevel":"Admin", ...}
+//   auth_group_members(group_id, user_id) / auth_group_scopes(group_id, scope_id, permissions)
+//     -- present but unused by any current row; kept as a secondary path so
+//     group-based permissions work automatically once populated.
+//   auth_sessions(id, user_id, scope_id, sid, expires, data)
+//
+// There are no named scope strings (auth_scopes.name is empty) — "scopes"
+// here means the set of permission JSON blobs a user can see, merged from
+// their own auth_user_scopes rows and any groups they belong to.
+
+function getUserByUsername(username) {
+  const row = db
+    .prepare("SELECT id, name, pw_salt, pw_hash FROM auth_users WHERE name = ?")
+    .get(username);
+  if (!row) return null;
+  return { id: row.id, username: row.name, pwSalt: row.pw_salt, pwHash: row.pw_hash };
+}
+
+function getUserById(id) {
+  const row = db.prepare("SELECT id, name FROM auth_users WHERE id = ?").get(id);
+  if (!row) return null;
+  return { id: row.id, username: row.name };
+}
+
+function parsePermissions(json) {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+// Direct grants: auth_user_scopes rows for this user.
+function getScopesByUserId(userId) {
+  const rows = db
+    .prepare("SELECT permissions FROM auth_user_scopes WHERE user_id = ?")
+    .all(userId);
+  return rows.map((r) => parsePermissions(r.permissions)).filter(Boolean);
+}
+
+// Group grants: every group this user belongs to, via auth_group_scopes.
+function getScopesByGroupId(userId) {
+  const rows = db
+    .prepare(
+      `SELECT gs.permissions FROM auth_group_members gm
+       JOIN auth_group_scopes gs ON gs.group_id = gm.group_id
+       WHERE gm.user_id = ?`
+    )
+    .all(userId);
+  return rows.map((r) => parsePermissions(r.permissions)).filter(Boolean);
+}
+
+function createSession(userId, sid, expiresAt) {
+  db.prepare("INSERT INTO auth_sessions (user_id, scope_id, sid, expires) VALUES (?, 0, ?, ?)").run(
+    userId,
+    sid,
+    expiresAt
+  );
+}
+
+function getSessionBySid(sid) {
+  const row = db
+    .prepare("SELECT user_id, expires FROM auth_sessions WHERE sid = ?")
+    .get(sid);
+  if (!row) return null;
+  return { userId: row.user_id, expiresAt: row.expires };
+}
+
+function deleteSession(sid) {
+  db.prepare("DELETE FROM auth_sessions WHERE sid = ?").run(sid);
+}
+
+function verifyUserPassword(user, password) {
+  return verifyPassword(password, user.pwSalt, user.pwHash);
+}
+
 module.exports = {
   getFolderTree,
   getFolderById,
@@ -715,4 +797,12 @@ module.exports = {
   insertPlaylistItem,
   removePlaylistItem,
   savePlaylistItemOverrides,
+  getUserByUsername,
+  getUserById,
+  getScopesByUserId,
+  getScopesByGroupId,
+  createSession,
+  getSessionBySid,
+  deleteSession,
+  verifyUserPassword,
 };

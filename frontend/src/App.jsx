@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AppDataProvider } from './lib/AppDataContext'
+import { AuthProvider, useAuth } from './lib/AuthContext'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import DatabaseManager from './pages/DatabaseManager'
@@ -9,9 +10,10 @@ import MixEditor from './pages/MixEditor'
 import Settings from './pages/Settings'
 import Logs from './pages/Logs'
 
-function App() {
-  const [view, setView] = useState('login')
-  const isLoggedIn = view !== 'login'
+function AppShell() {
+  const { user, loading } = useAuth()
+  const [view, setView] = useState('dashboard')
+  const isLoggedIn = !!user
   const [previousView, setPreviousView] = useState('dashboard')
   const [selectedItemId, setSelectedItemId] = useState(null)
   // Set only when the editor is opened from a playlist row: which slot the
@@ -38,9 +40,13 @@ function App() {
     setView(nextView)
   }
 
+  if (loading) {
+    return <div className="flex h-screen w-full items-center justify-center bg-zinc-950 text-zinc-400">Laden…</div>
+  }
+
   return (
     <AppDataProvider>
-      {view === 'login' && <Login onLogin={() => setView('dashboard')} />}
+      {!isLoggedIn && <Login onLogin={() => setView('dashboard')} />}
       {isLoggedIn && (
         <>
           <div style={{ display: view === 'dashboard' ? 'contents' : 'none' }}>
@@ -76,6 +82,14 @@ function App() {
         </>
       )}
     </AppDataProvider>
+  )
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
   )
 }
 

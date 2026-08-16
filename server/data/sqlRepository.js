@@ -778,7 +778,7 @@ function getScopesByGroupId(userId) {
 }
 
 function createSession(userId, sid, expiresAt) {
-  db.prepare("INSERT INTO auth_sessions (user_id, scope_id, sid, expires) VALUES (?, 0, ?, ?)").run(
+  db.prepare("INSERT INTO auth_sessions (user_id, scope_id, sid, expires) VALUES (?, 1, ?, ?)").run(
     userId,
     sid,
     expiresAt

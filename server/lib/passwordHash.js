@@ -2,13 +2,8 @@
 // scheme (NOT bcrypt — bcrypt is used only by the mock repository, see
 // data/repository.js).
 //
-// UNVERIFIED: no official mAirList documentation for the exact hash formula
-// was found, and no known plaintext/hash pair was available to confirm it
-// empirically. This implements the most common Delphi/Indy-style convention
-// (MD5 of salt+password, lowercase hex, matching pw_hash's 32-char length).
-// Verify against a real known password before relying on this in production;
-// if it's wrong, real-DB logins will always fail and the formula below needs
-// to be corrected (try MD5(password+salt), repeated/keyed hashing, etc.).
+// Verified: MD5(pw_salt + password), hex lowercase
+// Confirmed against real mAirListDB test user (2026-08-16)
 
 const crypto = require("crypto");
 

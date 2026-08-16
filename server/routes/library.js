@@ -97,6 +97,15 @@ router.delete("/folders/:id", (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// GET /api/folders/:id/children -> direct items and subfolders of a folder (not recursive)
+router.get("/folders/:id/children", (req, res, next) => {
+  try {
+    const folder = repo.getFolderById(req.params.id);
+    if (!folder) return res.status(404).json({ error: "Folder not found" });
+    res.json(repo.getFolderChildren(req.params.id));
+  } catch (e) { next(e); }
+});
+
 // GET /api/storages
 router.get("/storages", (req, res, next) => {
   try { res.json(repo.getStorages()); } catch (e) { next(e); }

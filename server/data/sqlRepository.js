@@ -89,6 +89,18 @@ function getFolderById(id) {
   return rowToFolder(row);
 }
 
+// Direct (non-recursive) children of a folder: its immediate subfolders and
+// the items filed directly under it via item_folders.
+function getFolderChildren(id) {
+  const folderId = Number(id);
+  const folderRows = db.prepare("SELECT idx, parent, name FROM folders WHERE parent = ?").all(folderId);
+  const itemIds = db.prepare("SELECT item FROM item_folders WHERE folder = ?").all(folderId).map((r) => r.item);
+  return {
+    folders: folderRows.map(rowToFolder),
+    items: itemIds.map((itemId) => getItemById(itemId)).filter(Boolean),
+  };
+}
+
 function collectFolderAndDescendants(id) {
   const ids = [id];
   const children = db.prepare("SELECT idx FROM folders WHERE parent = ?").all(id);
@@ -266,13 +278,27 @@ function getItemById(id) {
   return rowToItem(row);
 }
 
-// TODO: playlistlog holds real play history — wire this up once the
-// join (playlistlog.item -> items.idx, filtered/sorted by starttime) and
-// the "show"/"moderator" mapping are confirmed against real data.
 function getItemHistory(id) {
   const item = getItemById(id);
   if (!item) return null;
-  return [];
+
+  const idStr = String(id);
+  const rows = db
+    .prepare(
+      `SELECT slot FROM playlist
+       WHERE station = ? AND subplaylist = ? AND (item = ? OR xmldata LIKE ?)
+       ORDER BY slot DESC
+       LIMIT 100`
+    )
+    .all(STATION, SUBPLAYLIST, Number(id), `%"${idStr}"%`);
+
+  return rows
+    .map((row) => {
+      const parsed = parseSlot(row.slot);
+      if (!parsed) return null;
+      return { slot: row.slot, date: parsed.date, hour: parsed.hour };
+    })
+    .filter(Boolean);
 }
 
 function searchItems(query, opts = {}) {
@@ -569,6 +595,8 @@ function resequenceEntries(entries, hour) {
 function writeHour(date, hour, entryList) {
   const slot = buildSlot(date, hour);
   const del = db.prepare("DELETE FROM playlist WHERE station = ? AND subplaylist = ? AND slot = ?");
+  // pos is the schema's position column (0-based); it is written explicitly
+  // from each entry's array index below, so ordering survives the delete+reinsert.
   const ins = db.prepare(
     "INSERT INTO playlist (station, subplaylist, slot, pos, item, duration, xmldata) VALUES (?, ?, ?, ?, ?, ?, ?)"
   );
@@ -660,6 +688,7 @@ function savePlaylistItemOverrides(id, position, overrides) {
 module.exports = {
   getFolderTree,
   getFolderById,
+  getFolderChildren,
   createFolder,
   renameFolder,
   moveFolder,

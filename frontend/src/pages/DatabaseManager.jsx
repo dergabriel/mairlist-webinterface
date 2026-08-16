@@ -9,11 +9,11 @@ import {
 import {
   getTree, getItems, getStorages, createItem, deleteItem, uploadFile,
   getArtists, getItemTypes, getAttributeKeys, moveItemToFolder,
-  createFolder, renameFolder, moveFolder, deleteFolder,
+  createFolder, renameFolder, moveFolder, deleteFolder, getFolderChildren,
 } from "../lib/api";
 import { useAppData } from "../lib/AppDataContext";
 import {
-  ALL_FILTER, collectDescendants, collectFolderAndDescendantIds,
+  ALL_FILTER, collectFolderAndDescendantIds,
   findFolder, TreeRow, ListSection, AttributesSection,
 } from "../components/treeUtils";
 
@@ -632,6 +632,8 @@ export default function MairListDB({ onEditItem, onNavigate }) {
 
   const [expanded, setExpanded] = useState(new Set([20, 30]));
   const [filterState, setFilterState] = useState(ALL_FILTER);
+  const [folderItems, setFolderItems] = useState(null); // direct items of the selected folder, lazily loaded
+  const [folderItemsLoading, setFolderItemsLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [searchOptions, setSearchOptions] = useState({
     scope: "library", // "library" | "view"
@@ -689,10 +691,28 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     loadData();
   }, [loadData]);
 
+  // Lazily load the selected folder's direct items on demand instead of
+  // relying on the fully preloaded `items` array, fetched once per folder
+  // and cached under folder:${id} (invalidated by any library write).
+  useEffect(() => {
+    if (filterState.kind !== "folder") {
+      setFolderItems(null);
+      return;
+    }
+    let cancelled = false;
+    setFolderItemsLoading(true);
+    getCached(`folder:${filterState.folderId}`, () => getFolderChildren(filterState.folderId))
+      .then((data) => { if (!cancelled) setFolderItems(data.items); })
+      .catch(() => { if (!cancelled) setFolderItems([]); })
+      .finally(() => { if (!cancelled) setFolderItemsLoading(false); });
+    return () => { cancelled = true; };
+  }, [filterState, getCached]);
+
   const handleCreate = async (data) => {
     const created = await createItem(data);
     setShowNewItem(false);
     invalidate("items");
+    invalidate("folder:*");
     await loadData();
     onEditItem?.(created.internalId);
   };
@@ -701,6 +721,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     const created = await uploadFile(data);
     setShowUpload(false);
     invalidate("items");
+    invalidate("folder:*");
     await loadData();
     onEditItem?.(created.internalId);
   };
@@ -709,6 +730,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     await deleteItem(deleteTarget.id);
     setDeleteTarget(null);
     invalidate("items");
+    invalidate("folder:*");
     await loadData();
   };
 
@@ -729,6 +751,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
       try {
         await moveFolder(sourceFolderId, folderId);
         invalidate("folders");
+        invalidate("folder:*");
         await loadData();
       } catch (err) {
         setFolderError(err.message);
@@ -739,6 +762,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     if (!itemId) return;
     await moveItemToFolder(itemId, folderId);
     invalidate("items");
+    invalidate("folder:*");
     await loadData();
   };
 
@@ -760,6 +784,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
         if (parentId != null) setExpanded((prev) => new Set(prev).add(parentId));
       }
       invalidate("folders");
+      invalidate("folder:*");
       await loadData();
     } catch (err) {
       setFolderError(err.message);
@@ -770,6 +795,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     await moveFolder(moveFolderTarget.id, newParentId);
     setMoveFolderTarget(null);
     invalidate("folders");
+    invalidate("folder:*");
     await loadData();
   };
 
@@ -777,6 +803,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     await deleteFolder(deleteFolderTarget.id);
     setDeleteFolderTarget(null);
     invalidate("folders");
+    invalidate("folder:*");
     await loadData();
   };
 
@@ -812,9 +839,9 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     let list = [...items];
 
     if (filterState.kind === "folder") {
-      const folder = findFolder(tree, filterState.folderId);
-      const ids = new Set([filterState.folderId, ...(folder ? collectDescendants(folder) : [])]);
-      list = list.filter((i) => ids.has(i.folderId));
+      // Direct items only, lazily fetched per folder (see effect above) —
+      // no longer includes descendant items from the preloaded `items` array.
+      list = folderItems || [];
     } else if (filterState.kind === "artist") {
       list = list.filter((i) => i.artist === filterState.artist);
     } else if (filterState.kind === "type") {
@@ -829,7 +856,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     // "all" and "everything" both mean unfiltered.
 
     return list;
-  }, [items, tree, filterState]);
+  }, [items, tree, filterState, folderItems]);
 
   const visibleItems = useMemo(() => {
     // Advanced search: scope "view" searches within the tree-filtered list,
@@ -1183,14 +1210,14 @@ export default function MairListDB({ onEditItem, onNavigate }) {
               </tr>
             </thead>
             <tbody>
-              {loading && (
+              {(loading || folderItemsLoading) && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center text-sm text-zinc-600">
                     Lade Elemente…
                   </td>
                 </tr>
               )}
-              {!loading && error && (
+              {!loading && !folderItemsLoading && error && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center text-sm">
                     <div className="flex flex-col items-center gap-2 text-red-500">
@@ -1200,7 +1227,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
                   </td>
                 </tr>
               )}
-              {!loading && !error && visibleItems.map((item) => (
+              {!loading && !folderItemsLoading && !error && visibleItems.map((item) => (
                 <tr
                   key={item.id}
                   draggable
@@ -1244,7 +1271,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
                   </td>
                 </tr>
               ))}
-              {!loading && !error && visibleItems.length === 0 && (
+              {!loading && !folderItemsLoading && !error && visibleItems.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center text-sm text-zinc-600">
                     Keine Elemente in „{activeFolderName}“.

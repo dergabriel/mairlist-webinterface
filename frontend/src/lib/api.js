@@ -38,6 +38,10 @@ export function getTree() {
   return request("/tree");
 }
 
+export function getFolderChildren(id) {
+  return request(`/folders/${id}/children`);
+}
+
 export function createFolder(name, parentId) {
   return post("/folders", { name, parentId });
 }

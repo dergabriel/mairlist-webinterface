@@ -22,8 +22,16 @@ export function AppDataProvider({ children }) {
   }, []);
 
   const invalidate = useCallback((key) => {
-    if (key) delete cache.current[key];
-    else cache.current = {};
+    if (key && key.endsWith(":*")) {
+      const prefix = key.slice(0, -1); // keep the trailing ":"
+      for (const k of Object.keys(cache.current)) {
+        if (k.startsWith(prefix)) delete cache.current[k];
+      }
+    } else if (key) {
+      delete cache.current[key];
+    } else {
+      cache.current = {};
+    }
     setVersion((v) => v + 1); // trigger re-render in consumers
   }, []);
 

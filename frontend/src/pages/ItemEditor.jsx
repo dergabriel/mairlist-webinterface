@@ -359,10 +359,66 @@ function CueEditorTab({ item, updateCue }) {
 
   const waveformRef = useRef(null);
   const wavesurferRef = useRef(null);
+  const waveformContainerRef = useRef(null);
+  const durRef = useRef(dur);
+  durRef.current = dur;
 
   const cursorPct = (cursor / dur) * 100;
   const hookStart = (fromStorage(item.cue.hookIn ?? 0) / dur) * 100;
   const hookEnd = (fromStorage(item.cue.hookOut ?? 0) / dur) * 100;
+
+  const cueVal = (key) => {
+    const raw = item.cue?.[key];
+    return raw != null && raw !== "" ? fromStorage(Number(raw)) : null;
+  };
+  const cueInVal = cueVal("cueIn") ?? 0;
+  const cueOutVal = cueVal("cueOut");
+  const fadeInEnd = cueVal("fadeIn");
+  const fadeOutStart = cueVal("fadeOut");
+  const fadeOutEnd = cueVal("fadeEnd") ?? cueOutVal ?? dur;
+  const loopInVal = cueVal("loopIn");
+  const loopOutVal = cueVal("loopOut");
+
+  const pctOf = (sec) => (sec / dur) * 100;
+
+  // Marker whose drag currently hangs below the waveform, i.e. would delete
+  // the cue point on release. Drives the visual "about to delete" feedback.
+  const [dragBelowKey, setDragBelowKey] = useState(null);
+  const dragBelowRef = useRef(null);
+
+  // Drags a cue marker on the waveform: mousedown starts a global
+  // mousemove/mouseup pair that computes the percentage relative to the
+  // waveform container width and writes it live via updateCue. Dragging more
+  // than 24px below the waveform's bottom edge deletes the marker on release
+  // instead of repositioning it.
+  const beginMarkerDrag = (e, key) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const onMove = (ev) => {
+      const waveRect = waveformRef.current?.getBoundingClientRect();
+      if (waveRect && ev.clientY > waveRect.bottom + 24) {
+        dragBelowRef.current = key;
+        setDragBelowKey(key);
+        return;
+      }
+      dragBelowRef.current = null;
+      setDragBelowKey(null);
+      const rect = waveformContainerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const pct = Math.min(Math.max((ev.clientX - rect.left) / rect.width, 0), 1);
+      const secs = Number((pct * durRef.current).toFixed(3));
+      updateCue(key, toStorage(secs));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      if (dragBelowRef.current === key) clearCue(key);
+      dragBelowRef.current = null;
+      setDragBelowKey(null);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   // Mounts wavesurfer once per item. Real waveform + playback via the audio
   // stream endpoint; falls back to the synthetic bars below if the file
@@ -486,19 +542,24 @@ function CueEditorTab({ item, updateCue }) {
     <div className="space-y-5">
       {/* Waveform */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
-        <div className="relative pt-11">
-          {/* cue point markers: vertical line + staggered label, own colour per point */}
+        <div ref={waveformContainerRef} className="relative pt-11">
+          {/* cue point markers: draggable vertical line + staggered label, own colour per point */}
           {cueMarkers.map(({ point, pct, row }) => (
             <div
               key={point.key}
-              className="absolute bottom-4 z-20 w-px"
-              style={{ left: `${pct}%`, top: `${row * 13}px`, backgroundColor: point.color }}
+              onMouseDown={(e) => beginMarkerDrag(e, point.key)}
+              className={`absolute bottom-4 top-0 z-20 flex cursor-ew-resize justify-center transition-opacity ${
+                dragBelowKey === point.key ? "opacity-30" : ""
+              }`}
+              style={{ left: `${pct}%`, width: 12, marginLeft: -6 }}
+              title={`${point.label} verschieben — nach unten ziehen zum Löschen`}
             >
+              <div className="h-full w-px" style={{ backgroundColor: point.color }} />
               <div
-                className="absolute -left-1 top-0 -translate-y-full whitespace-nowrap rounded-sm px-1 text-[9px] font-medium leading-tight"
-                style={{ color: point.color, backgroundColor: "rgba(9, 9, 11, 0.85)" }}
+                className="pointer-events-none absolute -left-1 whitespace-nowrap rounded-sm px-1 text-[9px] font-medium leading-tight"
+                style={{ top: `${row * 13}px`, color: point.color, backgroundColor: "rgba(9, 9, 11, 0.85)" }}
               >
-                {point.label}
+                {dragBelowKey === point.key ? "Löschen" : point.label}
               </div>
             </div>
           ))}
@@ -509,6 +570,28 @@ function CueEditorTab({ item, updateCue }) {
               className="absolute top-0 bottom-0 z-10 bg-pink-500/15"
               style={{ left: `${hookStart}%`, width: `${Math.max(hookEnd - hookStart, 0)}%` }}
             />
+
+            {/* fade in */}
+            {fadeInEnd != null && fadeInEnd > cueInVal && (
+              <div
+                className="pointer-events-none absolute top-0 bottom-0 z-10 bg-blue-500/15"
+                style={{ left: `${pctOf(cueInVal)}%`, width: `${Math.max(pctOf(fadeInEnd) - pctOf(cueInVal), 0)}%` }}
+              />
+            )}
+            {/* fade out */}
+            {fadeOutStart != null && fadeOutEnd > fadeOutStart && (
+              <div
+                className="pointer-events-none absolute top-0 bottom-0 z-10 bg-blue-500/15"
+                style={{ left: `${pctOf(fadeOutStart)}%`, width: `${Math.max(pctOf(fadeOutEnd) - pctOf(fadeOutStart), 0)}%` }}
+              />
+            )}
+            {/* loop */}
+            {loopInVal != null && loopOutVal != null && loopOutVal > loopInVal && (
+              <div
+                className="pointer-events-none absolute top-0 bottom-0 z-10 bg-orange-500/15"
+                style={{ left: `${pctOf(loopInVal)}%`, width: `${Math.max(pctOf(loopOutVal) - pctOf(loopInVal), 0)}%` }}
+              />
+            )}
 
             {/* real waveform, mounted by wavesurfer.js */}
             <div ref={waveformRef} className={`h-full w-full ${audioReady ? "" : "invisible"}`} />

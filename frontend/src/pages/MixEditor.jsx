@@ -3,9 +3,9 @@ import WaveSurfer from "wavesurfer.js";
 import {
   LayoutDashboard, Settings, Database, Copy, ListMusic, Users, Tag, ScrollText,
   ChevronLeft, Sliders, Play, Pause, Square, Focus, Save, CircleDot,
-  Database as DatabaseIcon, AlertTriangle,
+  AlertTriangle,
 } from "lucide-react";
-import { getAudioUrl, savePlaylistItemOverrides, updateItem } from "../lib/api";
+import { getAudioUrl, savePlaylistItemOverrides } from "../lib/api";
 
 // --- Shared nav (mirrors Playlist/ItemEditor) ---
 
@@ -68,6 +68,7 @@ const PX_PER_SEC = 32;
 const TRACK_HEIGHT = 120;
 const LABEL_WIDTH = 208;
 const FOCUS_WINDOW = 10; // seconds shown on either side of a transition in focus mode
+const DRAG_THRESHOLD_PX = 4; // movement beyond this on a draggable lane counts as a drag, not a click
 
 // Tick spacing shrinks as we zoom in, mirroring ItemEditor's cue timeline.
 const tickIntervalFor = (totalSec, pxPerSec) => {
@@ -156,15 +157,29 @@ function TrackLabel({ track, focused, onFocus }) {
 function TrackRow({
   track, index, registerWs, onSeekPreview, onFocus, pxPerSec,
   overlapStartPx, overlapEndPx, onDragLane, onDragMarker, cueEdits,
-  onChipDrop, dragChipColor,
+  onChipDrop, dragChipColor, dragBelowKey,
 }) {
   const waveformRef = useRef(null);
   const wsRef = useRef(null);
   const [audioState, setAudioState] = useState("loading");
   const [chipDragOver, setChipDragOver] = useState(false);
   const [dropLabel, setDropLabel] = useState(null); // { x, y, text, color }
+  const [playheadPct, setPlayheadPct] = useState(0);
   const { item, duration, start } = track;
   const bars = useMemo(() => syntheticBars(item.internalId), [item.internalId]);
+
+  const cueVal = (key) => {
+    const raw = cueEdits[index]?.[key] ?? item.cue?.[key];
+    return raw != null && raw !== "" ? Number(raw) : null;
+  };
+  const cueInVal = cueVal("cueIn") ?? 0;
+  const cueOutVal = cueVal("cueOut");
+  const fadeInEnd = cueVal("fadeIn");
+  const fadeOutStart = cueVal("fadeOut");
+  const fadeOutEnd = cueVal("fadeEnd") ?? cueOutVal ?? duration;
+  const loopInVal = cueVal("loopIn");
+  const loopOutVal = cueVal("loopOut");
+  const pctOf = (sec) => (sec / Math.max(duration, 1)) * 100;
 
   const markers = useMemo(() => {
     return CUE_POINTS.filter((p) => {
@@ -200,6 +215,7 @@ function TrackRow({
 
     ws.on("ready", () => setAudioState("ready"));
     ws.on("error", () => setAudioState("unavailable"));
+    ws.on("timeupdate", (t) => setPlayheadPct((t / Math.max(duration, 1)) * 100));
 
     return () => {
       registerWs(index, null);
@@ -215,11 +231,33 @@ function TrackRow({
   const draggableLane = index > 0;
   const laneBg = index % 2 === 0 ? "bg-zinc-900" : "bg-zinc-950";
 
+  // Draggable lanes (index > 0) distinguish a click (seek) from a drag
+  // (edit startNext of the previous track) via a small movement threshold:
+  // if the pointer moves more than DRAG_THRESHOLD_PX before mouseup, treat
+  // it as a lane drag; otherwise treat it as a click-to-seek.
   const handleLaneMouseDown = (e) => {
     onFocus();
     if (!draggableLane) return;
     e.preventDefault();
-    onDragLane(e);
+    const startX = e.clientX;
+    let dragging = false;
+
+    const onMove = (ev) => {
+      if (!dragging && Math.abs(ev.clientX - startX) > DRAG_THRESHOLD_PX) {
+        dragging = true;
+        onDragLane(e);
+      }
+    };
+    const onUp = (ev) => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      if (!dragging) {
+        const t = dropTimeFromEvent(ev);
+        onSeekPreview(index, t);
+      }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   };
 
   const dropTimeFromEvent = (e) => {
@@ -309,6 +347,35 @@ function TrackRow({
           }}
           className={`h-full w-full ${draggableLane ? "" : "cursor-pointer"} ${audioReady ? "" : "invisible"}`}
         />
+
+        {/* playhead: orange vertical line tracking playback progress */}
+        <div
+          className="pointer-events-none absolute top-0 z-30 h-full w-px bg-orange-500"
+          style={{ left: `${playheadPct}%` }}
+        />
+
+        {/* fade in */}
+        {fadeInEnd != null && fadeInEnd > cueInVal && (
+          <div
+            className="pointer-events-none absolute top-0 z-10 h-full bg-blue-500/15"
+            style={{ left: `${pctOf(cueInVal)}%`, width: `${Math.max(pctOf(fadeInEnd) - pctOf(cueInVal), 0)}%` }}
+          />
+        )}
+        {/* fade out */}
+        {fadeOutStart != null && fadeOutEnd > fadeOutStart && (
+          <div
+            className="pointer-events-none absolute top-0 z-10 h-full bg-blue-500/15"
+            style={{ left: `${pctOf(fadeOutStart)}%`, width: `${Math.max(pctOf(fadeOutEnd) - pctOf(fadeOutStart), 0)}%` }}
+          />
+        )}
+        {/* loop */}
+        {loopInVal != null && loopOutVal != null && loopOutVal > loopInVal && (
+          <div
+            className="pointer-events-none absolute top-0 z-10 h-full bg-orange-500/15"
+            style={{ left: `${pctOf(loopInVal)}%`, width: `${Math.max(pctOf(loopOutVal) - pctOf(loopInVal), 0)}%` }}
+          />
+        )}
+
         {!audioReady && (
           <div className="pointer-events-none absolute inset-0 flex items-center gap-[1px] px-0.5">
             {bars.map((h, i) => (
@@ -330,11 +397,13 @@ function TrackRow({
               onMouseDown={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                onDragMarker(e, point.key);
+                onDragMarker(e, point.key, () => waveformRef.current?.getBoundingClientRect());
               }}
-              className="absolute top-0 z-20 flex h-full cursor-ew-resize items-start"
+              className={`absolute top-0 z-20 flex h-full cursor-ew-resize items-start transition-opacity ${
+                dragBelowKey === point.key ? "opacity-30" : ""
+              }`}
               style={{ left: `${pct}%`, width: isEmphasized ? 10 : 6, marginLeft: isEmphasized ? -5 : -3 }}
-              title={`${point.label} verschieben`}
+              title={`${point.label} verschieben — nach unten ziehen zum Löschen`}
             >
               <div
                 className="mx-auto h-full"
@@ -344,7 +413,7 @@ function TrackRow({
                 className="pointer-events-none absolute -left-1 top-0 -translate-y-full whitespace-nowrap rounded-sm px-1 text-[9px] font-medium leading-tight"
                 style={{ color: point.color, backgroundColor: "rgba(9, 9, 11, 0.85)" }}
               >
-                {point.label}
+                {dragBelowKey === point.key ? "Löschen" : point.label}
               </div>
             </div>
           );
@@ -516,11 +585,28 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     window.addEventListener("mouseup", onUp);
   }, [setStartNext]);
 
+  // { index, key } of the marker currently dragged more than 24px below its
+  // waveform's bottom edge, i.e. about to be deleted on release.
+  const [dragBelow, setDragBelow] = useState(null);
+  const dragBelowRef = useRef(null);
+
+  // Deletes cue point `cueKey` on track `index` by clearing its edit.
+  const clearCueEdit = useCallback((index, cueKey) => {
+    setCueEdits((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [cueKey]: null };
+      return next;
+    });
+    setSaveOk(null);
+  }, []);
+
   // Dragging an individual cue marker on track `index`. The startNext marker
   // is a special case: it's the same value the next track's lane drag edits,
   // so dragging it moves the next track along with it (handled naturally
-  // since both write to cueEdits[index].startNext).
-  const beginMarkerDrag = useCallback((index, cueKey, e) => {
+  // since both write to cueEdits[index].startNext). Dragging more than 24px
+  // below the waveform's bottom edge deletes the marker on release instead
+  // of repositioning it.
+  const beginMarkerDrag = useCallback((index, cueKey, e, getWaveformRect) => {
     const track = tracksRef.current[index];
     if (!track) return;
     const startX = e.clientX;
@@ -529,6 +615,15 @@ export default function MixEditor({ context, onBack, onNavigate }) {
       : Number(track.item.cue?.[cueKey]) || 0;
 
     const onMove = (ev) => {
+      const waveRect = getWaveformRect?.();
+      if (waveRect && ev.clientY > waveRect.bottom + 24) {
+        dragBelowRef.current = { index, key: cueKey };
+        setDragBelow({ index, key: cueKey });
+        return;
+      }
+      dragBelowRef.current = null;
+      setDragBelow(null);
+
       const deltaSec = (ev.clientX - startX) / pxPerSecRef.current;
       const raw = startValue + deltaSec;
       if (cueKey === "startNext") {
@@ -547,10 +642,15 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      if (dragBelowRef.current?.index === index && dragBelowRef.current?.key === cueKey) {
+        clearCueEdit(index, cueKey);
+      }
+      dragBelowRef.current = null;
+      setDragBelow(null);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-  }, [setStartNext]);
+  }, [setStartNext, clearCueEdit]);
 
   // Dropping a cue chip onto a waveform lane sets that cue point's value to
   // the drop position. startNext is a special case handled by setStartNext,
@@ -653,24 +753,6 @@ export default function MixEditor({ context, onBack, onNavigate }) {
         await savePlaylistItemOverrides(playlistId, items[i].position, overrides);
       }
       setSaveOk("hour");
-    } catch (err) {
-      setSaveError(err.message);
-    } finally {
-      setSavingScope(null);
-    }
-  };
-
-  const handleSaveDatabase = async () => {
-    setSavingScope("database");
-    setSaveError(null);
-    try {
-      for (let i = 0; i < items.length; i++) {
-        const edit = cueEdits[i];
-        const original = trackCues(items[i]);
-        if (!edit || edit.startNext === original.startNext) continue;
-        await updateItem(items[i].internalId, { cue: { ...items[i].cue, startNext: edit.startNext } });
-      }
-      setSaveOk("database");
     } catch (err) {
       setSaveError(err.message);
     } finally {
@@ -800,7 +882,6 @@ export default function MixEditor({ context, onBack, onNavigate }) {
             >
               <Square size={13} /> Stop
             </button>
-            <div className="mx-1 h-6 w-px bg-zinc-800" />
             {playlistId && (
               <button
                 onClick={handleSaveHour}
@@ -811,14 +892,6 @@ export default function MixEditor({ context, onBack, onNavigate }) {
                 <CircleDot size={14} /> {savingScope === "hour" ? "Speichert…" : "Für diese Stunde"}
               </button>
             )}
-            <button
-              onClick={handleSaveDatabase}
-              disabled={!hasChanges || saving}
-              className="flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
-              title="Schreibt den Overlap global in die Datenbank"
-            >
-              <DatabaseIcon size={14} /> {savingScope === "database" ? "Speichert…" : "In Datenbank"}
-            </button>
           </div>
         </div>
 
@@ -831,7 +904,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
         {saveOk && !saveError && (
           <div className="flex items-center gap-2 border-b border-zinc-800 bg-green-500/5 px-6 py-2.5 text-sm text-green-500">
             <Save size={14} />
-            <span>{saveOk === "hour" ? "Übergänge für diese Stunde gespeichert." : "Übergänge in der Datenbank gespeichert."}</span>
+            <span>Übergänge für diese Stunde gespeichert.</span>
           </div>
         )}
 
@@ -879,10 +952,11 @@ export default function MixEditor({ context, onBack, onNavigate }) {
                     overlapStartPx={prev ? overlapStartPx : null}
                     overlapEndPx={prev ? overlapEndPx : null}
                     onDragLane={(e) => beginLaneDrag(i, e)}
-                    onDragMarker={(e, cueKey) => beginMarkerDrag(i, cueKey, e)}
+                    onDragMarker={(e, cueKey, getWaveformRect) => beginMarkerDrag(i, cueKey, e, getWaveformRect)}
                     cueEdits={cueEdits}
                     onChipDrop={setCueByChipDrop}
                     dragChipColor={dragChip?.color}
+                    dragBelowKey={dragBelow?.index === i ? dragBelow.key : null}
                   />
                 );
               })}

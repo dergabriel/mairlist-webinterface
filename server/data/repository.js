@@ -8,6 +8,7 @@
 // Interface (keep stable across implementations):
 //   getFolderTree()          -> nested folder tree
 //   getFolderById(id)        -> single folder or null
+//   getFolderChildren(id)    -> { folders, items } directly under the folder (not recursive)
 //   createFolder(name, parentId) -> newly created folder
 //   renameFolder(id, name)   -> updated folder or null
 //   moveFolder(id, newParentId) -> updated folder, null if not found, false if it would create a cycle
@@ -76,6 +77,17 @@ function getFolderTree() {
 
 function getFolderById(id) {
   return folders.find((f) => f.id === Number(id)) || null;
+}
+
+// Direct (non-recursive) children of a folder: its immediate subfolders and
+// the items filed directly under it. Used to lazily populate the tree on
+// expand instead of shipping the whole library up front.
+function getFolderChildren(id) {
+  const folderId = Number(id);
+  return {
+    folders: folders.filter((f) => f.parentId === folderId),
+    items: items.filter((i) => i.folderId === folderId),
+  };
 }
 
 function nextFolderId() {
@@ -543,6 +555,7 @@ function removePlaylistItem(id, position) {
 module.exports = {
   getFolderTree,
   getFolderById,
+  getFolderChildren,
   createFolder,
   renameFolder,
   moveFolder,

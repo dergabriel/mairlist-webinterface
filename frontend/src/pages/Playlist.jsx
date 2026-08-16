@@ -9,6 +9,7 @@ import {
   getPlaylistsByDate, getPlaylistById, reorderPlaylist,
   insertPlaylistItem, removePlaylistItem, searchItems,
   getTree, getItems, getStorages, getArtists, getItemTypes, getAttributeKeys,
+  getFolderChildren,
 } from "../lib/api";
 import { useAppData } from "../lib/AppDataContext";
 import LibraryTree, { ALL_FILTER, filterItemsByTree } from "../components/LibraryTree";
@@ -560,6 +561,8 @@ function LibraryPanel({ onInsert, insertDisabled }) {
   const [treeError, setTreeError] = useState(null);
   const [expanded, setExpanded] = useState(() => new Set());
   const [filterState, setFilterState] = useState(ALL_FILTER);
+  const [folderItems, setFolderItems] = useState(null); // direct items of the selected folder, lazily loaded
+  const [folderItemsLoading, setFolderItemsLoading] = useState(false);
 
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState(null);
@@ -591,6 +594,23 @@ function LibraryPanel({ onInsert, insertDisabled }) {
       .finally(() => setTreeLoading(false));
   }, [getCached]);
 
+  // Lazily load the selected folder's direct items on demand instead of
+  // relying on the fully preloaded `items` array, fetched once per folder
+  // and cached under folder:${id} (invalidated by any library write).
+  useEffect(() => {
+    if (filterState.kind !== "folder") {
+      setFolderItems(null);
+      return;
+    }
+    let cancelled = false;
+    setFolderItemsLoading(true);
+    getCached(`folder:${filterState.folderId}`, () => getFolderChildren(filterState.folderId))
+      .then((data) => { if (!cancelled) setFolderItems(data.items); })
+      .catch(() => { if (!cancelled) setFolderItems([]); })
+      .finally(() => { if (!cancelled) setFolderItemsLoading(false); });
+    return () => { cancelled = true; };
+  }, [filterState, getCached]);
+
   // Free-text query goes to the search API (title/artist/comment); tree
   // selection alone filters the already-loaded item list client-side.
   useEffect(() => {
@@ -613,8 +633,13 @@ function LibraryPanel({ onInsert, insertDisabled }) {
   const visibleItems = useMemo(() => {
     const base = searchResults != null ? searchResults : items;
     if (filterState.kind === "all" || searchResults != null) return base;
+    if (filterState.kind === "folder") {
+      // Direct items only, lazily fetched per folder (see effect above) —
+      // no longer includes descendant items from the preloaded `items` array.
+      return folderItems || [];
+    }
     return filterItemsByTree(base, tree, filterState);
-  }, [items, tree, filterState, searchResults]);
+  }, [items, tree, filterState, searchResults, folderItems]);
 
   return (
     <div className="flex h-full">
@@ -654,17 +679,17 @@ function LibraryPanel({ onInsert, insertDisabled }) {
                   </td>
                 </tr>
               )}
-              {!searchLoading && !searchError && treeLoading && (
+              {!searchLoading && !searchError && (treeLoading || folderItemsLoading) && (
                 <tr>
                   <td colSpan={6} className="px-4 py-6 text-center text-sm text-zinc-600">Lade Elemente…</td>
                 </tr>
               )}
-              {!searchLoading && !searchError && !treeLoading && visibleItems.length === 0 && (
+              {!searchLoading && !searchError && !treeLoading && !folderItemsLoading && visibleItems.length === 0 && (
                 <tr>
                   <td colSpan={6} className="px-4 py-6 text-center text-sm text-zinc-600">Keine Treffer.</td>
                 </tr>
               )}
-              {!searchLoading && !searchError && !treeLoading && visibleItems.map((item) => (
+              {!searchLoading && !searchError && !treeLoading && !folderItemsLoading && visibleItems.map((item) => (
                 <tr
                   key={item.id}
                   onDoubleClick={() => !insertDisabled && onInsert(item)}

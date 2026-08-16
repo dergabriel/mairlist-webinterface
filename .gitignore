@@ -38,3 +38,4 @@ test-results/
 *.mldb
 *.mldb-wal
 *.mldb-shm
+*.test.mldb

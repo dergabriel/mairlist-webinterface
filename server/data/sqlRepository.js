@@ -8,6 +8,7 @@
 const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const { CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
 const { verifyPassword, hashPassword } = require("../lib/passwordHash");
 
@@ -907,6 +908,45 @@ function setUserPermissions(id, scopeId, permissions) {
   return getUserPermissions(id);
 }
 
+// ---- admin: API tokens ----
+//
+// auth_tokens(id, user_id, scope_id, token, refresh_token, auth_code,
+// permissions, created, expires) — see PRAGMA table_info(auth_tokens).
+
+function rowToToken(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    scopeId: row.scope_id,
+    token: row.token,
+    created: row.created,
+    expires: row.expires,
+  };
+}
+
+function getTokensByUserId(userId) {
+  return db
+    .prepare("SELECT id, user_id, scope_id, token, created, expires FROM auth_tokens WHERE user_id = ? ORDER BY created DESC")
+    .all(Number(userId))
+    .map(rowToToken);
+}
+
+function createToken(userId, scopeId) {
+  const token = crypto.randomBytes(32).toString("hex");
+  const info = db
+    .prepare("INSERT INTO auth_tokens (user_id, scope_id, token) VALUES (?, ?, ?)")
+    .run(Number(userId), scopeId, token);
+  const row = db
+    .prepare("SELECT id, user_id, scope_id, token, created, expires FROM auth_tokens WHERE id = ?")
+    .get(info.lastInsertRowid);
+  return rowToToken(row);
+}
+
+function deleteToken(tokenId) {
+  const info = db.prepare("DELETE FROM auth_tokens WHERE id = ?").run(Number(tokenId));
+  return info.changes > 0;
+}
+
 module.exports = {
   getFolderTree,
   getFolderById,
@@ -956,4 +996,7 @@ module.exports = {
   changeUserPassword,
   getUserPermissions,
   setUserPermissions,
+  getTokensByUserId,
+  createToken,
+  deleteToken,
 };

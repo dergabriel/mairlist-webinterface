@@ -191,3 +191,15 @@ export function changeUserPassword(id, password) {
 export function setUserPermissions(id, scopeId, permissions) {
   return put(`/auth/admin/users/${id}/permissions`, { scopeId, permissions });
 }
+
+export function getUserTokens(id) {
+  return request(`/auth/admin/users/${id}/tokens`);
+}
+
+export function createUserToken(id) {
+  return post(`/auth/admin/users/${id}/tokens`, {});
+}
+
+export function deleteUserToken(id, tokenId) {
+  return request(`/auth/admin/users/${id}/tokens/${tokenId}`, { method: "DELETE" });
+}

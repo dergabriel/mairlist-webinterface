@@ -126,4 +126,31 @@ router.put("/admin/users/:id/permissions", requireAuth, requireScope("admin"), (
   } catch (e) { next(e); }
 });
 
+// ---- admin: API tokens ----
+
+router.get("/admin/users/:id/tokens", requireAuth, requireScope("admin"), (req, res, next) => {
+  try {
+    const user = repo.getUserWithScopes(req.params.id);
+    if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+    res.json(repo.getTokensByUserId(req.params.id));
+  } catch (e) { next(e); }
+});
+
+router.post("/admin/users/:id/tokens", requireAuth, requireScope("admin"), (req, res, next) => {
+  try {
+    const user = repo.getUserWithScopes(req.params.id);
+    if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+    const scopeId = req.body?.scopeId ?? user.scopes?.[0]?.scopeId ?? 1;
+    res.status(201).json(repo.createToken(req.params.id, scopeId));
+  } catch (e) { next(e); }
+});
+
+router.delete("/admin/users/:id/tokens/:tokenId", requireAuth, requireScope("admin"), (req, res, next) => {
+  try {
+    const deleted = repo.deleteToken(req.params.tokenId);
+    if (!deleted) return res.status(404).json({ error: "Token nicht gefunden" });
+    res.status(204).end();
+  } catch (e) { next(e); }
+});
+
 module.exports = router;

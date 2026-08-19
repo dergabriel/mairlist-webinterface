@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback } from "react";
 import {
   LayoutDashboard, Settings as SettingsIcon, Database, Copy, ListMusic,
   Users as UsersIcon, Tag, ScrollText, LogOut, Plus, Trash2, Save,
-  AlertTriangle, X, Check, UserCircle,
+  AlertTriangle, X, Check, UserCircle, KeyRound, ClipboardCopy,
 } from "lucide-react";
 import {
   getUsers, getAdminUserById, createUser, updateUser, deleteUser,
   changeUserPassword, setUserPermissions,
+  getUserTokens, createUserToken, deleteUserToken,
 } from "../../lib/api";
 import { useAuth } from "../../lib/AuthContext";
 
@@ -179,6 +180,166 @@ const LIBRARY_PERMISSIONS = ["All", "ReadOnly", "None"];
 
 const emptyPermissions = () => ({ UserLevel: "User", GeneralPermissions: "None", LibraryPermissions: "None" });
 
+function formatDateTime(value) {
+  if (!value) return "–";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString("de-DE");
+}
+
+function TokensSection({ userId }) {
+  const [tokens, setTokens] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const [newToken, setNewToken] = useState(null);
+  const [copiedId, setCopiedId] = useState(null);
+
+  const loadTokens = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const list = await getUserTokens(userId);
+      setTokens(list);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    loadTokens();
+    setNewToken(null);
+  }, [loadTokens]);
+
+  const copyToClipboard = async (value, id) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch {
+      // Clipboard-Zugriff kann vom Browser verweigert werden; still ignorieren
+    }
+  };
+
+  const generate = async () => {
+    setGenerating(true);
+    setError(null);
+    try {
+      const created = await createUserToken(userId);
+      setNewToken(created);
+      await loadTokens();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const remove = async (tokenId) => {
+    setError(null);
+    try {
+      await deleteUserToken(userId, tokenId);
+      if (newToken?.id === tokenId) setNewToken(null);
+      await loadTokens();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900">
+      <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-3">
+        <span className="text-sm font-semibold text-zinc-100">API-Tokens</span>
+        <button
+          onClick={generate}
+          disabled={generating}
+          className="flex items-center gap-1.5 rounded-md bg-green-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
+        >
+          <Plus size={13} />
+          <span>{generating ? "Wird generiert…" : "Neuen Token generieren"}</span>
+        </button>
+      </div>
+
+      <div className="px-5 py-5">
+        {newToken && (
+          <div className="mb-4 rounded-md border border-orange-500/40 bg-orange-500/10 px-4 py-3">
+            <div className="mb-1.5 flex items-center gap-2 text-xs text-orange-400">
+              <AlertTriangle size={13} />
+              <span>Token wird nur einmal angezeigt</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 truncate rounded bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-100">
+                {newToken.token}
+              </code>
+              <button
+                onClick={() => copyToClipboard(newToken.token, "new")}
+                className="flex shrink-0 items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+              >
+                {copiedId === "new" ? <Check size={13} className="text-green-500" /> : <ClipboardCopy size={13} />}
+                <span>{copiedId === "new" ? "Kopiert" : "Kopieren"}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="mb-3 flex items-center gap-2 text-sm text-red-500">
+            <AlertTriangle size={14} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading && <div className="text-sm text-zinc-500">Lädt…</div>}
+
+        {!loading && tokens.length === 0 && (
+          <div className="text-sm text-zinc-600">Keine Tokens vorhanden</div>
+        )}
+
+        {!loading && tokens.length > 0 && (
+          <div className="space-y-2">
+            {tokens.map((t) => (
+              <div
+                key={t.id}
+                className="flex items-center justify-between gap-3 rounded-md border border-zinc-800 px-3 py-2.5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <KeyRound size={14} className="shrink-0 text-zinc-600" />
+                  <div className="min-w-0">
+                    <div className="truncate font-mono text-sm text-zinc-200">
+                      {t.token.slice(0, 8)}…
+                    </div>
+                    <div className="truncate text-xs text-zinc-500">
+                      Erstellt {formatDateTime(t.created)} · Läuft ab {formatDateTime(t.expires)}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    onClick={() => copyToClipboard(t.token, t.id)}
+                    className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+                  >
+                    {copiedId === t.id ? <Check size={13} className="text-green-500" /> : <ClipboardCopy size={13} />}
+                    <span>{copiedId === t.id ? "Kopiert" : "Kopieren"}</span>
+                  </button>
+                  <button
+                    onClick={() => remove(t.id)}
+                    className="flex items-center gap-1.5 rounded-md bg-red-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-500"
+                  >
+                    <Trash2 size={13} />
+                    <span>Token löschen</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
   const [name, setName] = useState(user.name);
   const [description, setDescription] = useState(user.description || "");
@@ -305,6 +466,8 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
           </label>
         </div>
       </div>
+
+      <TokensSection userId={user.id} />
 
       {error && (
         <div className="flex items-center gap-2 text-sm text-red-500">

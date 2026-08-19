@@ -53,6 +53,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { storages, folders, items, ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS, playlists } = require("./mockData");
 
 // ---- auth (mock) ----
@@ -138,6 +139,44 @@ function setUserPermissions(id, scopeId, permissions) {
   }
   mockUserScopes.set(userId, scopes);
   return scopes;
+}
+
+const mockTokens = new Map(); // userId -> array of token rows
+let nextMockTokenId = 1;
+
+function getTokensByUserId(userId) {
+  return mockTokens.get(Number(userId)) || [];
+}
+
+function createToken(userId, scopeId) {
+  const token = {
+    id: nextMockTokenId++,
+    userId: Number(userId),
+    scopeId,
+    token: crypto.randomBytes(32).toString("hex"),
+    refreshToken: null,
+    authCode: null,
+    permissions: null,
+    created: new Date().toISOString(),
+    expires: null,
+  };
+  const list = mockTokens.get(Number(userId)) || [];
+  list.push(token);
+  mockTokens.set(Number(userId), list);
+  return token;
+}
+
+function deleteToken(tokenId) {
+  const id = Number(tokenId);
+  for (const [userId, list] of mockTokens) {
+    const index = list.findIndex((t) => t.id === id);
+    if (index !== -1) {
+      list.splice(index, 1);
+      mockTokens.set(userId, list);
+      return true;
+    }
+  }
+  return false;
 }
 
 function getUserByUsername(username) {
@@ -755,4 +794,7 @@ module.exports = {
   changeUserPassword,
   getUserPermissions,
   setUserPermissions,
+  getTokensByUserId,
+  createToken,
+  deleteToken,
 };

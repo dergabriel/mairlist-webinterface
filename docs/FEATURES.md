@@ -23,6 +23,39 @@ Legende: ✅ fertig (gegen Mock) · 🚧 in Arbeit · ⬜ offen · 🔽 späte P
 - Playlist-Insert ebenfalls getestet und funktioniert
 - `.mldb` Dateien in `.gitignore`, nie ins Repo
 
+**Read-Paths:**
+
+| Funktion | Status |
+|---|---|
+| `getFolderTree`, `getFolderById`, `getFolderChildren` | ✅ |
+| `getStorages` | ✅ |
+| `getItemTypes`, `getArtists`, `getAttributeKeys`, `getAttributeDefinitions` | ✅ |
+| `getItems`, `getItemById`, `searchItems` | ✅ |
+| `getCuePoints`, `getItemHistory` | ✅ |
+| `getPlaylistsByDate`, `getPlaylistById` | ✅ |
+| `getUserByUsername`, `getUserById`, `getScopesByUserId`, `getScopesByGroupId` | ✅ |
+| `getSessionBySid` | ✅ |
+
+**Write-Paths** (smoke-getestet gegen Kopie `mairlist.test.mldb`, siehe `server/scripts/smoke-writes.js`):
+
+| Funktion | Status |
+|---|---|
+| `createItem` | ✅ |
+| `updateItem` | ✅ |
+| `deleteItem` | ✅ |
+| `moveItemToFolder` | ✅ |
+| `createFolder` | ✅ |
+| `renameFolder` | ✅ |
+| `moveFolder` | ✅ |
+| `deleteFolder` | ✅ |
+| `insertPlaylistItem` | ✅ |
+| `removePlaylistItem` | ✅ |
+| `reorderPlaylist` | ✅ |
+| `savePlaylistItemOverrides` | 🟡 nicht smoke-getestet |
+| `createSession`, `deleteSession` | 🟡 nicht smoke-getestet |
+| `createStorage`, `updateStorage`, `deleteStorage` | 🟡 nicht smoke-getestet |
+| `uploadFile` | 🟡 nicht smoke-getestet |
+
 **Offene TODOs in sqlRepository.js:**
 - `getItemHistory()` gibt leeres Array zurück (`playlistlog` noch nicht angebunden)
 - `writeHour()` macht DELETE+INSERT der ganzen Stunde statt gezielter Position-Shifts

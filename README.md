@@ -69,7 +69,7 @@ Details je Phase in [`docs/FEATURES.md`](docs/FEATURES.md).
 | **D** | **Mix Editor**: Timeline über mehrere Items, Volume-Hüllkurven, Übergänge programmieren | ✅ Mix Editor fertig — Song-Drag, alle 17 Cue-Marker draggbar, Overlap-Visualisierung, Audio-Streaming, Fokus-Modus, Speichern als Playlist-Override oder global |
 | **E** | **Voice Tracking**: VT Recorder im Browser, Preroll/Record/StartNext-Ablauf, Einbettung mit Hüllkurve | ⬜ |
 | **F** | Mehrbenutzer: Login, Rollen (Read-only, Studio, DJ, VTDJ, Admin), Konflikt-Erkennung bei Playlists, Logs | 🟡 Login + Auth-Middleware fertig, aber nur admin/library.read/library.write — die 5 Rollen, Konflikt-Erkennung und Logs fehlen noch |
-| **G** | Echte Datenbank: Schema ziehen, Semantik per Diff dokumentieren, Repository auf SQL umstellen, Schreib-Beweis | ✅ fertig — `sqlRepository.js` mit better-sqlite3, Write-Beweis bestanden, `DATA_SOURCE=sqlite` aktiviert |
+| **G** | Echte DB: SQLite (better-sqlite3), 12/12 Write-Paths verified | ✅ |
 | **H** | Produktivbetrieb: Backup, Caddy, TLS, eingeschränkter DB User | ⬜ |
 | **I** 🔽 | Mini Scheduler (Vorlagen, automatische Planung), Werbung/Kampagnen | ⬜ späte Phase |
 

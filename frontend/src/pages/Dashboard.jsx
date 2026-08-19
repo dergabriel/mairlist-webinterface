@@ -125,7 +125,7 @@ export default function Dashboard({ onNavigate, onEditItem }) {
 
         <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Administration</div>
         <nav className="space-y-0.5">
-          <NavItem icon={Users} label="Benutzer" />
+          <NavItem icon={Users} label="Benutzer" onClick={() => onNavigate?.("users")} />
           <NavItem icon={Tag} label="Gruppen" />
           <NavItem icon={ScrollText} label="Logs" />
         </nav>

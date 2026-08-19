@@ -44,6 +44,8 @@ const folders = [
 const ITEM_TYPES = [
   { key: "music",       label: "Music",       note: "Regulärer Musiktitel" },
   { key: "jingle",      label: "Jingle",      note: "Kennung, Soundeffekt, Dropper, Station ID, Promo, Trailer" },
+  { key: "drop",        label: "Drop",        note: "Kurzer Dropper" },
+  { key: "sweeper",     label: "Sweeper",     note: "Übergangs-Element" },
   { key: "advertising", label: "Advertising", note: "Werbespot, kommerzieller Einschub" },
   { key: "news",        label: "News",        note: "Nachrichtenbeitrag, Nachrichten-Enhancer" },
   { key: "weather",     label: "Weather",     note: "Wetterbericht, Wetterbett" },

@@ -163,3 +163,31 @@ export function removePlaylistItem(id, position) {
 export function savePlaylistItemOverrides(id, position, overrides) {
   return put(`/playlists/${id}/items/${position}/overrides`, { overrides });
 }
+
+export function getUsers() {
+  return request("/auth/admin/users");
+}
+
+export function getAdminUserById(id) {
+  return request(`/auth/admin/users/${id}`);
+}
+
+export function createUser(data) {
+  return post("/auth/admin/users", data);
+}
+
+export function updateUser(id, data) {
+  return put(`/auth/admin/users/${id}`, data);
+}
+
+export function deleteUser(id) {
+  return request(`/auth/admin/users/${id}`, { method: "DELETE" });
+}
+
+export function changeUserPassword(id, password) {
+  return put(`/auth/admin/users/${id}/password`, { password });
+}
+
+export function setUserPermissions(id, scopeId, permissions) {
+  return put(`/auth/admin/users/${id}/permissions`, { scopeId, permissions });
+}

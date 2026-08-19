@@ -4,7 +4,7 @@ const router = express.Router();
 const repo = process.env.DATA_SOURCE === "sqlite"
   ? require("../data/sqlRepository")
   : require("../data/repository");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, requireScope } = require("../middleware/auth");
 
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8h
 
@@ -53,6 +53,77 @@ router.post("/logout", (req, res, next) => {
 // GET /api/auth/me -> current user, or 401 if not logged in
 router.get("/me", requireAuth, (req, res) => {
   res.json(req.user);
+});
+
+// ---- admin: user management ----
+// All routes below require an authenticated session with the "admin" scope
+// (UserLevel "Admin" or LibraryPermissions "All" — see middleware/auth.js).
+
+router.get("/admin/users", requireAuth, requireScope("admin"), (req, res, next) => {
+  try {
+    res.json(repo.getUsers());
+  } catch (e) { next(e); }
+});
+
+router.get("/admin/users/:id", requireAuth, requireScope("admin"), (req, res, next) => {
+  try {
+    const user = repo.getUserWithScopes(req.params.id);
+    if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+    res.json(user);
+  } catch (e) { next(e); }
+});
+
+router.post("/admin/users", requireAuth, requireScope("admin"), (req, res, next) => {
+  try {
+    const { name, description, password } = req.body || {};
+    if (!name || !password) {
+      return res.status(400).json({ error: "Name und Passwort sind erforderlich" });
+    }
+    res.status(201).json(repo.createUser(name, description, password));
+  } catch (e) { next(e); }
+});
+
+router.put("/admin/users/:id", requireAuth, requireScope("admin"), (req, res, next) => {
+  try {
+    const { name, description } = req.body || {};
+    if (!name) return res.status(400).json({ error: "Name ist erforderlich" });
+    const user = repo.updateUser(req.params.id, name, description);
+    if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+    res.json(user);
+  } catch (e) { next(e); }
+});
+
+router.delete("/admin/users/:id", requireAuth, requireScope("admin"), (req, res, next) => {
+  try {
+    if (String(req.user.id) === String(req.params.id)) {
+      return res.status(400).json({ error: "Der eigene Account kann nicht gelöscht werden" });
+    }
+    const deleted = repo.deleteUser(req.params.id);
+    if (!deleted) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+    res.status(204).end();
+  } catch (e) { next(e); }
+});
+
+router.put("/admin/users/:id/password", requireAuth, requireScope("admin"), (req, res, next) => {
+  try {
+    const { password } = req.body || {};
+    if (!password) return res.status(400).json({ error: "Passwort ist erforderlich" });
+    const ok = repo.changeUserPassword(req.params.id, password);
+    if (!ok) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+    res.status(204).end();
+  } catch (e) { next(e); }
+});
+
+router.put("/admin/users/:id/permissions", requireAuth, requireScope("admin"), (req, res, next) => {
+  try {
+    const { scopeId, permissions } = req.body || {};
+    if (!scopeId || !permissions) {
+      return res.status(400).json({ error: "scopeId und permissions sind erforderlich" });
+    }
+    const user = repo.getUserWithScopes(req.params.id);
+    if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+    res.json(repo.setUserPermissions(req.params.id, scopeId, permissions));
+  } catch (e) { next(e); }
 });
 
 module.exports = router;

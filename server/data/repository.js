@@ -67,6 +67,79 @@ const MOCK_PERMISSIONS = [
 ];
 const mockSessions = new Map(); // sid -> { userId, expiresAt }
 
+// ---- admin: user management (mock) ----
+//
+// Structure mirrors sqlRepository's admin functions, backed by an in-memory
+// array instead of auth_users/auth_user_scopes. MOCK_USER (id 1, "admin")
+// is always present and carries MOCK_PERMISSIONS under scope id 1, matching
+// the single auth_scopes row the real DB has.
+
+const mockUsers = [
+  { id: MOCK_USER.id, name: MOCK_USER.username, description: "Administrator" },
+];
+let nextMockUserId = 2;
+const mockUserScopes = new Map([
+  [MOCK_USER.id, [{ scopeId: 1, scopeName: "", permissions: MOCK_PERMISSIONS[0] }]],
+]);
+
+function rowToUserSummary(u) {
+  return { id: u.id, name: u.name, description: u.description || "" };
+}
+
+function getUsers() {
+  return mockUsers.map(rowToUserSummary);
+}
+
+function getUserWithScopes(id) {
+  const u = mockUsers.find((x) => x.id === Number(id));
+  if (!u) return null;
+  return { ...rowToUserSummary(u), scopes: getUserPermissions(id) };
+}
+
+function createUser(name, description) {
+  const user = { id: nextMockUserId++, name: (name || "").trim(), description: description || "" };
+  mockUsers.push(user);
+  mockUserScopes.set(user.id, []);
+  return getUserWithScopes(user.id);
+}
+
+function updateUser(id, name, description) {
+  const u = mockUsers.find((x) => x.id === Number(id));
+  if (!u) return null;
+  u.name = (name || "").trim();
+  u.description = description || "";
+  return getUserWithScopes(id);
+}
+
+function deleteUser(id) {
+  const index = mockUsers.findIndex((x) => x.id === Number(id));
+  if (index === -1) return false;
+  mockUsers.splice(index, 1);
+  mockUserScopes.delete(Number(id));
+  return true;
+}
+
+function changeUserPassword(id) {
+  return mockUsers.some((x) => x.id === Number(id));
+}
+
+function getUserPermissions(id) {
+  return mockUserScopes.get(Number(id)) || [];
+}
+
+function setUserPermissions(id, scopeId, permissions) {
+  const userId = Number(id);
+  const scopes = mockUserScopes.get(userId) || [];
+  const existing = scopes.find((s) => s.scopeId === scopeId);
+  if (existing) {
+    existing.permissions = permissions;
+  } else {
+    scopes.push({ scopeId, scopeName: "", permissions });
+  }
+  mockUserScopes.set(userId, scopes);
+  return scopes;
+}
+
 function getUserByUsername(username) {
   if (username !== MOCK_USER.username) return null;
   return { id: MOCK_USER.id, username: MOCK_USER.username };
@@ -674,4 +747,12 @@ module.exports = {
   getSessionBySid,
   deleteSession,
   verifyUserPassword,
+  getUsers,
+  getUserWithScopes,
+  createUser,
+  updateUser,
+  deleteUser,
+  changeUserPassword,
+  getUserPermissions,
+  setUserPermissions,
 };

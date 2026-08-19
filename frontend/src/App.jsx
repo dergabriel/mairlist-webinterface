@@ -9,6 +9,7 @@ import Playlist from './pages/Playlist'
 import MixEditor from './pages/MixEditor'
 import Settings from './pages/Settings'
 import Logs from './pages/Logs'
+import Users from './pages/admin/Users'
 
 function AppShell() {
   const { user, loading } = useAuth()
@@ -63,6 +64,9 @@ function AppShell() {
           </div>
           <div style={{ display: view === 'logs' ? 'contents' : 'none' }}>
             <Logs onNavigate={navigate} />
+          </div>
+          <div style={{ display: view === 'users' ? 'contents' : 'none' }}>
+            <Users onNavigate={navigate} />
           </div>
           <div style={{ display: view === 'mixeditor' ? 'contents' : 'none' }}>
             <MixEditor

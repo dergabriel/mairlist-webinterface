@@ -9,7 +9,7 @@ const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
 const { CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
-const { verifyPassword } = require("../lib/passwordHash");
+const { verifyPassword, hashPassword } = require("../lib/passwordHash");
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "../mairlist.mldb");
 const db = new Database(DB_PATH, { readonly: false });
@@ -810,6 +810,103 @@ function verifyUserPassword(user, password) {
   return verifyPassword(password, user.pwSalt, user.pwHash);
 }
 
+// ---- admin: user management ----
+
+function rowToUserSummary(row) {
+  return { id: row.id, name: row.name, description: row.description || "" };
+}
+
+function getUsers() {
+  return db.prepare("SELECT id, name, description FROM auth_users ORDER BY name").all().map(rowToUserSummary);
+}
+
+function getUserWithScopes(id) {
+  const row = db.prepare("SELECT id, name, description FROM auth_users WHERE id = ?").get(Number(id));
+  if (!row) return null;
+  return { ...rowToUserSummary(row), scopes: getUserPermissions(id) };
+}
+
+function createUser(name, description, password) {
+  const { pwSalt, pwHash } = hashPassword(password);
+  const info = db
+    .prepare("INSERT INTO auth_users (name, description, pw_salt, pw_hash) VALUES (?, ?, ?, ?)")
+    .run((name || "").trim(), description || "", pwSalt, pwHash);
+  return getUserWithScopes(info.lastInsertRowid);
+}
+
+function updateUser(id, name, description) {
+  const row = db.prepare("SELECT id FROM auth_users WHERE id = ?").get(Number(id));
+  if (!row) return null;
+  db.prepare("UPDATE auth_users SET name = ?, description = ? WHERE id = ?").run(
+    (name || "").trim(),
+    description || "",
+    Number(id)
+  );
+  return getUserWithScopes(id);
+}
+
+function deleteUser(id) {
+  const row = db.prepare("SELECT id FROM auth_users WHERE id = ?").get(Number(id));
+  if (!row) return false;
+  const userId = Number(id);
+  const run = db.transaction(() => {
+    db.prepare("DELETE FROM auth_user_scopes WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM auth_group_members WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM auth_sessions WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM auth_users WHERE id = ?").run(userId);
+  });
+  run();
+  return true;
+}
+
+function changeUserPassword(id, password) {
+  const row = db.prepare("SELECT id FROM auth_users WHERE id = ?").get(Number(id));
+  if (!row) return false;
+  const { pwSalt, pwHash } = hashPassword(password);
+  db.prepare("UPDATE auth_users SET pw_salt = ?, pw_hash = ? WHERE id = ?").run(pwSalt, pwHash, Number(id));
+  return true;
+}
+
+// auth_user_scopes rows for this user, joined with auth_scopes for its name.
+function getUserPermissions(id) {
+  const rows = db
+    .prepare(
+      `SELECT s.scope_id, sc.name AS scope_name, s.permissions
+       FROM auth_user_scopes s
+       JOIN auth_scopes sc ON sc.id = s.scope_id
+       WHERE s.user_id = ?`
+    )
+    .all(Number(id));
+  return rows.map((r) => ({
+    scopeId: r.scope_id,
+    scopeName: r.scope_name,
+    permissions: parsePermissions(r.permissions),
+  }));
+}
+
+// Upserts the permissions JSON blob for (userId, scopeId).
+function setUserPermissions(id, scopeId, permissions) {
+  const userId = Number(id);
+  const existing = db
+    .prepare("SELECT 1 FROM auth_user_scopes WHERE user_id = ? AND scope_id = ?")
+    .get(userId, scopeId);
+  const json = JSON.stringify(permissions);
+  if (existing) {
+    db.prepare("UPDATE auth_user_scopes SET permissions = ? WHERE user_id = ? AND scope_id = ?").run(
+      json,
+      userId,
+      scopeId
+    );
+  } else {
+    db.prepare("INSERT INTO auth_user_scopes (user_id, scope_id, permissions) VALUES (?, ?, ?)").run(
+      userId,
+      scopeId,
+      json
+    );
+  }
+  return getUserPermissions(id);
+}
+
 module.exports = {
   getFolderTree,
   getFolderById,
@@ -851,4 +948,12 @@ module.exports = {
   getSessionBySid,
   deleteSession,
   verifyUserPassword,
+  getUsers,
+  getUserWithScopes,
+  createUser,
+  updateUser,
+  deleteUser,
+  changeUserPassword,
+  getUserPermissions,
+  setUserPermissions,
 };

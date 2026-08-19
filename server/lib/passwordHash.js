@@ -16,4 +16,15 @@ function verifyPassword(password, pwSalt, pwHash) {
   return computed === pwHash;
 }
 
-module.exports = { verifyPassword };
+// Same MD5(salt+password) scheme as verifyPassword, used when creating a
+// user or changing a password. Salt is random hex, matching real auth_users rows.
+function hashPassword(password) {
+  const pwSalt = crypto.randomBytes(16).toString("hex");
+  const pwHash = crypto
+    .createHash("md5")
+    .update(pwSalt + password, "utf8")
+    .digest("hex");
+  return { pwSalt, pwHash };
+}
+
+module.exports = { verifyPassword, hashPassword };

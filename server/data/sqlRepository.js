@@ -947,6 +947,123 @@ function deleteToken(tokenId) {
   return info.changes > 0;
 }
 
+// ---- admin: group management ----
+
+function rowToGroupSummary(row) {
+  return { id: row.id, name: row.name, description: row.description || "" };
+}
+
+function getGroups() {
+  return db.prepare("SELECT id, name, description FROM auth_groups ORDER BY name").all().map(rowToGroupSummary);
+}
+
+// auth_group_members rows for this group, joined with auth_users for their name.
+function getGroupMembers(id) {
+  const rows = db
+    .prepare(
+      `SELECT u.id, u.name, u.description
+       FROM auth_group_members gm
+       JOIN auth_users u ON u.id = gm.user_id
+       WHERE gm.group_id = ?
+       ORDER BY u.name`
+    )
+    .all(Number(id));
+  return rows.map(rowToUserSummary);
+}
+
+// auth_group_scopes rows for this group, joined with auth_scopes for its name.
+function getGroupPermissions(id) {
+  const rows = db
+    .prepare(
+      `SELECT s.scope_id, sc.name AS scope_name, s.permissions
+       FROM auth_group_scopes s
+       JOIN auth_scopes sc ON sc.id = s.scope_id
+       WHERE s.group_id = ?`
+    )
+    .all(Number(id));
+  return rows.map((r) => ({
+    scopeId: r.scope_id,
+    scopeName: r.scope_name,
+    permissions: parsePermissions(r.permissions),
+  }));
+}
+
+function getGroupById(id) {
+  const row = db.prepare("SELECT id, name, description FROM auth_groups WHERE id = ?").get(Number(id));
+  if (!row) return null;
+  return { ...rowToGroupSummary(row), members: getGroupMembers(id), scopes: getGroupPermissions(id) };
+}
+
+function createGroup(name, description) {
+  const info = db
+    .prepare("INSERT INTO auth_groups (name, description) VALUES (?, ?)")
+    .run((name || "").trim(), description || "");
+  return getGroupById(info.lastInsertRowid);
+}
+
+function updateGroup(id, name, description) {
+  const row = db.prepare("SELECT id FROM auth_groups WHERE id = ?").get(Number(id));
+  if (!row) return null;
+  db.prepare("UPDATE auth_groups SET name = ?, description = ? WHERE id = ?").run(
+    (name || "").trim(),
+    description || "",
+    Number(id)
+  );
+  return getGroupById(id);
+}
+
+function deleteGroup(id) {
+  const row = db.prepare("SELECT id FROM auth_groups WHERE id = ?").get(Number(id));
+  if (!row) return false;
+  const groupId = Number(id);
+  const run = db.transaction(() => {
+    db.prepare("DELETE FROM auth_group_scopes WHERE group_id = ?").run(groupId);
+    db.prepare("DELETE FROM auth_group_members WHERE group_id = ?").run(groupId);
+    db.prepare("DELETE FROM auth_groups WHERE id = ?").run(groupId);
+  });
+  run();
+  return true;
+}
+
+function addGroupMember(groupId, userId) {
+  db.prepare("INSERT OR IGNORE INTO auth_group_members (group_id, user_id) VALUES (?, ?)").run(
+    Number(groupId),
+    Number(userId)
+  );
+  return getGroupById(groupId);
+}
+
+function removeGroupMember(groupId, userId) {
+  db.prepare("DELETE FROM auth_group_members WHERE group_id = ? AND user_id = ?").run(
+    Number(groupId),
+    Number(userId)
+  );
+  return getGroupById(groupId);
+}
+
+// Upserts the permissions JSON blob for (groupId, scopeId).
+function setGroupPermissions(groupId, scopeId, permissions) {
+  const gId = Number(groupId);
+  const existing = db
+    .prepare("SELECT 1 FROM auth_group_scopes WHERE group_id = ? AND scope_id = ?")
+    .get(gId, scopeId);
+  const json = JSON.stringify(permissions);
+  if (existing) {
+    db.prepare("UPDATE auth_group_scopes SET permissions = ? WHERE group_id = ? AND scope_id = ?").run(
+      json,
+      gId,
+      scopeId
+    );
+  } else {
+    db.prepare("INSERT INTO auth_group_scopes (group_id, scope_id, permissions) VALUES (?, ?, ?)").run(
+      gId,
+      scopeId,
+      json
+    );
+  }
+  return getGroupPermissions(groupId);
+}
+
 module.exports = {
   getFolderTree,
   getFolderById,
@@ -999,4 +1116,12 @@ module.exports = {
   getTokensByUserId,
   createToken,
   deleteToken,
+  getGroups,
+  getGroupById,
+  createGroup,
+  updateGroup,
+  deleteGroup,
+  addGroupMember,
+  removeGroupMember,
+  setGroupPermissions,
 };

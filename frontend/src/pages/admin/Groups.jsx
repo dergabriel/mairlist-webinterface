@@ -2,12 +2,11 @@ import { useState, useEffect, useCallback } from "react";
 import {
   LayoutDashboard, Settings as SettingsIcon, Database, Copy, ListMusic,
   Users as UsersIcon, Tag, ScrollText, LogOut, Plus, Trash2, Save,
-  AlertTriangle, X, Check, UserCircle, KeyRound, ClipboardCopy,
+  AlertTriangle, X, Check, UserCircle,
 } from "lucide-react";
 import {
-  getUsers, getAdminUserById, createUser, updateUser, deleteUser,
-  changeUserPassword, setUserPermissions,
-  getUserTokens, createUserToken, deleteUserToken,
+  getGroups, getAdminGroupById, createGroup, updateGroup, deleteGroup,
+  addGroupMember, removeGroupMember, setGroupPermissions, getUsers,
 } from "../../lib/api";
 import { useAuth } from "../../lib/AuthContext";
 
@@ -47,10 +46,9 @@ function Modal({ title, onClose, children }) {
   );
 }
 
-function NewUserDialog({ onClose, onCreate }) {
+function NewGroupDialog({ onClose, onCreate }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -59,7 +57,7 @@ function NewUserDialog({ onClose, onCreate }) {
     setSaving(true);
     setError(null);
     try {
-      await onCreate({ name: name.trim(), description: description.trim(), password });
+      await onCreate({ name: name.trim(), description: description.trim() });
     } catch (err) {
       setError(err.message);
       setSaving(false);
@@ -67,7 +65,7 @@ function NewUserDialog({ onClose, onCreate }) {
   };
 
   return (
-    <Modal title="Neuer Benutzer" onClose={onClose}>
+    <Modal title="Neue Gruppe" onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         <label className="block">
           <span className="mb-1.5 block text-xs text-zinc-400">Name</span>
@@ -76,7 +74,7 @@ function NewUserDialog({ onClose, onCreate }) {
             value={name}
             autoFocus
             onChange={(e) => setName(e.target.value)}
-            placeholder="Benutzername"
+            placeholder="Gruppenname"
           />
         </label>
         <label className="block">
@@ -88,21 +86,11 @@ function NewUserDialog({ onClose, onCreate }) {
             placeholder="Anzeigename"
           />
         </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs text-zinc-400">Passwort</span>
-          <input
-            type="password"
-            className={inputClass}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Passwort"
-          />
-        </label>
 
         {error && (
           <div className="flex items-center gap-2 text-sm text-red-500">
             <AlertTriangle size={14} />
-            <span>Benutzer konnte nicht angelegt werden: {error}</span>
+            <span>Gruppe konnte nicht angelegt werden: {error}</span>
           </div>
         )}
 
@@ -116,7 +104,7 @@ function NewUserDialog({ onClose, onCreate }) {
           </button>
           <button
             type="submit"
-            disabled={saving || !name.trim() || !password}
+            disabled={saving || !name.trim()}
             className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
           >
             {saving ? "Wird angelegt…" : "Anlegen"}
@@ -127,7 +115,7 @@ function NewUserDialog({ onClose, onCreate }) {
   );
 }
 
-function DeleteUserDialog({ user, onClose, onConfirm }) {
+function DeleteGroupDialog({ group, onClose, onConfirm }) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState(null);
 
@@ -143,9 +131,9 @@ function DeleteUserDialog({ user, onClose, onConfirm }) {
   };
 
   return (
-    <Modal title="Benutzer löschen" onClose={onClose}>
+    <Modal title="Gruppe löschen" onClose={onClose}>
       <p className="text-sm text-zinc-300">
-        Soll der Benutzer <span className="font-medium text-zinc-100">{user.name}</span> wirklich gelöscht werden?
+        Soll die Gruppe <span className="font-medium text-zinc-100">{group.name}</span> wirklich gelöscht werden?
       </p>
 
       {error && (
@@ -180,69 +168,32 @@ const LIBRARY_PERMISSIONS = ["All", "ReadOnly", "None"];
 
 const emptyPermissions = () => ({ UserLevel: "User", GeneralPermissions: "None", LibraryPermissions: "None" });
 
-function formatDateTime(value) {
-  if (!value) return "–";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleString("de-DE");
-}
-
-function TokensSection({ userId }) {
-  const [tokens, setTokens] = useState([]);
-  const [loading, setLoading] = useState(true);
+function MembersSection({ group, allUsers, onChanged }) {
+  const [adding, setAdding] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState("");
   const [error, setError] = useState(null);
-  const [generating, setGenerating] = useState(false);
-  const [newToken, setNewToken] = useState(null);
-  const [copiedId, setCopiedId] = useState(null);
 
-  const loadTokens = useCallback(async () => {
-    setLoading(true);
+  const memberIds = new Set((group.members || []).map((m) => m.id));
+  const availableUsers = allUsers.filter((u) => !memberIds.has(u.id));
+
+  const addMember = async () => {
+    if (!selectedUserId) return;
     setError(null);
     try {
-      const list = await getUserTokens(userId);
-      setTokens(list);
+      await addGroupMember(group.id, selectedUserId);
+      setSelectedUserId("");
+      setAdding(false);
+      onChanged?.();
     } catch (err) {
       setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [userId]);
-
-  useEffect(() => {
-    loadTokens();
-    setNewToken(null);
-  }, [loadTokens]);
-
-  const copyToClipboard = async (value, id) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 2000);
-    } catch {
-      // Clipboard-Zugriff kann vom Browser verweigert werden; still ignorieren
     }
   };
 
-  const generate = async () => {
-    setGenerating(true);
+  const removeMember = async (userId) => {
     setError(null);
     try {
-      const created = await createUserToken(userId);
-      setNewToken(created);
-      await loadTokens();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  const remove = async (tokenId) => {
-    setError(null);
-    try {
-      await deleteUserToken(userId, tokenId);
-      if (newToken?.id === tokenId) setNewToken(null);
-      await loadTokens();
+      await removeGroupMember(group.id, userId);
+      onChanged?.();
     } catch (err) {
       setError(err.message);
     }
@@ -251,36 +202,44 @@ function TokensSection({ userId }) {
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900">
       <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-3">
-        <span className="text-sm font-semibold text-zinc-100">API-Tokens</span>
+        <span className="text-sm font-semibold text-zinc-100">Mitglieder</span>
         <button
-          onClick={generate}
-          disabled={generating}
+          onClick={() => setAdding(true)}
+          disabled={availableUsers.length === 0}
           className="flex items-center gap-1.5 rounded-md bg-green-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
         >
           <Plus size={13} />
-          <span>{generating ? "Wird generiert…" : "Neuen Token generieren"}</span>
+          <span>User hinzufügen</span>
         </button>
       </div>
 
       <div className="px-5 py-5">
-        {newToken && (
-          <div className="mb-4 rounded-md border border-orange-500/40 bg-orange-500/10 px-4 py-3">
-            <div className="mb-1.5 flex items-center gap-2 text-xs text-orange-400">
-              <AlertTriangle size={13} />
-              <span>Token wird nur einmal angezeigt</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 truncate rounded bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-100">
-                {newToken.token}
-              </code>
-              <button
-                onClick={() => copyToClipboard(newToken.token, "new")}
-                className="flex shrink-0 items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
-              >
-                {copiedId === "new" ? <Check size={13} className="text-green-500" /> : <ClipboardCopy size={13} />}
-                <span>{copiedId === "new" ? "Kopiert" : "Kopieren"}</span>
-              </button>
-            </div>
+        {adding && (
+          <div className="mb-4 flex items-center gap-2">
+            <select
+              className={inputClass}
+              value={selectedUserId}
+              onChange={(e) => setSelectedUserId(e.target.value)}
+              autoFocus
+            >
+              <option value="">Benutzer wählen…</option>
+              {availableUsers.map((u) => (
+                <option key={u.id} value={u.id}>{u.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={addMember}
+              disabled={!selectedUserId}
+              className="shrink-0 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
+            >
+              Hinzufügen
+            </button>
+            <button
+              onClick={() => { setAdding(false); setSelectedUserId(""); }}
+              className="shrink-0 rounded-md border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+            >
+              Abbrechen
+            </button>
           </div>
         )}
 
@@ -291,46 +250,33 @@ function TokensSection({ userId }) {
           </div>
         )}
 
-        {loading && <div className="text-sm text-zinc-500">Lädt…</div>}
-
-        {!loading && tokens.length === 0 && (
-          <div className="text-sm text-zinc-600">Keine Tokens vorhanden</div>
+        {(group.members || []).length === 0 && (
+          <div className="text-sm text-zinc-600">Keine Mitglieder vorhanden</div>
         )}
 
-        {!loading && tokens.length > 0 && (
+        {(group.members || []).length > 0 && (
           <div className="space-y-2">
-            {tokens.map((t) => (
+            {group.members.map((m) => (
               <div
-                key={t.id}
+                key={m.id}
                 className="flex items-center justify-between gap-3 rounded-md border border-zinc-800 px-3 py-2.5"
               >
                 <div className="flex min-w-0 items-center gap-3">
-                  <KeyRound size={14} className="shrink-0 text-zinc-600" />
+                  <UserCircle size={16} className="shrink-0 text-zinc-600" />
                   <div className="min-w-0">
-                    <div className="truncate font-mono text-sm text-zinc-200">
-                      {t.token.slice(0, 8)}…
-                    </div>
-                    <div className="truncate text-xs text-zinc-500">
-                      Erstellt {formatDateTime(t.created)} · Läuft ab {formatDateTime(t.expires)}
-                    </div>
+                    <div className="truncate text-sm text-zinc-200">{m.name}</div>
+                    {m.description && (
+                      <div className="truncate text-xs text-zinc-500">{m.description}</div>
+                    )}
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    onClick={() => copyToClipboard(t.token, t.id)}
-                    className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
-                  >
-                    {copiedId === t.id ? <Check size={13} className="text-green-500" /> : <ClipboardCopy size={13} />}
-                    <span>{copiedId === t.id ? "Kopiert" : "Kopieren"}</span>
-                  </button>
-                  <button
-                    onClick={() => remove(t.id)}
-                    className="flex items-center gap-1.5 rounded-md bg-red-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-500"
-                  >
-                    <Trash2 size={13} />
-                    <span>Token löschen</span>
-                  </button>
-                </div>
+                <button
+                  onClick={() => removeMember(m.id)}
+                  className="flex shrink-0 items-center gap-1.5 rounded-md bg-red-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-500"
+                >
+                  <Trash2 size={13} />
+                  <span>Entfernen</span>
+                </button>
               </div>
             ))}
           </div>
@@ -340,46 +286,31 @@ function TokensSection({ userId }) {
   );
 }
 
-function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
-  const [name, setName] = useState(user.name);
-  const [description, setDescription] = useState(user.description || "");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+function GroupDetail({ group, allUsers, onSaved, onDeleted }) {
+  const [name, setName] = useState(group.name);
+  const [description, setDescription] = useState(group.description || "");
   const [permissions, setPermissions] = useState(
-    () => user.scopes?.[0]?.permissions || emptyPermissions()
+    () => group.scopes?.[0]?.permissions || emptyPermissions()
   );
-  const scopeId = user.scopes?.[0]?.scopeId ?? 1;
+  const scopeId = group.scopes?.[0]?.scopeId ?? 1;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [toast, setToast] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
 
   useEffect(() => {
-    setName(user.name);
-    setDescription(user.description || "");
-    setNewPassword("");
-    setConfirmPassword("");
-    setPermissions(user.scopes?.[0]?.permissions || emptyPermissions());
+    setName(group.name);
+    setDescription(group.description || "");
+    setPermissions(group.scopes?.[0]?.permissions || emptyPermissions());
     setError(null);
-  }, [user]);
-
-  const isOwnAccount = String(user.id) === String(currentUserId);
+  }, [group]);
 
   const save = async () => {
-    if (newPassword && newPassword !== confirmPassword) {
-      setError("Die Passwörter stimmen nicht überein");
-      return;
-    }
     setSaving(true);
     setError(null);
     try {
-      await updateUser(user.id, { name: name.trim(), description: description.trim() });
-      if (newPassword) {
-        await changeUserPassword(user.id, newPassword);
-      }
-      await setUserPermissions(user.id, scopeId, permissions);
-      setNewPassword("");
-      setConfirmPassword("");
+      await updateGroup(group.id, { name: name.trim(), description: description.trim() });
+      await setGroupPermissions(group.id, scopeId, permissions);
       setToast(true);
       setTimeout(() => setToast(false), 2500);
       onSaved?.();
@@ -406,36 +337,13 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
         </div>
       </div>
 
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900">
-        <div className="border-b border-zinc-800 px-5 py-3 text-sm font-semibold text-zinc-100">Passwort ändern</div>
-        <div className="grid grid-cols-2 gap-4 px-5 py-5">
-          <label className="block">
-            <span className="mb-1.5 block text-sm text-zinc-400">Neues Passwort</span>
-            <input
-              type="password"
-              className={inputClass}
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Leer lassen für keine Änderung"
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-sm text-zinc-400">Bestätigen</span>
-            <input
-              type="password"
-              className={inputClass}
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-            />
-          </label>
-        </div>
-      </div>
+      <MembersSection group={group} allUsers={allUsers} onChanged={onSaved} />
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-900">
-        <div className="border-b border-zinc-800 px-5 py-3 text-sm font-semibold text-zinc-100">Berechtigungen</div>
+        <div className="border-b border-zinc-800 px-5 py-3 text-sm font-semibold text-zinc-100">Permissions</div>
         <div className="grid grid-cols-3 gap-4 px-5 py-5">
           <label className="block">
-            <span className="mb-1.5 block text-sm text-zinc-400">Benutzerebene</span>
+            <span className="mb-1.5 block text-sm text-zinc-400">UserLevel</span>
             <select
               className={inputClass}
               value={permissions.UserLevel}
@@ -445,7 +353,7 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
             </select>
           </label>
           <label className="block">
-            <span className="mb-1.5 block text-sm text-zinc-400">Allgemeine Rechte</span>
+            <span className="mb-1.5 block text-sm text-zinc-400">GeneralPermissions</span>
             <select
               className={inputClass}
               value={permissions.GeneralPermissions}
@@ -455,7 +363,7 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
             </select>
           </label>
           <label className="block">
-            <span className="mb-1.5 block text-sm text-zinc-400">Bibliotheks-Rechte</span>
+            <span className="mb-1.5 block text-sm text-zinc-400">LibraryPermissions</span>
             <select
               className={inputClass}
               value={permissions.LibraryPermissions}
@@ -466,8 +374,6 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
           </label>
         </div>
       </div>
-
-      <TokensSection userId={user.id} />
 
       {error && (
         <div className="flex items-center gap-2 text-sm text-red-500">
@@ -486,12 +392,10 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
       <div className="flex items-center justify-between">
         <button
           onClick={() => setShowDelete(true)}
-          disabled={isOwnAccount}
-          title={isOwnAccount ? "Der eigene Account kann nicht gelöscht werden" : undefined}
-          className="flex items-center gap-2 rounded-md bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-2 rounded-md bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-500"
         >
           <Trash2 size={16} />
-          <span>Löschen</span>
+          <span>Gruppe löschen</span>
         </button>
         <button
           onClick={save}
@@ -504,11 +408,11 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
       </div>
 
       {showDelete && (
-        <DeleteUserDialog
-          user={user}
+        <DeleteGroupDialog
+          group={group}
           onClose={() => setShowDelete(false)}
           onConfirm={async () => {
-            await deleteUser(user.id);
+            await deleteGroup(group.id);
             setShowDelete(false);
             onDeleted?.();
           }}
@@ -518,21 +422,22 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
   );
 }
 
-export default function Users({ onNavigate }) {
-  const { user: currentUser, logout } = useAuth();
-  const [users, setUsers] = useState([]);
+export default function Groups({ onNavigate }) {
+  const { logout } = useAuth();
+  const [groups, setGroups] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
-  const [selectedUser, setSelectedUser] = useState(null);
+  const [selectedGroup, setSelectedGroup] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showNew, setShowNew] = useState(false);
 
-  const loadUsers = useCallback(async () => {
+  const loadGroups = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const list = await getUsers();
-      setUsers(list);
+      const list = await getGroups();
+      setGroups(list);
       return list;
     } catch (err) {
       setError(err.message);
@@ -543,34 +448,35 @@ export default function Users({ onNavigate }) {
   }, []);
 
   useEffect(() => {
-    loadUsers();
-  }, [loadUsers]);
+    loadGroups();
+    getUsers().then(setAllUsers).catch(() => {});
+  }, [loadGroups]);
 
   useEffect(() => {
     if (selectedId == null) {
-      setSelectedUser(null);
+      setSelectedGroup(null);
       return;
     }
-    getAdminUserById(selectedId)
-      .then(setSelectedUser)
+    getAdminGroupById(selectedId)
+      .then(setSelectedGroup)
       .catch((err) => setError(err.message));
   }, [selectedId]);
 
   const handleCreate = async (data) => {
-    const created = await createUser(data);
-    await loadUsers();
+    const created = await createGroup(data);
+    await loadGroups();
     setShowNew(false);
     setSelectedId(created.id);
   };
 
   const handleSaved = () => {
-    loadUsers();
-    getAdminUserById(selectedId).then(setSelectedUser).catch(() => {});
+    loadGroups();
+    getAdminGroupById(selectedId).then(setSelectedGroup).catch(() => {});
   };
 
   const handleDeleted = () => {
     setSelectedId(null);
-    loadUsers();
+    loadGroups();
   };
 
   return (
@@ -596,8 +502,8 @@ export default function Users({ onNavigate }) {
 
         <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Administration</div>
         <nav className="space-y-0.5">
-          <NavItem icon={UsersIcon} label="Benutzer" active onClick={() => onNavigate?.("users")} />
-          <NavItem icon={Tag} label="Gruppen" onClick={() => onNavigate?.("groups")} />
+          <NavItem icon={UsersIcon} label="Benutzer" onClick={() => onNavigate?.("users")} />
+          <NavItem icon={Tag} label="Gruppen" active onClick={() => onNavigate?.("groups")} />
           <NavItem icon={ScrollText} label="Logs" onClick={() => onNavigate?.("logs")} />
           <NavItem icon={SettingsIcon} label="Einstellungen" onClick={() => onNavigate?.("settings")} />
         </nav>
@@ -616,13 +522,13 @@ export default function Users({ onNavigate }) {
 
       <div className="flex w-72 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900">
         <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3.5">
-          <h2 className="text-sm font-semibold text-zinc-100">Benutzer</h2>
+          <h2 className="text-sm font-semibold text-zinc-100">Gruppen</h2>
           <button
             onClick={() => setShowNew(true)}
             className="flex items-center gap-1.5 rounded-md bg-green-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-500"
           >
             <Plus size={13} />
-            <span>Neu</span>
+            <span>Neue Gruppe</span>
           </button>
         </div>
 
@@ -634,22 +540,22 @@ export default function Users({ onNavigate }) {
               <span>{error}</span>
             </div>
           )}
-          {!loading && !error && users.length === 0 && (
-            <div className="px-4 py-4 text-sm text-zinc-600">Keine Benutzer vorhanden</div>
+          {!loading && !error && groups.length === 0 && (
+            <div className="px-4 py-4 text-sm text-zinc-600">Keine Gruppen vorhanden</div>
           )}
-          {!loading && users.map((u) => (
+          {!loading && groups.map((g) => (
             <button
-              key={u.id}
-              onClick={() => setSelectedId(u.id)}
+              key={g.id}
+              onClick={() => setSelectedId(g.id)}
               className={`flex w-full items-center gap-3 border-b border-zinc-800 px-4 py-3 text-left transition-colors ${
-                String(selectedId) === String(u.id) ? "bg-zinc-800" : "hover:bg-zinc-800/50"
+                String(selectedId) === String(g.id) ? "bg-zinc-800" : "hover:bg-zinc-800/50"
               }`}
             >
-              <UserCircle size={20} className="shrink-0 text-zinc-600" />
+              <Tag size={20} className="shrink-0 text-zinc-600" />
               <div className="min-w-0">
-                <div className="truncate text-sm text-zinc-100">{u.name}</div>
-                {u.description && (
-                  <div className="truncate text-xs text-zinc-500">{u.description}</div>
+                <div className="truncate text-sm text-zinc-100">{g.name}</div>
+                {g.description && (
+                  <div className="truncate text-xs text-zinc-500">{g.description}</div>
                 )}
               </div>
             </button>
@@ -661,30 +567,30 @@ export default function Users({ onNavigate }) {
         <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500">
-              <UsersIcon size={18} className="text-zinc-950" />
+              <Tag size={18} className="text-zinc-950" />
             </div>
-            <h1 className="text-lg font-semibold">Benutzer-Verwaltung</h1>
+            <h1 className="text-lg font-semibold">Gruppen-Verwaltung</h1>
           </div>
         </header>
 
         <div className="flex-1 overflow-auto px-6 py-6">
-          {selectedUser ? (
-            <UserDetail
-              key={selectedUser.id}
-              user={selectedUser}
-              currentUserId={currentUser?.id}
+          {selectedGroup ? (
+            <GroupDetail
+              key={selectedGroup.id}
+              group={selectedGroup}
+              allUsers={allUsers}
               onSaved={handleSaved}
               onDeleted={handleDeleted}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-zinc-600">
-              Benutzer auswählen oder neu anlegen
+              Gruppe auswählen oder neu anlegen
             </div>
           )}
         </div>
       </main>
 
-      {showNew && <NewUserDialog onClose={() => setShowNew(false)} onCreate={handleCreate} />}
+      {showNew && <NewGroupDialog onClose={() => setShowNew(false)} onCreate={handleCreate} />}
     </div>
   );
 }

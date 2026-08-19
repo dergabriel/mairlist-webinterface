@@ -203,3 +203,35 @@ export function createUserToken(id) {
 export function deleteUserToken(id, tokenId) {
   return request(`/auth/admin/users/${id}/tokens/${tokenId}`, { method: "DELETE" });
 }
+
+export function getGroups() {
+  return request("/auth/admin/groups");
+}
+
+export function getAdminGroupById(id) {
+  return request(`/auth/admin/groups/${id}`);
+}
+
+export function createGroup(data) {
+  return post("/auth/admin/groups", data);
+}
+
+export function updateGroup(id, data) {
+  return put(`/auth/admin/groups/${id}`, data);
+}
+
+export function deleteGroup(id) {
+  return request(`/auth/admin/groups/${id}`, { method: "DELETE" });
+}
+
+export function addGroupMember(id, userId) {
+  return post(`/auth/admin/groups/${id}/members`, { userId });
+}
+
+export function removeGroupMember(id, userId) {
+  return request(`/auth/admin/groups/${id}/members/${userId}`, { method: "DELETE" });
+}
+
+export function setGroupPermissions(id, scopeId, permissions) {
+  return put(`/auth/admin/groups/${id}/permissions`, { scopeId, permissions });
+}

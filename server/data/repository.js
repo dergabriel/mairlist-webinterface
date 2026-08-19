@@ -179,6 +179,92 @@ function deleteToken(tokenId) {
   return false;
 }
 
+// ---- admin: group management (mock) ----
+//
+// Structure mirrors sqlRepository's admin group functions, backed by
+// in-memory arrays/maps instead of auth_groups/auth_group_members/auth_group_scopes.
+
+const mockGroups = [];
+let nextMockGroupId = 1;
+const mockGroupMembers = new Map(); // groupId -> array of userId
+const mockGroupScopes = new Map(); // groupId -> array of { scopeId, scopeName, permissions }
+
+function rowToGroupSummary(g) {
+  return { id: g.id, name: g.name, description: g.description || "" };
+}
+
+function getGroups() {
+  return mockGroups.map(rowToGroupSummary);
+}
+
+function getGroupMembers(id) {
+  const memberIds = mockGroupMembers.get(Number(id)) || [];
+  return mockUsers.filter((u) => memberIds.includes(u.id)).map(rowToUserSummary);
+}
+
+function getGroupPermissions(id) {
+  return mockGroupScopes.get(Number(id)) || [];
+}
+
+function getGroupById(id) {
+  const g = mockGroups.find((x) => x.id === Number(id));
+  if (!g) return null;
+  return { ...rowToGroupSummary(g), members: getGroupMembers(id), scopes: getGroupPermissions(id) };
+}
+
+function createGroup(name, description) {
+  const group = { id: nextMockGroupId++, name: (name || "").trim(), description: description || "" };
+  mockGroups.push(group);
+  mockGroupMembers.set(group.id, []);
+  mockGroupScopes.set(group.id, []);
+  return getGroupById(group.id);
+}
+
+function updateGroup(id, name, description) {
+  const g = mockGroups.find((x) => x.id === Number(id));
+  if (!g) return null;
+  g.name = (name || "").trim();
+  g.description = description || "";
+  return getGroupById(id);
+}
+
+function deleteGroup(id) {
+  const index = mockGroups.findIndex((x) => x.id === Number(id));
+  if (index === -1) return false;
+  mockGroups.splice(index, 1);
+  mockGroupMembers.delete(Number(id));
+  mockGroupScopes.delete(Number(id));
+  return true;
+}
+
+function addGroupMember(groupId, userId) {
+  const gId = Number(groupId);
+  const members = mockGroupMembers.get(gId) || [];
+  if (!members.includes(Number(userId))) members.push(Number(userId));
+  mockGroupMembers.set(gId, members);
+  return getGroupById(gId);
+}
+
+function removeGroupMember(groupId, userId) {
+  const gId = Number(groupId);
+  const members = mockGroupMembers.get(gId) || [];
+  mockGroupMembers.set(gId, members.filter((id) => id !== Number(userId)));
+  return getGroupById(gId);
+}
+
+function setGroupPermissions(groupId, scopeId, permissions) {
+  const gId = Number(groupId);
+  const scopes = mockGroupScopes.get(gId) || [];
+  const existing = scopes.find((s) => s.scopeId === scopeId);
+  if (existing) {
+    existing.permissions = permissions;
+  } else {
+    scopes.push({ scopeId, scopeName: "", permissions });
+  }
+  mockGroupScopes.set(gId, scopes);
+  return scopes;
+}
+
 function getUserByUsername(username) {
   if (username !== MOCK_USER.username) return null;
   return { id: MOCK_USER.id, username: MOCK_USER.username };
@@ -797,4 +883,12 @@ module.exports = {
   getTokensByUserId,
   createToken,
   deleteToken,
+  getGroups,
+  getGroupById,
+  createGroup,
+  updateGroup,
+  deleteGroup,
+  addGroupMember,
+  removeGroupMember,
+  setGroupPermissions,
 };

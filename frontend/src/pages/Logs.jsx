@@ -1,13 +1,9 @@
-// TODO (Phase F): Logs-Daten von GET /api/logs laden (Backend-Route noch nicht vorhanden).
-// Aktuell werden MOCK_LOGS mit hartkodiertem Inhalt angezeigt.
-// Das hardcodierte Referenzdatum wurde durch Date.now() ersetzt,
-// damit Zeitraumfilter auch nach dem 15.08.2026 noch sinnvoll funktionieren.
-
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   LayoutDashboard, Settings as SettingsIcon, Database, Copy, ListMusic,
-  Users, Tag, ScrollText, LogOut, ArrowUpDown,
+  Users, Tag, ScrollText, LogOut, RefreshCw,
 } from "lucide-react";
+import { getLogs } from "../lib/api";
 
 function NavItem({ icon: Icon, label, active, onClick }) {
   return (
@@ -23,66 +19,70 @@ function NavItem({ icon: Icon, label, active, onClick }) {
   );
 }
 
-const MOCK_LOGS = [
-  { id: 1, timestamp: "2026-08-15T08:12:03", user: "admin", action: "Login", details: "Anmeldung erfolgreich" },
-  { id: 2, timestamp: "2026-08-15T08:14:41", user: "admin", action: "Item angelegt", details: "\"Sommerhit 2026\" (ID 4821) in Elemente" },
-  { id: 3, timestamp: "2026-08-15T08:20:17", user: "j.schmidt", action: "Cue-Punkt geändert", details: "Fade In auf 00:03.200 gesetzt (\"Sommerhit 2026\")" },
-  { id: 4, timestamp: "2026-08-15T08:31:55", user: "j.schmidt", action: "Playlist gespeichert", details: "Stunde 09:00, 14 Einträge" },
-  { id: 5, timestamp: "2026-08-14T22:03:12", user: "m.weber", action: "Login", details: "Anmeldung erfolgreich" },
-  { id: 6, timestamp: "2026-08-14T22:05:48", user: "m.weber", action: "Item gelöscht", details: "\"Jingle_alt_v2\" (ID 3390) entfernt" },
-  { id: 7, timestamp: "2026-08-14T21:47:29", user: "admin", action: "Ordner angelegt", details: "\"Werbung/Q3\" in Elemente-Baum" },
-  { id: 8, timestamp: "2026-08-14T19:15:03", user: "j.schmidt", action: "Cue-Punkt geändert", details: "Cue Out auf 03:41.005 gesetzt (\"Herbstregen\")" },
-  { id: 9, timestamp: "2026-08-14T18:02:44", user: "m.weber", action: "Playlist gespeichert", details: "Stunde 19:00, 11 Einträge" },
-  { id: 10, timestamp: "2026-08-13T14:22:10", user: "admin", action: "Benutzer angelegt", details: "Neuer Benutzer \"t.klein\" mit Rolle Redakteur" },
-  { id: 11, timestamp: "2026-08-13T11:08:37", user: "t.klein", action: "Login", details: "Anmeldung erfolgreich" },
-  { id: 12, timestamp: "2026-08-13T11:19:52", user: "t.klein", action: "Item angelegt", details: "\"Nachrichten 12 Uhr\" (ID 4822) in Elemente" },
-  { id: 13, timestamp: "2026-08-12T09:44:01", user: "m.weber", action: "Item angelegt", details: "\"Wetterbericht Abend\" (ID 4790) in Elemente" },
-  { id: 14, timestamp: "2026-08-12T08:55:19", user: "admin", action: "Login", details: "Anmeldung erfolgreich" },
-  { id: 15, timestamp: "2026-08-11T16:30:44", user: "j.schmidt", action: "Playlist gespeichert", details: "Stunde 17:00, 9 Einträge" },
-];
-
-const ACTIONS = [...new Set(MOCK_LOGS.map((l) => l.action))].sort();
-
-const PERIODS = [
-  { value: "today", label: "Heute" },
-  { value: "7days", label: "Letzte 7 Tage" },
-  { value: "all", label: "Alles" },
-];
-
 const inputClass =
   "rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-zinc-700";
 
-const formatTimestamp = (iso) => iso.replace("T", "  ");
+const pad2 = (n) => String(n).padStart(2, "0");
 
-const isWithinDays = (iso, days, now) => {
-  const diffMs = now - new Date(iso);
-  return diffMs <= days * 24 * 60 * 60 * 1000;
+const toDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+const formatTime = (starttime) => {
+  if (!starttime) return "–";
+  const match = /(\d{2}):(\d{2}):(\d{2})/.exec(starttime);
+  return match ? `${match[1]}:${match[2]}:${match[3]}` : starttime;
 };
 
+const formatDuration = (sec) => {
+  if (sec == null) return "–";
+  const total = Math.round(sec);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${pad2(s)}`;
+};
+
+const PAGE_SIZE = 200;
+
 export default function Logs({ onNavigate }) {
-  const [actionFilter, setActionFilter] = useState("all");
-  const [periodFilter, setPeriodFilter] = useState("all");
-  const [sortDir, setSortDir] = useState("desc");
+  const [date, setDate] = useState(() => toDateStr(new Date()));
+  const [logs, setLogs] = useState([]);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState(null);
 
-  const filtered = useMemo(() => {
-    // Kein hardcodiertes Datum: Date.now() als Referenz für Zeitraumfilter
-    const now = new Date();
-    return MOCK_LOGS.filter((log) => {
-      if (actionFilter !== "all" && log.action !== actionFilter) return false;
-      if (periodFilter === "today") {
-        return new Date(log.timestamp).toDateString() === now.toDateString();
-      }
-      if (periodFilter === "7days") {
-        return isWithinDays(log.timestamp, 7, now);
-      }
-      return true;
-    });
-  }, [actionFilter, periodFilter]);
+  const load = useCallback(async (targetDate) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const rows = await getLogs({ date: targetDate, limit: PAGE_SIZE, offset: 0 });
+      setLogs(rows);
+      setOffset(rows.length);
+      setHasMore(rows.length === PAGE_SIZE);
+    } catch (e) {
+      setError(e.message || "Logs konnten nicht geladen werden");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const sorted = useMemo(() => {
-    const arr = [...filtered].sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1));
-    return sortDir === "desc" ? arr.reverse() : arr;
-  }, [filtered, sortDir]);
+  useEffect(() => {
+    load(date);
+  }, [date, load]);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const rows = await getLogs({ date, limit: PAGE_SIZE, offset });
+      setLogs((prev) => [...prev, ...rows]);
+      setOffset((prev) => prev + rows.length);
+      setHasMore(rows.length === PAGE_SIZE);
+    } catch (e) {
+      setError(e.message || "Logs konnten nicht geladen werden");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
@@ -126,81 +126,88 @@ export default function Logs({ onNavigate }) {
             </div>
             <h1 className="text-lg font-semibold">Logs</h1>
           </div>
+          <button
+            onClick={() => load(date)}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-green-700/60 text-green-500 transition-colors hover:bg-green-600/10"
+          >
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+          </button>
         </header>
 
-        {/* Mock-Banner, nur im Dev sichtbar */}
-        {import.meta.env.DEV && (
-          <div className="border-b border-orange-500/20 bg-orange-500/10 px-6 py-2 text-xs text-orange-400">
-            Dev-Modus: Statische Mock-Logs (Phase F: GET /api/logs noch nicht implementiert)
-          </div>
-        )}
-
         <div className="flex items-center gap-3 border-b border-zinc-800 px-6 py-3">
-          <select
-            value={actionFilter}
-            onChange={(e) => setActionFilter(e.target.value)}
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
             className={inputClass}
-          >
-            <option value="all">Alle Aktionen</option>
-            {ACTIONS.map((a) => (
-              <option key={a} value={a}>{a}</option>
-            ))}
-          </select>
-          <select
-            value={periodFilter}
-            onChange={(e) => setPeriodFilter(e.target.value)}
-            className={inputClass}
-          >
-            {PERIODS.map((p) => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </select>
-          <span className="ml-auto text-xs text-zinc-500">{sorted.length} Einträge</span>
+          />
+          <span className="ml-auto text-xs text-zinc-500">{logs.length} Einträge</span>
         </div>
 
         <div className="flex-1 overflow-auto px-6 py-6">
+          {error && (
+            <div className="mb-4 rounded-md border border-red-900/60 bg-red-950/40 px-4 py-2.5 text-sm text-red-400">
+              {error}
+            </div>
+          )}
+
           <div className="overflow-hidden rounded-lg border border-zinc-800">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-900 text-zinc-400">
-                  <th className="px-4 py-2.5 font-medium">
-                    <button
-                      onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-                      className="flex items-center gap-1.5 transition-colors hover:text-zinc-200"
-                    >
-                      Zeitstempel
-                      <ArrowUpDown size={13} className={sortDir ? "text-orange-500" : ""} />
-                    </button>
-                  </th>
-                  <th className="px-4 py-2.5 font-medium">Benutzer</th>
-                  <th className="px-4 py-2.5 font-medium">Aktion</th>
-                  <th className="px-4 py-2.5 font-medium">Details</th>
+                  <th className="px-4 py-2.5 font-medium">Zeit</th>
+                  <th className="px-4 py-2.5 font-medium">Station</th>
+                  <th className="px-4 py-2.5 font-medium">Studio</th>
+                  <th className="px-4 py-2.5 font-medium">Titel</th>
+                  <th className="px-4 py-2.5 font-medium">Dauer</th>
+                  <th className="px-4 py-2.5 font-medium">Hörer Start</th>
+                  <th className="px-4 py-2.5 font-medium">Hörer Stop</th>
+                  <th className="px-4 py-2.5 font-medium">Info</th>
                 </tr>
               </thead>
               <tbody className="bg-zinc-950">
-                {sorted.map((log) => (
+                {loading && (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-8 text-center text-zinc-600">Lädt…</td>
+                  </tr>
+                )}
+                {!loading && logs.map((log, i) => (
                   <tr
-                    key={log.id}
+                    key={`${log.starttime}-${i}`}
                     className="border-b border-zinc-800 transition-colors last:border-b-0 hover:bg-zinc-900/50"
                   >
-                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-500">
-                      {formatTimestamp(log.timestamp)}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-100">{log.user}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-100">{log.action}</td>
-                    <td className="px-4 py-2.5 text-zinc-400">{log.details}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-500">{formatTime(log.starttime)}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-100">{log.station}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-100">{log.studio || "–"}</td>
+                    <td className="px-4 py-2.5 text-zinc-100">{log.item || "–"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">{formatDuration(log.duration)}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">{log.listeners_start ?? "–"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">{log.listeners_stop ?? "–"}</td>
+                    <td className="px-4 py-2.5 text-zinc-400">{log.info || "–"}</td>
                   </tr>
                 ))}
-                {sorted.length === 0 && (
+                {!loading && logs.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-4 py-8 text-center text-zinc-600">
-                      Keine Einträge für diesen Filter
+                    <td colSpan={8} className="px-4 py-8 text-center text-zinc-600">
+                      Keine Einträge für diesen Tag
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
+
+          {!loading && hasMore && (
+            <div className="mt-4 flex justify-center">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="rounded-md border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {loadingMore ? "Lädt…" : "Mehr laden"}
+              </button>
+            </div>
+          )}
         </div>
       </main>
     </div>

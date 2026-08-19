@@ -378,6 +378,21 @@ router.put("/playlists/:id/items/:position/overrides", requireScope("library.wri
   } catch (e) { next(e); }
 });
 
+// GET /api/logs?date=YYYY-MM-DD&limit=200&offset=0 -> playout log entries, newest first
+router.get("/logs", requireScope("library.read"), (req, res, next) => {
+  try {
+    const { date, limit, offset } = req.query;
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: "date muss im Format YYYY-MM-DD sein" });
+    }
+    res.json(repo.getLogs({
+      date,
+      limit: limit ? Number(limit) : 200,
+      offset: offset ? Number(offset) : 0,
+    }));
+  } catch (e) { next(e); }
+});
+
 // DELETE /api/items/:id -> delete an item
 router.delete("/items/:id", requireScope("library.write"), (req, res, next) => {
   try {

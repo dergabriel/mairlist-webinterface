@@ -164,6 +164,10 @@ export function savePlaylistItemOverrides(id, position, overrides) {
   return put(`/playlists/${id}/items/${position}/overrides`, { overrides });
 }
 
+export function getLogs({ date, limit, offset } = {}) {
+  return request(`/logs${qs({ date, limit, offset })}`);
+}
+
 export function getUsers() {
   return request("/auth/admin/users");
 }

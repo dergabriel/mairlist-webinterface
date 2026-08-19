@@ -585,6 +585,44 @@ function getPlaylistsByDate(date) {
   }));
 }
 
+// getLogs({ date, limit, offset }) -> playlistlog entries joined with the
+// item's title, newest first. `date` filters starttime to that calendar day.
+function getLogs({ date, limit = 200, offset = 0 } = {}) {
+  const clauses = ["station = ?"];
+  const params = [STATION];
+
+  if (date) {
+    clauses.push("starttime >= ? AND starttime < ?");
+    params.push(`${date} 00:00:00`, `${date} 23:59:59.999`);
+  }
+
+  params.push(Number(limit), Number(offset));
+
+  const rows = db
+    .prepare(`
+      SELECT playlistlog.starttime, playlistlog.station, playlistlog.studio,
+             items.title AS item, playlistlog.duration,
+             playlistlog.listeners_start, playlistlog.listeners_stop, playlistlog.info
+      FROM playlistlog
+      LEFT JOIN items ON items.idx = playlistlog.item
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY playlistlog.starttime DESC
+      LIMIT ? OFFSET ?
+    `)
+    .all(...params);
+
+  return rows.map((r) => ({
+    starttime: r.starttime,
+    station: r.station,
+    studio: r.studio,
+    item: r.item,
+    duration: r.duration,
+    listeners_start: r.listeners_start,
+    listeners_stop: r.listeners_stop,
+    info: r.info,
+  }));
+}
+
 function getPlaylistById(id) {
   const parsed = parsePlaylistId(id);
   if (!parsed) return null;
@@ -1097,6 +1135,7 @@ module.exports = {
   insertPlaylistItem,
   removePlaylistItem,
   savePlaylistItemOverrides,
+  getLogs,
   getUserByUsername,
   getUserById,
   getScopesByUserId,

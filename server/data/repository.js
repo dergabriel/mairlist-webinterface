@@ -36,6 +36,7 @@
 //   insertPlaylistItem(id, { itemId, afterPosition }) -> playlist (as getPlaylistById), or null
 //   removePlaylistItem(id, position) -> playlist (as getPlaylistById), or null
 //   savePlaylistItemOverrides(id, position, overrides) -> playlist (as getPlaylistById), or null
+//   getLogs({ date, limit, offset }) -> array of playlistlog entries, newest first
 //
 // Playlist entry overrides (mAirList calls these "volatile" changes): a
 // playlist entry may carry an `overrides` object with a subset of item
@@ -831,6 +832,12 @@ function removePlaylistItem(id, position) {
   return getPlaylistById(id);
 }
 
+// getLogs({ date, limit, offset }) -> array of playlistlog entries, newest first.
+// No mock playlistlog data exists yet, so this always returns an empty array.
+function getLogs() {
+  return [];
+}
+
 module.exports = {
   getFolderTree,
   getFolderById,
@@ -864,6 +871,7 @@ module.exports = {
   insertPlaylistItem,
   removePlaylistItem,
   savePlaylistItemOverrides,
+  getLogs,
   getUserByUsername,
   getUserById,
   getScopesByUserId,

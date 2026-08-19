@@ -38,6 +38,21 @@ Der Browser öffnet sich automatisch auf `http://localhost:3000`.
 
 Das Frontend proxt `/api` Anfragen automatisch zum Backend auf Port 3001 durch (siehe `vite.config.js`).
 
+### Mock vs. Real Repository
+
+**Aktuell:** `repository.js` (In-Memory Mock) ist Standard für Entwicklung
+**Produktiv:** `sqlRepository.js` (SQLite via `better-sqlite3`) über `DATA_SOURCE=sqlite` aktivieren
+
+```bash
+# Dev (Mock):
+npm run dev
+
+# Produktiv (SQLite):
+DATA_SOURCE=sqlite npm run dev
+```
+
+DB-Pfad über `DB_PATH`, Standard `./mairlist.mldb`. `repository.js` bleibt für Unit-Tests und schnelle Feedback-Schleifen erhalten, wird aber bei `DATA_SOURCE=sqlite` nicht geladen.
+
 ## Mit Claude im VS Code Addon weiterarbeiten
 
 Öffne das Projekt Verzeichnis in VS Code, aktiviere das Claude Extension Addon und verwende die `@codebase` Referenz für den Kontext. Gib diese Dateien im Prompt mit, damit Claude konsistent bleibt:

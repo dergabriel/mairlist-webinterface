@@ -9,9 +9,7 @@ const PORT = process.env.PORT || 3001;
 
 // CORS: nur vom lokalen Vite-Dev-Server und dem eigenen Host erlauben.
 // Für Produktion ALLOWED_ORIGINS per Env setzen, z.B. "https://radio.example.com"
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",")
-  : ["http://localhost:5173", "http://localhost:4173"];
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5173,http://localhost:4173').split(',');
 
 app.use(
   cors({

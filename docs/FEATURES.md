@@ -204,17 +204,19 @@ Der VT Recorder ist im Original ein eigenes Fenster im DB Client. Ablauf laut Do
 
 Rollen laut offizieller Doku (Setup):
 
-| Funktion | Status |
-|---|---|
-| Login mit Benutzername/Passwort | ⬜ |
-| Rolle Read-only: nur lesen | ⬜ |
-| Rolle Studio: lesen + Verlauf/Logging schreiben | ⬜ |
-| Rolle DJ: wie Studio + Playlists ändern und Scheduling, Bibliothek read-only | ⬜ |
-| Rolle VTDJ: Voice Tracking | ⬜ |
-| Rolle Admin: alles inkl. Konfiguration | ⬜ |
-| Benutzer anlegen/bearbeiten, Gruppen | ⬜ |
-| Logs einsehen | ⬜ |
-| Konflikt-Erkennung bei gleichzeitiger Playlist-Bearbeitung | ⬜ |
+| Funktion | Status | Notiz |
+|---|---|---|
+| Login mit Benutzername/Passwort | ✅ | HTTP-only Session-Cookie, `server/routes/auth.js` |
+| Permission-Blob (JSON) | ✅ | `getScopesByUserId()`, mAirList-artige `auth_user_scopes`-Blobs |
+| Rollen (Admin/Studio/DJ/VTDJ/Read-only) | 🟡 | Aktuell nur grobe Scopes (`admin`, `library.read`, `library.write`) in `server/middleware/auth.js`; die 5 dedizierten Rollen fehlen noch |
+| Rolle Read-only: nur lesen | ⬜ | |
+| Rolle Studio: lesen + Verlauf/Logging schreiben | ⬜ | |
+| Rolle DJ: wie Studio + Playlists ändern und Scheduling, Bibliothek read-only | ⬜ | |
+| Rolle VTDJ: Voice Tracking | ⬜ | |
+| Rolle Admin: alles inkl. Konfiguration | ✅ | `UserLevel: "Admin"` grants everything |
+| Benutzer anlegen/bearbeiten, Gruppen | ⬜ | |
+| Logs einsehen | ⬜ | |
+| Konflikt-Erkennung bei gleichzeitiger Playlist-Bearbeitung | ⬜ | |
 
 ---
 

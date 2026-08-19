@@ -8,7 +8,7 @@
 const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
-const { ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
+const { CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
 const { verifyPassword } = require("../lib/passwordHash");
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "../mairlist.mldb");
@@ -196,10 +196,19 @@ function deleteStorage(id) {
 // ---- types / artists / attribute keys (static catalogues + derived) ----
 
 function getItemTypes() {
-  const used = new Set(
-    db.prepare("SELECT DISTINCT type FROM items").all().map((r) => typeToCode(r.type))
-  );
-  return ITEM_TYPES.map((t) => ({ ...t, hasItems: used.has(t.key) }));
+  const rows = db.prepare(`
+    SELECT DISTINCT type, COUNT(*) as count
+    FROM items
+    WHERE type IS NOT NULL AND type != ''
+    GROUP BY type
+    ORDER BY type
+  `).all();
+  return rows.map((r) => ({
+    key: typeToCode(r.type),
+    label: r.type,
+    hasItems: r.count > 0,
+    note: "",
+  }));
 }
 
 function getArtists() {

@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
+const path = require("path");
 const libraryRoutes = require("./routes/library");
 const authRoutes = require("./routes/auth");
 
@@ -35,6 +36,16 @@ app.get("/api/health", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api", libraryRoutes);
+
+// Frontend statisch ausliefern (production build unter frontend/dist)
+const FRONTEND_DIST = path.join(__dirname, "../frontend/dist");
+app.use(express.static(FRONTEND_DIST));
+
+// SPA-Fallback: alle nicht-API-Routen an index.html weiterreichen
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api")) return next();
+  res.sendFile(path.join(FRONTEND_DIST, "index.html"));
+});
 
 // Globaler Error Handler — fängt alle unbehandelten Fehler aus Routen.
 // Besonders wichtig sobald repository.js auf async DB-Calls umgestellt wird.

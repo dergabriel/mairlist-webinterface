@@ -394,6 +394,21 @@ router.get("/logs", requireScope("library.read"), (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// GET /api/dashboard -> stats, recent logs, today's playlist and system info for the overview page
+router.get("/dashboard", requireScope("library.read"), (req, res, next) => {
+  try {
+    res.json({
+      stats: repo.getDashboardStats(),
+      recentLogs: repo.getRecentLogs(10),
+      todayPlaylist: repo.getTodayPlaylist(),
+      system: {
+        dataSource: process.env.DATA_SOURCE || "mock",
+        dbPath: process.env.DATA_SOURCE === "sqlite" ? (process.env.DB_PATH || "server/mairlist.mldb") : null,
+      },
+    });
+  } catch (e) { next(e); }
+});
+
 // GET /api/settings -> current panel settings
 router.get("/settings", (req, res, next) => {
   try { res.json(getSettings()); } catch (e) { next(e); }

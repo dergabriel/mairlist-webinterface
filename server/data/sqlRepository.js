@@ -623,6 +623,54 @@ function getLogs({ date, limit = 200, offset = 0 } = {}) {
   }));
 }
 
+// getDashboardStats() -> { totalItems, totalStorages, totalFolders, totalUsers }
+function getDashboardStats() {
+  return {
+    totalItems: db.prepare("SELECT COUNT(*) AS count FROM items").get().count,
+    totalStorages: db.prepare("SELECT COUNT(*) AS count FROM storages").get().count,
+    totalFolders: db.prepare("SELECT COUNT(*) AS count FROM folders").get().count,
+    totalUsers: db.prepare("SELECT COUNT(*) AS count FROM auth_users").get().count,
+  };
+}
+
+// getRecentLogs(limit) -> last playlistlog entries, newest first, joined with
+// the item's title.
+function getRecentLogs(limit = 10) {
+  const rows = db
+    .prepare(`
+      SELECT playlistlog.starttime, playlistlog.station, playlistlog.studio,
+             items.title AS item, playlistlog.duration
+      FROM playlistlog
+      LEFT JOIN items ON items.idx = playlistlog.item
+      WHERE playlistlog.station = ?
+      ORDER BY playlistlog.starttime DESC
+      LIMIT ?
+    `)
+    .all(STATION, Number(limit));
+
+  return rows.map((r) => ({
+    starttime: r.starttime,
+    station: r.station,
+    studio: r.studio,
+    item: r.item,
+    duration: r.duration,
+  }));
+}
+
+// getTodayPlaylist() -> today's playlist entries across all hours, resolved
+// against items and sorted by scheduled slot.
+function getTodayPlaylist() {
+  const today = new Date().toISOString().slice(0, 10);
+  const hours = getPlaylistsByDate(today).filter((h) => h.hasEntries);
+
+  const entries = [];
+  for (const hour of hours) {
+    const playlist = getPlaylistById(hour.id);
+    for (const entry of playlist.entries) entries.push(entry);
+  }
+  return entries;
+}
+
 function getPlaylistById(id) {
   const parsed = parsePlaylistId(id);
   if (!parsed) return null;
@@ -1136,6 +1184,9 @@ module.exports = {
   removePlaylistItem,
   savePlaylistItemOverrides,
   getLogs,
+  getDashboardStats,
+  getRecentLogs,
+  getTodayPlaylist,
   getUserByUsername,
   getUserById,
   getScopesByUserId,

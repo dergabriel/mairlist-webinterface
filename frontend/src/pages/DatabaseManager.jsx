@@ -3,7 +3,7 @@ import {
   Database, Folder, FolderOpen, ChevronDown,
   RefreshCw, Plus, Search, Pencil, Trash2, ArrowUpDown,
   AlertTriangle, X, Upload, HardDrive, Library, Settings2,
-  FolderPlus, FolderInput,
+  FolderPlus, FolderInput, Users, Tag,
 } from "lucide-react";
 import {
   getTree, getItems, getStorages, createItem, deleteItem, uploadFile,

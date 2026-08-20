@@ -1,97 +1,91 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { LayoutDashboard, Database, ListMusic, HardDrive, Clock, RefreshCw, AlertTriangle } from "lucide-react";
-import { getItems, getPlaylistsByDate, getStorages, getPlaylistById } from "../lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { LayoutDashboard, Music, HardDrive, Folder, Users, RefreshCw, AlertTriangle } from "lucide-react";
+import { getDashboard } from "../lib/api";
 import { useAuth } from "../lib/AuthContext";
 import Sidebar from "../components/Sidebar";
 
-// --- Helpers ---
-
 const pad2 = (n) => String(n).padStart(2, "0");
-const toDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-const formatDate = (iso) => iso.replace("T", "  ");
-const formatHour = (h) => `${pad2(h)}:00`;
 
-// --- Info card ---
+const formatTime = (value) => {
+  if (!value) return "–";
+  const match = /(\d{2}):(\d{2}):(\d{2})/.exec(value);
+  return match ? `${match[1]}:${match[2]}:${match[3]}` : value;
+};
 
-function InfoCard({ icon: Icon, label, value, subtitleClass = "text-zinc-400" }) {
+const formatDuration = (sec) => {
+  if (sec == null) return "–";
+  const total = Math.round(sec);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${pad2(s)}`;
+};
+
+function StatTile({ icon: Icon, value, label }) {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900 px-5 py-4">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-orange-500">
-        <Icon size={18} className="text-zinc-950" />
-      </div>
+      <Icon size={20} className="shrink-0 text-orange-500" />
       <div className="min-w-0">
-        <div className="truncate text-lg font-semibold text-zinc-100">{value}</div>
-        <div className={`text-xs ${subtitleClass}`}>{label}</div>
+        <div className="text-2xl font-semibold text-orange-500">{value}</div>
+        <div className="text-xs text-zinc-400">{label}</div>
       </div>
     </div>
   );
 }
 
-export default function Dashboard({ onNavigate, onEditItem }) {
+function Panel({ title, children }) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900">
+      <div className="border-b border-zinc-800 px-4 py-3 text-sm font-semibold text-zinc-100">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function Badge({ ok, children }) {
+  return (
+    <span
+      className={`rounded px-2 py-0.5 text-xs font-medium ${
+        ok ? "bg-green-600/15 text-green-500" : "bg-yellow-600/15 text-yellow-500"
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
+export default function Dashboard({ onNavigate }) {
   const { user } = useAuth();
-  const [items, setItems] = useState([]);
-  const [storages, setStorages] = useState([]);
-  const [hourSummaries, setHourSummaries] = useState([]);
-  const [upcomingPlaylist, setUpcomingPlaylist] = useState(null);
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const loadData = useCallback(() => {
+  const isAdmin = user?.scopes?.some(
+    (s) => s.UserLevel === "Admin" || s?.permissions?.UserLevel === "Admin"
+  );
+
+  const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    const today = toDateStr(new Date());
-    return Promise.all([getItems(), getStorages(), getPlaylistsByDate(today)])
-      .then(([itemsData, storagesData, summaries]) => {
-        setItems(itemsData);
-        setStorages(storagesData);
-        setHourSummaries(summaries);
-      })
-      .catch((err) => setError(err.message))
+    return getDashboard()
+      .then(setData)
+      .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    load();
+  }, [load]);
 
-  const playlistsToday = useMemo(
-    () => hourSummaries.filter((s) => s.hasEntries).length,
-    [hourSummaries]
-  );
-
-  const lastUpdate = useMemo(() => {
-    if (items.length === 0) return "-";
-    const latest = items.reduce((a, b) => (a.updatedAt > b.updatedAt ? a : b));
-    return formatDate(latest.updatedAt);
-  }, [items]);
-
-  const recentItems = useMemo(
-    () => [...items].sort((a, b) => (a.updatedAt > b.updatedAt ? -1 : 1)).slice(0, 5),
-    [items]
-  );
-
-  const nextHourEntries = useMemo(() => {
-    const currentHour = new Date().getHours();
-    const summary = hourSummaries.find((s) => s.hour === currentHour && s.hasEntries)
-      ?? hourSummaries.find((s) => s.hour > currentHour && s.hasEntries);
-    return summary;
-  }, [hourSummaries]);
-
-  useEffect(() => {
-    if (!nextHourEntries) {
-      setUpcomingPlaylist(null);
-      return;
-    }
-    getPlaylistById(nextHourEntries.id).then(setUpcomingPlaylist);
-  }, [nextHourEntries]);
+  const stats = data?.stats;
+  const recentLogs = data?.recentLogs ?? [];
+  const todayPlaylist = data?.todayPlaylist ?? [];
+  const system = data?.system;
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
       <Sidebar activePage="dashboard" onNavigate={onNavigate} user={user} />
 
-      {/* Main content */}
       <main className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
         <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500">
@@ -100,7 +94,7 @@ export default function Dashboard({ onNavigate, onEditItem }) {
             <h1 className="text-lg font-semibold">Übersicht</h1>
           </div>
           <button
-            onClick={loadData}
+            onClick={load}
             className="flex h-9 w-9 items-center justify-center rounded-md border border-green-700/60 text-green-500 transition-colors hover:bg-green-600/10"
           >
             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
@@ -115,84 +109,106 @@ export default function Dashboard({ onNavigate, onEditItem }) {
             </div>
           )}
 
-          {/* Info cards */}
-          <div className="grid grid-cols-5 gap-4">
-            <InfoCard icon={Database} label="Elemente gesamt" value={loading ? "…" : items.length} />
-            <InfoCard icon={ListMusic} label="Playlists heute" value={loading ? "…" : playlistsToday} />
-            <InfoCard icon={HardDrive} label="Storages" value={loading ? "…" : storages.length} />
-            <InfoCard icon={Clock} label="Letztes Update" value={loading ? "…" : lastUpdate} />
-            <InfoCard icon={Users} label="Hörer" value="--" subtitleClass="text-zinc-600" />
-          </div>
-          <div className="mb-6 mt-2 text-xs text-zinc-600">
-            Hörerzahlen können später über eine externe API eingebunden werden (z.B. Icecast, Radio.co)
-          </div>
-
-          {/* Two columns */}
-          <div className="mb-6 grid grid-cols-2 gap-6">
-            {/* Recent items */}
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900">
-              <div className="border-b border-zinc-800 px-4 py-3 text-sm font-semibold text-zinc-100">
-                Letzte Elemente
-              </div>
-              <div className="divide-y divide-zinc-800">
-                {!loading && recentItems.length === 0 && (
-                  <div className="px-4 py-6 text-center text-sm text-zinc-600">Keine Elemente</div>
-                )}
-                {recentItems.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => onEditItem?.(item.internalId)}
-                    className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm transition-colors hover:bg-zinc-800/50"
-                  >
-                    <div className="min-w-0">
-                      <span className="truncate text-zinc-100">{item.title}</span>
-                      {item.artist && <span className="text-zinc-500">{"  ·  " + item.artist}</span>}
-                    </div>
-                    <span className="shrink-0 pl-3 text-xs text-zinc-500">{formatDate(item.updatedAt)}</span>
-                  </button>
-                ))}
-              </div>
+          <div className="grid grid-cols-2 gap-6">
+            {/* Oben links: Statistiken */}
+            <div className="grid grid-cols-2 gap-4">
+              <StatTile icon={Music} value={loading ? "…" : stats?.totalItems ?? 0} label="Items" />
+              <StatTile icon={HardDrive} value={loading ? "…" : stats?.totalStorages ?? 0} label="Storages" />
+              <StatTile icon={Folder} value={loading ? "…" : stats?.totalFolders ?? 0} label="Ordner" />
+              <StatTile icon={Users} value={loading ? "…" : stats?.totalUsers ?? 0} label="Benutzer" />
             </div>
 
-            {/* Today */}
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900">
-              <div className="border-b border-zinc-800 px-4 py-3 text-sm font-semibold text-zinc-100">
-                Heute — {nextHourEntries ? formatHour(nextHourEntries.hour) : "-"}
-              </div>
-              <div className="divide-y divide-zinc-800">
-                {!loading && (!upcomingPlaylist || upcomingPlaylist.entries.length === 0) && (
-                  <div className="px-4 py-6 text-center text-sm text-zinc-600">Keine Einträge</div>
+            {/* Oben rechts: Heutige Playlist */}
+            <Panel title="Heutige Playlist">
+              <div className="overflow-hidden">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-zinc-800 text-zinc-400">
+                      <th className="px-4 py-2 font-medium">Zeit</th>
+                      <th className="px-4 py-2 font-medium">Titel</th>
+                      <th className="px-4 py-2 font-medium">Artist</th>
+                      <th className="px-4 py-2 font-medium">Dauer</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!loading && todayPlaylist.slice(0, 10).map((entry, i) => (
+                      <tr
+                        key={`${entry.itemId}-${i}`}
+                        className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-800/50"
+                      >
+                        <td className="whitespace-nowrap px-4 py-2 text-zinc-500">{formatTime(entry.scheduledStart)}</td>
+                        <td className="px-4 py-2 text-zinc-100">{entry.item?.title ?? "–"}</td>
+                        <td className="px-4 py-2 text-zinc-400">{entry.item?.artist || "–"}</td>
+                        <td className="whitespace-nowrap px-4 py-2 text-zinc-400">{formatDuration(entry.item?.duration)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!loading && todayPlaylist.length === 0 && (
+                  <div className="px-4 py-6 text-center text-sm text-zinc-600">Keine Playlist für heute</div>
                 )}
-                {upcomingPlaylist?.entries.slice(0, 8).map((entry) => (
-                  <div key={entry.position} className="flex items-center gap-3 px-4 py-2.5 text-sm">
-                    <span className="w-12 shrink-0 text-zinc-500">
-                      {String(entry.position).padStart(2, "0")}
-                    </span>
-                    <span className="truncate text-zinc-100">
-                      {entry.item?.title ?? "-"}
-                    </span>
+              </div>
+            </Panel>
+
+            {/* Unten links: Letzte Wiedergaben */}
+            <Panel title="Letzte Wiedergaben">
+              <div className="overflow-hidden">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-zinc-800 text-zinc-400">
+                      <th className="px-4 py-2 font-medium">Zeit</th>
+                      <th className="px-4 py-2 font-medium">Titel</th>
+                      <th className="px-4 py-2 font-medium">Station</th>
+                      <th className="px-4 py-2 font-medium">Studio</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!loading && recentLogs.slice(0, 10).map((log, i) => (
+                      <tr
+                        key={`${log.starttime}-${i}`}
+                        className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-800/50"
+                      >
+                        <td className="whitespace-nowrap px-4 py-2 text-zinc-500">{formatTime(log.starttime)}</td>
+                        <td className="px-4 py-2 text-zinc-100">{log.item || "–"}</td>
+                        <td className="whitespace-nowrap px-4 py-2 text-zinc-400">{log.station}</td>
+                        <td className="whitespace-nowrap px-4 py-2 text-zinc-400">{log.studio || "–"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!loading && recentLogs.length === 0 && (
+                  <div className="px-4 py-6 text-center text-sm text-zinc-600">Keine Wiedergaben</div>
+                )}
+              </div>
+            </Panel>
+
+            {/* Unten rechts: Systemstatus */}
+            <Panel title="Systemstatus">
+              <div className="space-y-3 px-4 py-4 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">Data Source</span>
+                  <Badge ok={system?.dataSource === "sqlite"}>{system?.dataSource ?? "–"}</Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">Server</span>
+                  <Badge ok>Online</Badge>
+                </div>
+                {isAdmin && system?.dbPath && (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="shrink-0 text-zinc-400">DB-Pfad</span>
+                    <span className="truncate text-right text-xs text-zinc-500">{system.dbPath}</span>
                   </div>
-                ))}
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">Angemeldet als</span>
+                  <span className="text-zinc-100">{user?.username ?? "–"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">Rolle</span>
+                  <span className="text-zinc-100">{isAdmin ? "Administrator" : "Benutzer"}</span>
+                </div>
               </div>
-            </div>
-          </div>
-
-          {/* Quick access */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => onNavigate?.("list")}
-              className="flex items-center gap-2 rounded-md bg-green-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-green-500"
-            >
-              <Database size={16} />
-              <span>Elemente öffnen</span>
-            </button>
-            <button
-              onClick={() => onNavigate?.("playlist")}
-              className="flex items-center gap-2 rounded-md border border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
-            >
-              <ListMusic size={16} />
-              <span>Playlist öffnen</span>
-            </button>
+            </Panel>
           </div>
         </div>
       </main>

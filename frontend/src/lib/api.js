@@ -168,6 +168,10 @@ export function getLogs({ date, limit, offset } = {}) {
   return request(`/logs${qs({ date, limit, offset })}`);
 }
 
+export function getDashboard() {
+  return request("/dashboard");
+}
+
 export function getSettings() {
   return request("/settings");
 }

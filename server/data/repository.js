@@ -838,6 +838,28 @@ function getLogs() {
   return [];
 }
 
+// getDashboardStats() -> { totalItems, totalStorages, totalFolders, totalUsers }
+function getDashboardStats() {
+  return {
+    totalItems: items.length,
+    totalStorages: storages.length,
+    totalFolders: folders.length,
+    totalUsers: mockUsers.length,
+  };
+}
+
+// getRecentLogs(limit) -> last playlistlog entries. No mock playlistlog data
+// exists yet, so this always returns an empty array.
+function getRecentLogs() {
+  return [];
+}
+
+// getTodayPlaylist() -> today's playlist entries. No dashboard-ready mock
+// data exists yet, so this always returns an empty array.
+function getTodayPlaylist() {
+  return [];
+}
+
 module.exports = {
   getFolderTree,
   getFolderById,
@@ -872,6 +894,9 @@ module.exports = {
   removePlaylistItem,
   savePlaylistItemOverrides,
   getLogs,
+  getDashboardStats,
+  getRecentLogs,
+  getTodayPlaylist,
   getUserByUsername,
   getUserById,
   getScopesByUserId,

@@ -1,10 +1,9 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
-  LayoutDashboard, Settings, Database, Copy, ListMusic,
-  Users, Tag, ScrollText, Folder, FolderOpen, ChevronDown,
+  Database, Folder, FolderOpen, ChevronDown,
   RefreshCw, Plus, Search, Pencil, Trash2, ArrowUpDown,
   AlertTriangle, X, Upload, HardDrive, Library, Settings2,
-  FolderPlus, FolderInput, LogOut,
+  FolderPlus, FolderInput,
 } from "lucide-react";
 import {
   getTree, getItems, getStorages, createItem, deleteItem, uploadFile,
@@ -18,6 +17,7 @@ import {
   ALL_FILTER, collectFolderAndDescendantIds,
   findFolder, TreeRow, ListSection, AttributesSection,
 } from "../components/treeUtils";
+import Sidebar from "../components/Sidebar";
 
 // --- Helpers ---
 
@@ -295,22 +295,6 @@ function FolderNode({
         </div>
       )}
     </div>
-  );
-}
-
-// --- Nav item ---
-
-function NavItem({ icon: Icon, label, active, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
-        active ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
-      }`}
-    >
-      <Icon size={16} className={active ? "text-orange-500" : ""} />
-      <span>{label}</span>
-    </button>
   );
 }
 
@@ -1154,37 +1138,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
-      {/* Nav sidebar */}
-      <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 px-3 py-4">
-        <div className="mb-6 px-2 text-sm font-semibold tracking-wide">
-          <span className="text-zinc-100">mAirList</span>{" "}
-          <span className="rounded bg-orange-500 px-1.5 py-0.5 text-xs font-bold text-zinc-950">DB</span>
-        </div>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Playout</div>
-        <nav className="mb-5 space-y-0.5">
-          <NavItem icon={LayoutDashboard} label="Übersicht" onClick={() => onNavigate?.("dashboard")} />
-          <NavItem icon={Settings} label="Einstellungen" />
-        </nav>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Datenbank</div>
-        <nav className="mb-5 space-y-0.5">
-          <NavItem icon={Database} label="Elemente" active />
-          <NavItem icon={Copy} label="Vorlagen" />
-          <NavItem icon={ListMusic} label="Playlist" onClick={() => onNavigate?.("playlist")} />
-        </nav>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Administration</div>
-        <nav className="space-y-0.5">
-          <NavItem icon={Users} label="Benutzer" onClick={() => onNavigate?.("users")} />
-          <NavItem icon={Tag} label="Gruppen" onClick={() => onNavigate?.("groups")} />
-          <NavItem icon={ScrollText} label="Logs" />
-        </nav>
-
-        <div className="mt-auto pt-4">
-          <NavItem icon={LogOut} label="Abmelden" onClick={() => onNavigate?.("login")} />
-        </div>
-      </aside>
+      <Sidebar activePage="list" onNavigate={onNavigate} user={user} />
 
       {/* Library tree */}
       <aside className="w-64 shrink-0 overflow-y-auto border-r border-zinc-800 bg-zinc-900/50 py-3 pr-2">

@@ -39,3 +39,6 @@ test-results/
 *.mldb-wal
 *.mldb-shm
 *.test.mldb
+
+# Panel-Einstellungen (generiert)
+server/settings.json

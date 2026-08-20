@@ -10,6 +10,7 @@ const repo = process.env.DATA_SOURCE === "sqlite"
   ? require("../data/sqlRepository")
   : require("../data/repository");
 const { requireAuth, requireScope } = require("../middleware/auth");
+const { getSettings, saveSettings } = require("../lib/settings");
 
 router.use(requireAuth);
 
@@ -391,6 +392,16 @@ router.get("/logs", requireScope("library.read"), (req, res, next) => {
       offset: offset ? Number(offset) : 0,
     }));
   } catch (e) { next(e); }
+});
+
+// GET /api/settings -> current panel settings
+router.get("/settings", (req, res, next) => {
+  try { res.json(getSettings()); } catch (e) { next(e); }
+});
+
+// PUT /api/settings -> save panel settings
+router.put("/settings", requireScope("admin"), (req, res, next) => {
+  try { res.json(saveSettings(req.body)); } catch (e) { next(e); }
 });
 
 // DELETE /api/items/:id -> delete an item

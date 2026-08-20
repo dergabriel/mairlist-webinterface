@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import WaveSurfer from "wavesurfer.js";
 import {
-  LayoutDashboard, Settings, Database, Copy, ListMusic, Users, Tag, ScrollText,
+  Database,
   RefreshCw, ChevronLeft, LayoutList, Play, Pause, SlidersHorizontal,
   Clock, History, Pencil, Volume2, ZoomIn, ZoomOut, Bookmark, Trash2,
   Palette, Image as ImageIcon, AlertTriangle, CircleDot, Database as DatabaseIcon,
@@ -10,6 +10,8 @@ import {
   getItemById, updateItem, getItemHistory, getAttributeDefinitions,
   getPlaylistById, savePlaylistItemOverrides, getAudioUrl,
 } from "../lib/api";
+import { useAuth } from "../lib/AuthContext";
+import Sidebar from "../components/Sidebar";
 
 // Fields a playlist entry is allowed to override locally ("volatile" edits,
 // per mAirList's playlist/database separation): cue points and attributes.
@@ -167,20 +169,6 @@ const WAVE_BARS = Array.from({ length: 200 }, (_, i) => {
 });
 
 // --- Small components ---
-
-function NavItem({ icon: Icon, label, active, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
-        active ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
-      }`}
-    >
-      <Icon size={16} className={active ? "text-orange-500" : ""} />
-      <span>{label}</span>
-    </button>
-  );
-}
 
 function TabItem({ icon: Icon, label, active, onClick }) {
   return (
@@ -1021,6 +1009,7 @@ const TABS = [
 ];
 
 export default function ItemEditor({ internalId, playlistContext, onBack, onNavigate }) {
+  const { user } = useAuth();
   const [globalItem, setGlobalItem] = useState(null); // untouched DB record, for diffing overrides
   const [item, setItem] = useState(null); // edited, display-merged (global + overrides when in playlist context)
   const [loading, setLoading] = useState(true);
@@ -1131,30 +1120,13 @@ export default function ItemEditor({ internalId, playlistContext, onBack, onNavi
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
-      {/* Nav sidebar */}
-      <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 px-3 py-4">
-        <div className="mb-6 px-2 text-sm font-semibold tracking-wide">
-          <span className="text-zinc-100">mAirList</span>{" "}
-          <span className="rounded bg-orange-500 px-1.5 py-0.5 text-xs font-bold text-zinc-950">DB</span>
-        </div>
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Playout</div>
-        <nav className="mb-5 space-y-0.5">
-          <NavItem icon={LayoutDashboard} label="Übersicht" />
-          <NavItem icon={Settings} label="Einstellungen" />
-        </nav>
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Datenbank</div>
-        <nav className="mb-5 space-y-0.5">
-          <NavItem icon={Database} label="Elemente" active onClick={onBack} />
-          <NavItem icon={Copy} label="Vorlagen" />
-          <NavItem icon={ListMusic} label="Playlist" onClick={() => onNavigate?.("playlist")} />
-        </nav>
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Administration</div>
-        <nav className="space-y-0.5">
-          <NavItem icon={Users} label="Benutzer" onClick={() => onNavigate?.("users")} />
-          <NavItem icon={Tag} label="Gruppen" onClick={() => onNavigate?.("groups")} />
-          <NavItem icon={ScrollText} label="Logs" />
-        </nav>
-      </aside>
+      <Sidebar
+        activePage="list"
+        onNavigate={onNavigate}
+        user={user}
+        showLogout={false}
+        onListClick={onBack}
+      />
 
       {/* Tab column */}
       <aside className="w-56 shrink-0 border-r border-zinc-800 bg-zinc-900/50 p-3">

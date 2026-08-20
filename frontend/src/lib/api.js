@@ -168,6 +168,14 @@ export function getLogs({ date, limit, offset } = {}) {
   return request(`/logs${qs({ date, limit, offset })}`);
 }
 
+export function getSettings() {
+  return request("/settings");
+}
+
+export function saveSettings(data) {
+  return put("/settings", data);
+}
+
 export function getUsers() {
   return request("/auth/admin/users");
 }

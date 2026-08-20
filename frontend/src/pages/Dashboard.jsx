@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import {
-  LayoutDashboard, Settings, Database, Copy, ListMusic, Users, Tag,
-  ScrollText, HardDrive, Clock, RefreshCw, AlertTriangle, LogOut,
-} from "lucide-react";
+import { LayoutDashboard, Database, ListMusic, HardDrive, Clock, RefreshCw, AlertTriangle } from "lucide-react";
 import { getItems, getPlaylistsByDate, getStorages, getPlaylistById } from "../lib/api";
+import { useAuth } from "../lib/AuthContext";
+import Sidebar from "../components/Sidebar";
 
 // --- Helpers ---
 
@@ -11,22 +10,6 @@ const pad2 = (n) => String(n).padStart(2, "0");
 const toDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const formatDate = (iso) => iso.replace("T", "  ");
 const formatHour = (h) => `${pad2(h)}:00`;
-
-// --- Nav item (mirrors DatabaseManager/Playlist) ---
-
-function NavItem({ icon: Icon, label, active, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
-        active ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
-      }`}
-    >
-      <Icon size={16} className={active ? "text-orange-500" : ""} />
-      <span>{label}</span>
-    </button>
-  );
-}
 
 // --- Info card ---
 
@@ -45,6 +28,7 @@ function InfoCard({ icon: Icon, label, value, subtitleClass = "text-zinc-400" })
 }
 
 export default function Dashboard({ onNavigate, onEditItem }) {
+  const { user } = useAuth();
   const [items, setItems] = useState([]);
   const [storages, setStorages] = useState([]);
   const [hourSummaries, setHourSummaries] = useState([]);
@@ -103,37 +87,7 @@ export default function Dashboard({ onNavigate, onEditItem }) {
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
-      {/* Nav sidebar */}
-      <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 px-3 py-4">
-        <div className="mb-6 px-2 text-sm font-semibold tracking-wide">
-          <span className="text-zinc-100">mAirList</span>{" "}
-          <span className="rounded bg-orange-500 px-1.5 py-0.5 text-xs font-bold text-zinc-950">DB</span>
-        </div>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Playout</div>
-        <nav className="mb-5 space-y-0.5">
-          <NavItem icon={LayoutDashboard} label="Übersicht" active onClick={() => onNavigate?.("dashboard")} />
-          <NavItem icon={Settings} label="Einstellungen" />
-        </nav>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Datenbank</div>
-        <nav className="mb-5 space-y-0.5">
-          <NavItem icon={Database} label="Elemente" onClick={() => onNavigate?.("list")} />
-          <NavItem icon={Copy} label="Vorlagen" />
-          <NavItem icon={ListMusic} label="Playlist" onClick={() => onNavigate?.("playlist")} />
-        </nav>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Administration</div>
-        <nav className="space-y-0.5">
-          <NavItem icon={Users} label="Benutzer" onClick={() => onNavigate?.("users")} />
-          <NavItem icon={Tag} label="Gruppen" onClick={() => onNavigate?.("groups")} />
-          <NavItem icon={ScrollText} label="Logs" />
-        </nav>
-
-        <div className="mt-auto pt-4">
-          <NavItem icon={LogOut} label="Abmelden" onClick={() => onNavigate?.("login")} />
-        </div>
-      </aside>
+      <Sidebar activePage="dashboard" onNavigate={onNavigate} user={user} />
 
       {/* Main content */}
       <main className="flex min-w-0 flex-1 flex-col">

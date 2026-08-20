@@ -1,27 +1,12 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import WaveSurfer from "wavesurfer.js";
 import {
-  LayoutDashboard, Settings, Database, Copy, ListMusic, Users, Tag, ScrollText,
   ChevronLeft, Sliders, Play, Pause, Square, Focus, Save, CircleDot,
   AlertTriangle,
 } from "lucide-react";
 import { getAudioUrl, savePlaylistItemOverrides } from "../lib/api";
-
-// --- Shared nav (mirrors Playlist/ItemEditor) ---
-
-function NavItem({ icon: Icon, label, active, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
-        active ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
-      }`}
-    >
-      <Icon size={16} className={active ? "text-orange-500" : ""} />
-      <span>{label}</span>
-    </button>
-  );
-}
+import { useAuth } from "../lib/AuthContext";
+import Sidebar from "../components/Sidebar";
 
 // --- Cue point catalogue (mirrors server/data/mockData.js CUE_POINTS) ---
 
@@ -513,6 +498,7 @@ function CueChipStrip({ track, trackIndex, onJump, onChipDragStart, onChipDragEn
 // --- Main ---
 
 export default function MixEditor({ context, onBack, onNavigate }) {
+  const { user } = useAuth();
   const items = context?.items ?? [];
   const playlistId = context?.playlistId;
 
@@ -772,29 +758,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   if (items.length < 2) {
     return (
       <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
-        <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 px-3 py-4">
-          <div className="mb-6 px-2 text-sm font-semibold tracking-wide">
-            <span className="text-zinc-100">mAirList</span>{" "}
-            <span className="rounded bg-orange-500 px-1.5 py-0.5 text-xs font-bold text-zinc-950">DB</span>
-          </div>
-          <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Playout</div>
-          <nav className="mb-5 space-y-0.5">
-            <NavItem icon={LayoutDashboard} label="Übersicht" />
-            <NavItem icon={Settings} label="Einstellungen" />
-          </nav>
-          <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Datenbank</div>
-          <nav className="mb-5 space-y-0.5">
-            <NavItem icon={Database} label="Elemente" onClick={() => onNavigate?.("list")} />
-            <NavItem icon={Copy} label="Vorlagen" />
-            <NavItem icon={ListMusic} label="Playlist" active onClick={() => onNavigate?.("playlist")} />
-          </nav>
-          <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Administration</div>
-          <nav className="space-y-0.5">
-            <NavItem icon={Users} label="Benutzer" onClick={() => onNavigate?.("users")} />
-            <NavItem icon={Tag} label="Gruppen" onClick={() => onNavigate?.("groups")} />
-            <NavItem icon={ScrollText} label="Logs" />
-          </nav>
-        </aside>
+        <Sidebar activePage="playlist" onNavigate={onNavigate} user={user} showLogout={false} />
         <main className="flex min-w-0 flex-1 flex-col">
           <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
             <div className="flex items-center gap-3">
@@ -823,33 +787,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
-      {/* Nav sidebar */}
-      <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 px-3 py-4">
-        <div className="mb-6 px-2 text-sm font-semibold tracking-wide">
-          <span className="text-zinc-100">mAirList</span>{" "}
-          <span className="rounded bg-orange-500 px-1.5 py-0.5 text-xs font-bold text-zinc-950">DB</span>
-        </div>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Playout</div>
-        <nav className="mb-5 space-y-0.5">
-          <NavItem icon={LayoutDashboard} label="Übersicht" />
-          <NavItem icon={Settings} label="Einstellungen" />
-        </nav>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Datenbank</div>
-        <nav className="mb-5 space-y-0.5">
-          <NavItem icon={Database} label="Elemente" onClick={() => onNavigate?.("list")} />
-          <NavItem icon={Copy} label="Vorlagen" />
-          <NavItem icon={ListMusic} label="Playlist" active onClick={() => onNavigate?.("playlist")} />
-        </nav>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Administration</div>
-        <nav className="space-y-0.5">
-          <NavItem icon={Users} label="Benutzer" onClick={() => onNavigate?.("users")} />
-          <NavItem icon={Tag} label="Gruppen" />
-          <NavItem icon={ScrollText} label="Logs" />
-        </nav>
-      </aside>
+      <Sidebar activePage="playlist" onNavigate={onNavigate} user={user} showLogout={false} />
 
       {/* Main content */}
       <main className="flex min-w-0 flex-1 flex-col">

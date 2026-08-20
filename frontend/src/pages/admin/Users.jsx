@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  LayoutDashboard, Settings as SettingsIcon, Database, Copy, ListMusic,
-  Users as UsersIcon, Tag, ScrollText, LogOut, Plus, Trash2, Save,
+  Users as UsersIcon, Plus, Trash2, Save,
   AlertTriangle, X, Check, UserCircle, KeyRound, ClipboardCopy,
 } from "lucide-react";
 import {
@@ -10,20 +9,7 @@ import {
   getUserTokens, createUserToken, deleteUserToken,
 } from "../../lib/api";
 import { useAuth } from "../../lib/AuthContext";
-
-function NavItem({ icon: Icon, label, active, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
-        active ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
-      }`}
-    >
-      <Icon size={16} className={active ? "text-orange-500" : ""} />
-      <span>{label}</span>
-    </button>
-  );
-}
+import Sidebar from "../../components/Sidebar";
 
 const inputClass =
   "w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-zinc-700";
@@ -519,7 +505,7 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
 }
 
 export default function Users({ onNavigate }) {
-  const { user: currentUser, logout } = useAuth();
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -575,44 +561,7 @@ export default function Users({ onNavigate }) {
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
-      <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 px-3 py-4">
-        <div className="mb-6 px-2 text-sm font-semibold tracking-wide">
-          <span className="text-zinc-100">mAirList</span>{" "}
-          <span className="rounded bg-orange-500 px-1.5 py-0.5 text-xs font-bold text-zinc-950">DB</span>
-        </div>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Playout</div>
-        <nav className="mb-5 space-y-0.5">
-          <NavItem icon={LayoutDashboard} label="Übersicht" onClick={() => onNavigate?.("dashboard")} />
-          <NavItem icon={SettingsIcon} label="Einstellungen" onClick={() => onNavigate?.("settings")} />
-        </nav>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Datenbank</div>
-        <nav className="mb-5 space-y-0.5">
-          <NavItem icon={Database} label="Elemente" onClick={() => onNavigate?.("list")} />
-          <NavItem icon={Copy} label="Vorlagen" />
-          <NavItem icon={ListMusic} label="Playlist" onClick={() => onNavigate?.("playlist")} />
-        </nav>
-
-        <div className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-600">Administration</div>
-        <nav className="space-y-0.5">
-          <NavItem icon={UsersIcon} label="Benutzer" active onClick={() => onNavigate?.("users")} />
-          <NavItem icon={Tag} label="Gruppen" onClick={() => onNavigate?.("groups")} />
-          <NavItem icon={ScrollText} label="Logs" onClick={() => onNavigate?.("logs")} />
-          <NavItem icon={SettingsIcon} label="Einstellungen" onClick={() => onNavigate?.("settings")} />
-        </nav>
-
-        <div className="mt-auto pt-4">
-          <NavItem
-            icon={LogOut}
-            label="Abmelden"
-            onClick={async () => {
-              await logout();
-              onNavigate?.("login");
-            }}
-          />
-        </div>
-      </aside>
+      <Sidebar activePage="users" onNavigate={onNavigate} user={currentUser} />
 
       <div className="flex w-72 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900">
         <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3.5">

@@ -57,7 +57,7 @@ Legende: ✅ fertig (gegen Mock) · 🚧 in Arbeit · ⬜ offen · 🔽 späte P
 | `uploadFile` | 🟡 nicht smoke-getestet |
 
 **Offene TODOs in sqlRepository.js:**
-- `getItemHistory()` gibt leeres Array zurück (`playlistlog` noch nicht angebunden)
+- `getItemHistory()` gibt leeres Array zurück; `playlistlog` selbst ist inzwischen über `getLogs()`/`getRecentLogs()` für die Logs-Seite und das Dashboard angebunden
 - `writeHour()` macht DELETE+INSERT der ganzen Stunde statt gezielter Position-Shifts
 - `cover` und `containerType` bleiben `null` (`xmldata`/`options` noch nicht geparst)
 - Noch offen aus FIELD-SEMANTICS.md: `items.color` Format, `items.endtype` Werte, `playlist.xmldata` Override-Format, `item_cuedata.xmldata` für Hüllkurven
@@ -116,7 +116,7 @@ Der echte Client hat sieben Wurzelknoten, wir haben bisher nur einen:
 
 ## 🧱 Element-Typen
 
-mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper vs. Station ID vs. Promo) erfolgt über Ordner und Attribute, nicht über eigene Typen.
+mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper vs. Station ID vs. Promo) erfolgt über Ordner und Attribute, nicht über eigene Typen. Im Frontend werden die Typen dynamisch aus der DB geladen (`getItemTypes`), nicht mehr hardcoded.
 
 | Typ | Beschreibung | Status |
 |---|---|---|
@@ -247,9 +247,52 @@ Rollen laut offizieller Doku (Setup):
 | Rolle DJ: wie Studio + Playlists ändern und Scheduling, Bibliothek read-only | ⬜ | |
 | Rolle VTDJ: Voice Tracking | ⬜ | |
 | Rolle Admin: alles inkl. Konfiguration | ✅ | `UserLevel: "Admin"` grants everything |
-| Benutzer anlegen/bearbeiten, Gruppen | ⬜ | |
-| Logs einsehen | ⬜ | |
+| Benutzer anlegen/bearbeiten, Gruppen | ✅ | Administration-Bereich, nur für Admin-User sichtbar (`isAdmin`-Check) |
+| Logs einsehen | ✅ | Logs-Seite |
 | Konflikt-Erkennung bei gleichzeitiger Playlist-Bearbeitung | ⬜ | |
+
+### Administration (Admin-Bereich)
+
+Eigener Bereich in der Sidebar, nur für Admin-User sichtbar (`isAdmin`-Check).
+
+| Funktion | Status |
+|---|---|
+| **Benutzer-Verwaltung** (`frontend/src/pages/admin/Users.jsx`): anlegen, bearbeiten, löschen | ✅ |
+| Passwort ändern | ✅ |
+| Permissions je Benutzer setzen | ✅ |
+| API-Token generieren und kopieren | ✅ |
+| **Gruppen-Verwaltung** (`frontend/src/pages/admin/Groups.jsx`): anlegen, bearbeiten, löschen | ✅ |
+| Mitglieder verwalten | ✅ |
+| Permissions je Gruppe setzen | ✅ |
+| **Logs-Seite** (`frontend/src/pages/Logs.jsx`): `playlistlog` aus der DB | ✅ |
+| Datumsfilter | ✅ |
+| Pagination | ✅ |
+
+---
+
+## ⚙️ Einstellungen
+
+Panel-Settings über `frontend/src/pages/Settings.jsx`, persistiert in `server/settings.json` (`server/lib/settings.js`).
+
+| Abschnitt | Status |
+|---|---|
+| Allgemein (Stationsname, Datumsformat, Zeitformat, Standard-Datum) | ✅ |
+| Anzeige (Items pro Seite) | ✅ |
+| Pfade (Audio-Basisverzeichnis, Upload-Basisverzeichnis) | ✅ |
+| Sicherheit (Allowed Origins) | ✅ |
+
+---
+
+## 🏠 Dashboard / Startseite
+
+`frontend/src/pages/Dashboard.jsx`, erste Seite nach Login.
+
+| Funktion | Status |
+|---|---|
+| Statistik-Kacheln: Items, Storages, Ordner, Benutzer | ✅ |
+| Heutige Playlist | ✅ |
+| Letzte Wiedergaben | ✅ |
+| Systemstatus: Data Source, Server, aktueller Benutzer/Rolle | ✅ |
 
 ---
 

@@ -338,12 +338,26 @@ const PROGRESS_COLOR = "#f97316"; // orange-500
 const BASE_PX_PER_SEC = 40; // zoomLevel 1 baseline; wavesurfer's minPxPerSec scales from here
 
 function CueEditorTab({ item, updateCue }) {
-  const dur = Number(item.duration) || 1;
+  // audioDuration is wavesurfer's own decoded duration, set once the audio is
+  // ready. It's the only duration used for waveform-space math (marker
+  // positions, ticks, seeking) so the overlay and waveform never disagree.
+  // item.duration (DB) is just the placeholder while audio is loading/unavailable.
+  const [audioDuration, setAudioDuration] = useState(null);
+  const dur = audioDuration ?? (Number(item.duration) || 1);
   const [cursor, setCursor] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [volume, setVolume] = useState(0.7);
   const [audioState, setAudioState] = useState("loading"); // "loading" | "ready" | "unavailable"
+
+  // Wavesurfer's wrapper can render wider than its container and scroll
+  // internally once zoomed in (see calculateWaveformLayout in wavesurfer's
+  // renderer). The marker/tick overlay lives in a separate DOM tree (it can't
+  // be portaled into wavesurfer's shadow root), so it's kept in sync by
+  // mirroring wavesurfer's own scroll/zoom state: a translateX matching
+  // wavesurfer's scrollLeft, sized against wavesurfer's actual wrapper width
+  // rather than a fixed 100%.
+  const [waveScroll, setWaveScroll] = useState({ scrollLeft: 0, scrollWidth: 0, clientWidth: 0 });
 
   const waveformRef = useRef(null);
   const wavesurferRef = useRef(null);
@@ -416,6 +430,8 @@ function CueEditorTab({ item, updateCue }) {
     setAudioState("loading");
     setPlaying(false);
     setCursor(0);
+    setAudioDuration(null);
+    setWaveScroll({ scrollLeft: 0, scrollWidth: 0, clientWidth: 0 });
 
     const ws = WaveSurfer.create({
       container: waveformRef.current,
@@ -434,12 +450,37 @@ function CueEditorTab({ item, updateCue }) {
     });
     wavesurferRef.current = ws;
 
-    ws.on("ready", () => setAudioState("ready"));
+    // Reads wavesurfer's actual (possibly zoomed/scrolled) wrapper geometry
+    // straight from its shadow-DOM scroll container, so the overlay can match
+    // it exactly instead of assuming a fixed 100%-width, non-scrolling track.
+    const syncScroll = () => {
+      const scrollEl = ws.getWrapper()?.parentElement; // wavesurfer's `.scroll` container
+      if (!scrollEl) return;
+      setWaveScroll({
+        scrollLeft: scrollEl.scrollLeft,
+        scrollWidth: scrollEl.scrollWidth,
+        clientWidth: scrollEl.clientWidth,
+      });
+    };
+
+    ws.on("ready", (readyDuration) => {
+      setAudioDuration(readyDuration);
+      setAudioState("ready");
+      syncScroll();
+    });
     ws.on("error", () => setAudioState("unavailable"));
     ws.on("timeupdate", (t) => setCursor(t));
     ws.on("play", () => setPlaying(true));
     ws.on("pause", () => setPlaying(false));
     ws.on("finish", () => setPlaying(false));
+    ws.on("scroll", syncScroll);
+    ws.on("zoom", () => requestAnimationFrame(syncScroll));
+    ws.on("redraw", syncScroll);
+    ws.on("resize", syncScroll);
+    // relativeX is 0..1 against wavesurfer's own wrapper — correct even when
+    // zoomed/scrolled, unlike a manual getBoundingClientRect() against the
+    // outer (non-scrolling) container.
+    ws.on("click", (relativeX) => ws.seekTo(relativeX));
 
     return () => {
       ws.destroy();
@@ -474,16 +515,15 @@ function CueEditorTab({ item, updateCue }) {
     if (audioReady) wavesurferRef.current?.playPause();
   };
 
+  // Only used for the synthetic fallback (audio not ready): wavesurfer's own
+  // "click" listener (registered on mount) handles seeking once ready, since
+  // it reports position relative to wavesurfer's actual — possibly zoomed and
+  // scrolled — wrapper rather than this outer, non-scrolling container.
   const seekTo = (e) => {
-    if (!audioReady) {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const pct = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
-      setCursor(Number((pct * dur).toFixed(3)));
-      return;
-    }
+    if (audioReady) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const pct = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
-    wavesurferRef.current?.seekTo(pct);
+    setCursor(Number((pct * dur).toFixed(3)));
   };
 
   const setMarker = (key) => updateCue(key, toStorage(cursor));
@@ -526,62 +566,78 @@ function CueEditorTab({ item, updateCue }) {
     });
   }, [item.cue, item.duration, dur]);
 
+  // Wavesurfer's wrapper is `waveScroll.scrollWidth` px wide and scrolled by
+  // `waveScroll.scrollLeft` once zoomed past the visible width; while not
+  // zoomed in (or before wavesurfer has reported geometry) it just fills the
+  // container. This mirrors that as inline styles so any child positioned by
+  // percentage lines up with wavesurfer's actual waveform pixels.
+  const waveTrackStyle = waveScroll.scrollWidth > 0
+    ? { width: `${waveScroll.scrollWidth}px`, transform: `translateX(-${waveScroll.scrollLeft}px)` }
+    : { width: "100%" };
+
   return (
     <div className="space-y-5">
       {/* Waveform */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
-        <div ref={waveformContainerRef} className="relative pt-11">
-          {/* cue point markers: draggable vertical line + staggered label, own colour per point */}
-          {cueMarkers.map(({ point, pct, row }) => (
-            <div
-              key={point.key}
-              onMouseDown={(e) => beginMarkerDrag(e, point.key)}
-              className={`absolute bottom-4 top-0 z-20 flex cursor-ew-resize justify-center transition-opacity ${
-                dragBelowKey === point.key ? "opacity-30" : ""
-              }`}
-              style={{ left: `${pct}%`, width: 12, marginLeft: -6 }}
-              title={`${point.label} verschieben — nach unten ziehen zum Löschen`}
-            >
-              <div className="h-full w-px" style={{ backgroundColor: point.color }} />
+        <div ref={waveformContainerRef} className="relative overflow-hidden pt-11">
+          {/* cue point markers: draggable vertical line + staggered label, own colour per point.
+              Positioned in a track matching wavesurfer's real (possibly wider, scrolled) width so
+              percentages land on the same pixels as the waveform itself. */}
+          <div className="absolute inset-x-0 top-11 bottom-4" style={waveTrackStyle}>
+            {cueMarkers.map(({ point, pct, row }) => (
               <div
-                className="pointer-events-none absolute -left-1 whitespace-nowrap rounded-sm px-1 text-[9px] font-medium leading-tight"
-                style={{ top: `${row * 13}px`, color: point.color, backgroundColor: "rgba(9, 9, 11, 0.85)" }}
+                key={point.key}
+                onMouseDown={(e) => beginMarkerDrag(e, point.key)}
+                className={`absolute bottom-0 top-0 z-20 flex cursor-ew-resize justify-center transition-opacity ${
+                  dragBelowKey === point.key ? "opacity-30" : ""
+                }`}
+                style={{ left: `${pct}%`, width: 12, marginLeft: -6 }}
+                title={`${point.label} verschieben — nach unten ziehen zum Löschen`}
               >
-                {dragBelowKey === point.key ? "Löschen" : point.label}
+                <div className="h-full w-px" style={{ backgroundColor: point.color }} />
+                <div
+                  className="pointer-events-none absolute -left-1 whitespace-nowrap rounded-sm px-1 text-[9px] font-medium leading-tight"
+                  style={{ top: `${row * 13}px`, color: point.color, backgroundColor: "rgba(9, 9, 11, 0.85)" }}
+                >
+                  {dragBelowKey === point.key ? "Löschen" : point.label}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
 
           <div onClick={seekTo} className="relative h-32 cursor-pointer overflow-hidden">
-            {/* hook overlay */}
-            <div
-              className="absolute top-0 bottom-0 z-10 bg-pink-500/15"
-              style={{ left: `${hookStart}%`, width: `${Math.max(hookEnd - hookStart, 0)}%` }}
-            />
+            {/* hook/fade/loop bands + real waveform, all sharing wavesurfer's actual track width/scroll */}
+            <div className="absolute inset-0" style={waveTrackStyle}>
+              {/* hook overlay */}
+              <div
+                className="absolute top-0 bottom-0 z-10 bg-pink-500/15"
+                style={{ left: `${hookStart}%`, width: `${Math.max(hookEnd - hookStart, 0)}%` }}
+              />
 
-            {/* fade in */}
-            {fadeInEnd != null && fadeInEnd > cueInVal && (
-              <div
-                className="pointer-events-none absolute top-0 bottom-0 z-10 bg-blue-500/15"
-                style={{ left: `${pctOf(cueInVal)}%`, width: `${Math.max(pctOf(fadeInEnd) - pctOf(cueInVal), 0)}%` }}
-              />
-            )}
-            {/* fade out */}
-            {fadeOutStart != null && fadeOutEnd > fadeOutStart && (
-              <div
-                className="pointer-events-none absolute top-0 bottom-0 z-10 bg-blue-500/15"
-                style={{ left: `${pctOf(fadeOutStart)}%`, width: `${Math.max(pctOf(fadeOutEnd) - pctOf(fadeOutStart), 0)}%` }}
-              />
-            )}
-            {/* loop */}
-            {loopInVal != null && loopOutVal != null && loopOutVal > loopInVal && (
-              <div
-                className="pointer-events-none absolute top-0 bottom-0 z-10 bg-orange-500/15"
-                style={{ left: `${pctOf(loopInVal)}%`, width: `${Math.max(pctOf(loopOutVal) - pctOf(loopInVal), 0)}%` }}
-              />
-            )}
+              {/* fade in */}
+              {fadeInEnd != null && fadeInEnd > cueInVal && (
+                <div
+                  className="pointer-events-none absolute top-0 bottom-0 z-10 bg-blue-500/15"
+                  style={{ left: `${pctOf(cueInVal)}%`, width: `${Math.max(pctOf(fadeInEnd) - pctOf(cueInVal), 0)}%` }}
+                />
+              )}
+              {/* fade out */}
+              {fadeOutStart != null && fadeOutEnd > fadeOutStart && (
+                <div
+                  className="pointer-events-none absolute top-0 bottom-0 z-10 bg-blue-500/15"
+                  style={{ left: `${pctOf(fadeOutStart)}%`, width: `${Math.max(pctOf(fadeOutEnd) - pctOf(fadeOutStart), 0)}%` }}
+                />
+              )}
+              {/* loop */}
+              {loopInVal != null && loopOutVal != null && loopOutVal > loopInVal && (
+                <div
+                  className="pointer-events-none absolute top-0 bottom-0 z-10 bg-orange-500/15"
+                  style={{ left: `${pctOf(loopInVal)}%`, width: `${Math.max(pctOf(loopOutVal) - pctOf(loopInVal), 0)}%` }}
+                />
+              )}
+            </div>
 
-            {/* real waveform, mounted by wavesurfer.js */}
+            {/* real waveform, mounted by wavesurfer.js; sizes/scrolls itself internally */}
             <div ref={waveformRef} className={`h-full w-full ${audioReady ? "" : "invisible"}`} />
 
             {/* synthetic fallback: shown while loading, or when the audio isn't available */}
@@ -610,10 +666,12 @@ function CueEditorTab({ item, updateCue }) {
           </div>
 
           {/* timeline */}
-          <div className="relative mt-1 h-4 text-[10px] text-zinc-600">
-            {ticks.map((t, i) => (
-              <span key={i} className="absolute -translate-x-1/2" style={{ left: `${t.pct}%` }}>{t.label}</span>
-            ))}
+          <div className="relative mt-1 h-4 overflow-hidden text-[10px] text-zinc-600">
+            <div className="relative h-full" style={waveTrackStyle}>
+              {ticks.map((t, i) => (
+                <span key={i} className="absolute -translate-x-1/2" style={{ left: `${t.pct}%` }}>{t.label}</span>
+              ))}
+            </div>
           </div>
         </div>
 

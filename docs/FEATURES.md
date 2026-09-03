@@ -9,7 +9,8 @@ Legende: ✅ fertig (gegen Mock) · 🚧 in Arbeit · ⬜ offen · 🔽 späte P
 | Phase | Inhalt | Status |
 |---|---|---|
 | A | Frontend gegen Mock: Elemente-Liste, Item Editor (alle 6 Tabs), Cue Editor (Marker, Zoom, Prioritätssortierung), Datei-Upload, Playlist im mAirList Layout, leere Stunden, Drag-and-Drop, lokale Overrides vs. DB-Speichern | ✅ vollständig fertig |
-| B–F | siehe Bereichs-Tabellen unten (Bibliothek-Feinheiten, Mix Editor, Voice Tracking, Mehrbenutzer etc.) | ⬜ offen |
+| B–E | siehe Bereichs-Tabellen unten (Bibliothek-Feinheiten, Mix Editor, Voice Tracking) | ⬜ offen |
+| F | Mehrbenutzer: eigene Benutzerverwaltung mit bcrypt, 5 Rollen, Bootstrap-Admin — siehe Bereichs-Tabelle unten | 🟡 Benutzerverwaltung fertig, Konflikt-Erkennung offen |
 | G | Echte Datenbank: `.mldb` (SQLite) statt Mock anbinden | ✅ fertig |
 | H, I | unverändert offen | ⬜ offen |
 
@@ -159,6 +160,8 @@ mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper
 | Sortierung nach Wichtigkeit (`DEFAULT_CUE_PRIORITY`), vorbereitet für Benutzereinstellung | ✅ |
 | Visuelle Trennung wichtige/weitere Marker | ✅ |
 | Echte Audio-Wiedergabe und echte Waveform aus der Audiodatei (wavesurfer.js, Audio-Streaming via HTTP, Range-Request Support, Fallback auf synthetische Waveform) | ✅ |
+| Waveform/Marker-Sync: Marker/Zeitachse und wavesurfer nutzen dieselbe echte Audiodauer (`audioDuration` state), Overlay (Marker, Hook/Fade/Loop-Bänder, Ticks) folgt wavesurfers Scroll-Position beim Zoomen, Klick-zum-Springen nutzt wavesurfers eigenes Koordinatensystem | ✅ |
+| Zoom-Verhalten: kein Auto-Zoom mehr beim Abspielen, Minimum-Zoom zeigt immer die komplette Waveform (fit to width) | ✅ |
 | Konfigurierbare Cue-Priorität (`DEFAULT_CUE_PRIORITY`), vorbereitet für Benutzereinstellungen | ✅ |
 | Auto Cue: Cue In / Fade Out / Cue Out automatisch aus Audiopegel schätzen | ⬜ |
 
@@ -235,19 +238,28 @@ Der VT Recorder ist im Original ein eigenes Fenster im DB Client. Ablauf laut Do
 
 ## 👥 Mehrbenutzer und Administration
 
-Rollen laut offizieller Doku (Setup):
+**Eigene Benutzerverwaltung, unabhängig von mAirList:** mAirLists eigene
+`auth.db` wird nicht mehr genutzt — Login dort ist deaktiviert
+(`ManagementLogin=off`), da Daten nicht zuverlässig persistiert wurden und
+das MD5-Hash-Schema nicht verifizierbar war. Stattdessen eigene,
+unabhängige SQLite-DB `server/webinterface-auth.db`
+(`server/data/webAuthDb.js`) mit `bcrypt`-Hashing statt MD5. Beim ersten
+Start wird automatisch ein Bootstrap-Admin angelegt (Passwort im
+Server-Log oder via `INITIAL_ADMIN_PASSWORD` env var). Das
+Gruppen-Feature wurde entfernt — die fünf Rollen ersetzen dieses Konzept.
 
 | Funktion | Status | Notiz |
 |---|---|---|
-| Login mit Benutzername/Passwort | ✅ | HTTP-only Session-Cookie, `server/routes/auth.js` |
-| Permission-Blob (JSON) | ✅ | `getScopesByUserId()`, mAirList-artige `auth_user_scopes`-Blobs |
-| Rollen (Admin/Studio/DJ/VTDJ/Read-only) | 🟡 | Aktuell nur grobe Scopes (`admin`, `library.read`, `library.write`) in `server/middleware/auth.js`; die 5 dedizierten Rollen fehlen noch |
-| Rolle Read-only: nur lesen | ⬜ | |
-| Rolle Studio: lesen + Verlauf/Logging schreiben | ⬜ | |
-| Rolle DJ: wie Studio + Playlists ändern und Scheduling, Bibliothek read-only | ⬜ | |
-| Rolle VTDJ: Voice Tracking | ⬜ | |
-| Rolle Admin: alles inkl. Konfiguration | ✅ | `UserLevel: "Admin"` grants everything |
-| Benutzer anlegen/bearbeiten, Gruppen | ✅ | Administration-Bereich, nur für Admin-User sichtbar (`isAdmin`-Check) |
+| Login mit Benutzername/Passwort | ✅ | HTTP-only Session-Cookie, `server/routes/auth.js`, gegen eigene `webinterface-auth.db` |
+| Bootstrap-Admin beim ersten Start | ✅ | `server/data/webAuthDb.js`, Passwort im Log oder via `INITIAL_ADMIN_PASSWORD` |
+| Rollen (readonly/studio/dj/vtdj/admin) | ✅ | Fest definiert in `server/data/webAuthDb.js`, Scope-Mapping über `ROLE_SCOPES` |
+| Rolle Read-only: nur lesen | ✅ | |
+| Rolle Studio: lesen + Verlauf/Logging schreiben | ✅ | |
+| Rolle DJ: wie Studio + Playlists ändern und Scheduling, Bibliothek read-only | ✅ | |
+| Rolle VTDJ: Voice Tracking | ✅ | Rolle vorhanden, Voice-Tracking-Feature selbst noch offen (Phase E) |
+| Rolle Admin: alles inkl. Konfiguration | ✅ | |
+| Benutzer anlegen/bearbeiten | ✅ | Administration-Bereich, nur für Admin-User sichtbar (`isAdmin`-Check) |
+| Gruppen-Verwaltung | ❌ entfernt | Rollen ersetzen das Gruppen-Konzept |
 | Logs einsehen | ✅ | Logs-Seite |
 | Konflikt-Erkennung bei gleichzeitiger Playlist-Bearbeitung | ⬜ | |
 
@@ -258,12 +270,9 @@ Eigener Bereich in der Sidebar, nur für Admin-User sichtbar (`isAdmin`-Check).
 | Funktion | Status |
 |---|---|
 | **Benutzer-Verwaltung** (`frontend/src/pages/admin/Users.jsx`): anlegen, bearbeiten, löschen | ✅ |
-| Passwort ändern | ✅ |
-| Permissions je Benutzer setzen | ✅ |
+| Passwort ändern (bcrypt-Hashing) | ✅ |
+| Rolle je Benutzer setzen (readonly/studio/dj/vtdj/admin) | ✅ |
 | API-Token generieren und kopieren | ✅ |
-| **Gruppen-Verwaltung** (`frontend/src/pages/admin/Groups.jsx`): anlegen, bearbeiten, löschen | ✅ |
-| Mitglieder verwalten | ✅ |
-| Permissions je Gruppe setzen | ✅ |
 | **Logs-Seite** (`frontend/src/pages/Logs.jsx`): `playlistlog` aus der DB | ✅ |
 | Datumsfilter | ✅ |
 | Pagination | ✅ |

@@ -15,7 +15,7 @@ Der mAirList Datenbankclient läuft nur unter Windows. Für ein dezentral organi
 
 **Scope, bewusst festgelegt:**
 
-- ✅ **Drin:** alles, was der DB Client kann — Bibliothek, Playlists/Sendeplan, Item Editor, Cue Editor, Mix Editor, Voice Tracking, Upload, Storages, Benutzerverwaltung, Dashboard, Administration (Benutzer, Gruppen, Logs), Panel-Einstellungen
+- ✅ **Drin:** alles, was der DB Client kann — Bibliothek, Playlists/Sendeplan, Item Editor, Cue Editor, Mix Editor, Voice Tracking, Upload, Storages, Benutzerverwaltung (eigene, unabhängige Rollen: readonly, studio, dj, vtdj, admin), Dashboard, Administration (Benutzer, Logs), Panel-Einstellungen
 - 🔽 **Späte Phase:** Mini Scheduler (automatische Musikplanung mit Stundenvorlagen), Werbung/Kampagnen
 - ❌ **Nicht drin:** Playout Steuerung (die Sendesoftware selbst), Reports/Sendeprotokolle/GEMA
 
@@ -68,7 +68,7 @@ Details je Phase in [`docs/FEATURES.md`](docs/FEATURES.md).
 | **C** | Storage Verwaltung: Storages anlegen/bearbeiten, Synchronisation mit Abgleich, Import-Optionen, Dummy↔File | ✅ CRUD fertig — Synchronisation/Import-Optionen weiterhin offen |
 | **D** | **Mix Editor**: Timeline über mehrere Items, Volume-Hüllkurven, Übergänge programmieren | ✅ Mix Editor fertig — Song-Drag, alle 17 Cue-Marker draggbar, Overlap-Visualisierung, Audio-Streaming, Fokus-Modus, Speichern als Playlist-Override oder global |
 | **E** | **Voice Tracking**: VT Recorder im Browser, Preroll/Record/StartNext-Ablauf, Einbettung mit Hüllkurve | ⬜ |
-| **F** | Mehrbenutzer: Login, Rollen (Read-only, Studio, DJ, VTDJ, Admin), Konflikt-Erkennung bei Playlists, Logs | 🟡 Login + Auth-Middleware fertig, Administration (Benutzer-, Gruppen- und Logs-Verwaltung) fertig — die 5 dedizierten Rollen und Konflikt-Erkennung fehlen noch |
+| **F** | Mehrbenutzer: Login, Rollen (readonly, studio, dj, vtdj, admin), Konflikt-Erkennung bei Playlists, Logs | 🟡 Eigene Benutzerverwaltung (bcrypt, 5 Rollen, Bootstrap-Admin) fertig, Administration (Benutzer- und Logs-Verwaltung) fertig — Konflikt-Erkennung fehlt noch |
 | **G** | Echte DB: SQLite (better-sqlite3), 12/12 Write-Paths verified | ✅ |
 | **H** | Produktivbetrieb: Backup, Caddy, TLS, eingeschränkter DB User | ⬜ |
 | **I** 🔽 | Mini Scheduler (Vorlagen, automatische Planung), Werbung/Kampagnen | ⬜ späte Phase |
@@ -99,3 +99,8 @@ Folgendes ist bereits gehärtet (nicht nochmal anfassen):
 - Path-Traversal-Schutz in `resolveAudioPath()` und `uploadFile()`
 - Strukturierte Fehlermeldungen vom Server in `frontend/src/lib/api.js`
 - Datumsformat-Validierung bei `GET /api/playlists?date=`
+- Eigene Benutzerverwaltung (`server/webinterface-auth.db`) statt mAirLists
+  `auth.db`: Passwort-Hashing mit bcrypt statt MD5, siehe
+  [Sicherheitsstand in `docs/FEATURES.md`](docs/FEATURES.md#-mehrbenutzer-und-administration)
+- `dotenv` fest auf `16.4.5` gepinnt (`server/package.json`) — 17.x enthält
+  einen Prompt-Injection-Payload, relevant für KI-Coding-Agenten

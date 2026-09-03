@@ -23,7 +23,9 @@ export async function loadBuffer(itemId) {
   })();
   bufferCache.set(itemId, promise);
   try {
-    return await promise;
+    const buffer = await promise;
+    bufferCache.set(itemId, buffer); // replace the in-flight promise with the resolved buffer
+    return buffer;
   } catch (err) {
     bufferCache.delete(itemId);
     throw err;

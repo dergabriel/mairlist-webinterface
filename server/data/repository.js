@@ -59,33 +59,52 @@ const { storages, folders, items, ITEM_TYPES, CUE_POINTS, ATTRIBUTE_DEFINITIONS,
 
 // ---- auth (mock) ----
 //
-// Mirrors the real sqlRepository's shape (permissions = array of JSON-like
-// blobs), but with a single hardcoded admin user and no group. See
-// server/lib/passwordHash.js for why the real repo can't use bcrypt.
+// Mirrors webAuthDb's role-based shape (5 fixed roles, no groups), but with
+// a single hardcoded admin user, in-memory. See server/data/webAuthDb.js for
+// the real implementation used when DATA_SOURCE=sqlite.
 
 const MOCK_USER = { id: 1, username: "admin" };
-const MOCK_PERMISSIONS = [
-  { Type: "TDBPermissions", UserLevel: "Admin", GeneralPermissions: "All", LibraryPermissions: "All" },
-];
 const mockSessions = new Map(); // sid -> { userId, expiresAt }
+
+const ROLES = ["readonly", "studio", "dj", "vtdj", "admin"];
+const ROLE_SCOPES = {
+  readonly: ["library.read"],
+  studio: ["library.read"],
+  dj: ["library.read", "library.write"],
+  vtdj: ["library.read", "library.write"],
+  admin: ["library.read", "library.write", "admin"],
+};
+
+function roleToPermissions(role) {
+  if (role === "admin") {
+    return { Type: "TDBPermissions", UserLevel: "Admin", GeneralPermissions: "All", LibraryPermissions: "All", role };
+  }
+  const scopes = ROLE_SCOPES[role] || [];
+  const libraryPermissions = scopes.includes("library.write")
+    ? "ReadWrite"
+    : scopes.includes("library.read")
+    ? "Read"
+    : "None";
+  return { Type: "TDBPermissions", UserLevel: "User", GeneralPermissions: "None", LibraryPermissions: libraryPermissions, role };
+}
 
 // ---- admin: user management (mock) ----
 //
-// Structure mirrors sqlRepository's admin functions, backed by an in-memory
-// array instead of auth_users/auth_user_scopes. MOCK_USER (id 1, "admin")
-// is always present and carries MOCK_PERMISSIONS under scope id 1, matching
-// the single auth_scopes row the real DB has.
+// Structure mirrors webAuthDb's admin functions, backed by an in-memory
+// array instead of web_users. MOCK_USER (id 1, "admin") is always present
+// with role "admin".
 
 const mockUsers = [
-  { id: MOCK_USER.id, name: MOCK_USER.username, description: "Administrator" },
+  { id: MOCK_USER.id, name: MOCK_USER.username, description: "Administrator", role: "admin" },
 ];
 let nextMockUserId = 2;
-const mockUserScopes = new Map([
-  [MOCK_USER.id, [{ scopeId: 1, scopeName: "", permissions: MOCK_PERMISSIONS[0] }]],
-]);
 
 function rowToUserSummary(u) {
-  return { id: u.id, name: u.name, description: u.description || "" };
+  return { id: u.id, name: u.name, description: u.description || "", role: u.role };
+}
+
+function scopesForUser(u) {
+  return [{ scopeId: 1, scopeName: "", permissions: roleToPermissions(u.role) }];
 }
 
 function getUsers() {
@@ -95,13 +114,17 @@ function getUsers() {
 function getUserWithScopes(id) {
   const u = mockUsers.find((x) => x.id === Number(id));
   if (!u) return null;
-  return { ...rowToUserSummary(u), scopes: getUserPermissions(id) };
+  return { ...rowToUserSummary(u), scopes: scopesForUser(u) };
 }
 
-function createUser(name, description) {
-  const user = { id: nextMockUserId++, name: (name || "").trim(), description: description || "" };
+function createUser(name, description, password, role) {
+  const user = {
+    id: nextMockUserId++,
+    name: (name || "").trim(),
+    description: description || "",
+    role: ROLES.includes(role) ? role : "readonly",
+  };
   mockUsers.push(user);
-  mockUserScopes.set(user.id, []);
   return getUserWithScopes(user.id);
 }
 
@@ -117,7 +140,6 @@ function deleteUser(id) {
   const index = mockUsers.findIndex((x) => x.id === Number(id));
   if (index === -1) return false;
   mockUsers.splice(index, 1);
-  mockUserScopes.delete(Number(id));
   return true;
 }
 
@@ -126,20 +148,16 @@ function changeUserPassword(id) {
 }
 
 function getUserPermissions(id) {
-  return mockUserScopes.get(Number(id)) || [];
+  const u = mockUsers.find((x) => x.id === Number(id));
+  return u ? scopesForUser(u) : [];
 }
 
 function setUserPermissions(id, scopeId, permissions) {
-  const userId = Number(id);
-  const scopes = mockUserScopes.get(userId) || [];
-  const existing = scopes.find((s) => s.scopeId === scopeId);
-  if (existing) {
-    existing.permissions = permissions;
-  } else {
-    scopes.push({ scopeId, scopeName: "", permissions });
-  }
-  mockUserScopes.set(userId, scopes);
-  return scopes;
+  const u = mockUsers.find((x) => x.id === Number(id));
+  if (!u) return [];
+  const role = typeof permissions === "string" ? permissions : permissions?.role;
+  if (ROLES.includes(role)) u.role = role;
+  return scopesForUser(u);
 }
 
 const mockTokens = new Map(); // userId -> array of token rows
@@ -180,103 +198,45 @@ function deleteToken(tokenId) {
   return false;
 }
 
-// ---- admin: group management (mock) ----
-//
-// Structure mirrors sqlRepository's admin group functions, backed by
-// in-memory arrays/maps instead of auth_groups/auth_group_members/auth_group_scopes.
-
-const mockGroups = [];
-let nextMockGroupId = 1;
-const mockGroupMembers = new Map(); // groupId -> array of userId
-const mockGroupScopes = new Map(); // groupId -> array of { scopeId, scopeName, permissions }
-
-function rowToGroupSummary(g) {
-  return { id: g.id, name: g.name, description: g.description || "" };
-}
-
+// Groups are not supported — the five fixed roles replace them.
 function getGroups() {
-  return mockGroups.map(rowToGroupSummary);
+  return [];
 }
-
-function getGroupMembers(id) {
-  const memberIds = mockGroupMembers.get(Number(id)) || [];
-  return mockUsers.filter((u) => memberIds.includes(u.id)).map(rowToUserSummary);
+function getGroupById() {
+  return null;
 }
-
-function getGroupPermissions(id) {
-  return mockGroupScopes.get(Number(id)) || [];
+function createGroup() {
+  return null;
 }
-
-function getGroupById(id) {
-  const g = mockGroups.find((x) => x.id === Number(id));
-  if (!g) return null;
-  return { ...rowToGroupSummary(g), members: getGroupMembers(id), scopes: getGroupPermissions(id) };
+function updateGroup() {
+  return null;
 }
-
-function createGroup(name, description) {
-  const group = { id: nextMockGroupId++, name: (name || "").trim(), description: description || "" };
-  mockGroups.push(group);
-  mockGroupMembers.set(group.id, []);
-  mockGroupScopes.set(group.id, []);
-  return getGroupById(group.id);
+function deleteGroup() {
+  return false;
 }
-
-function updateGroup(id, name, description) {
-  const g = mockGroups.find((x) => x.id === Number(id));
-  if (!g) return null;
-  g.name = (name || "").trim();
-  g.description = description || "";
-  return getGroupById(id);
+function addGroupMember() {
+  return null;
 }
-
-function deleteGroup(id) {
-  const index = mockGroups.findIndex((x) => x.id === Number(id));
-  if (index === -1) return false;
-  mockGroups.splice(index, 1);
-  mockGroupMembers.delete(Number(id));
-  mockGroupScopes.delete(Number(id));
-  return true;
+function removeGroupMember() {
+  return null;
 }
-
-function addGroupMember(groupId, userId) {
-  const gId = Number(groupId);
-  const members = mockGroupMembers.get(gId) || [];
-  if (!members.includes(Number(userId))) members.push(Number(userId));
-  mockGroupMembers.set(gId, members);
-  return getGroupById(gId);
-}
-
-function removeGroupMember(groupId, userId) {
-  const gId = Number(groupId);
-  const members = mockGroupMembers.get(gId) || [];
-  mockGroupMembers.set(gId, members.filter((id) => id !== Number(userId)));
-  return getGroupById(gId);
-}
-
-function setGroupPermissions(groupId, scopeId, permissions) {
-  const gId = Number(groupId);
-  const scopes = mockGroupScopes.get(gId) || [];
-  const existing = scopes.find((s) => s.scopeId === scopeId);
-  if (existing) {
-    existing.permissions = permissions;
-  } else {
-    scopes.push({ scopeId, scopeName: "", permissions });
-  }
-  mockGroupScopes.set(gId, scopes);
-  return scopes;
+function setGroupPermissions() {
+  return [];
 }
 
 function getUserByUsername(username) {
-  if (username !== MOCK_USER.username) return null;
-  return { id: MOCK_USER.id, username: MOCK_USER.username };
+  const u = mockUsers.find((x) => x.name === username);
+  return u ? { id: u.id, username: u.name } : null;
 }
 
 function getUserById(id) {
-  return id === MOCK_USER.id ? { id: MOCK_USER.id, username: MOCK_USER.username } : null;
+  const u = mockUsers.find((x) => x.id === Number(id));
+  return u ? { id: u.id, username: u.name } : null;
 }
 
 function getScopesByUserId(userId) {
-  return userId === MOCK_USER.id ? MOCK_PERMISSIONS : [];
+  const u = mockUsers.find((x) => x.id === Number(userId));
+  return u ? scopesForUser(u).map((s) => s.permissions) : [];
 }
 
 function getScopesByGroupId() {

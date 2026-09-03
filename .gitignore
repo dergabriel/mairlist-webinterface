@@ -40,5 +40,8 @@ test-results/
 *.mldb-shm
 *.test.mldb
 
+# Webinterface Auth-Datenbank (eigene User/Sessions/Tokens)
+server/webinterface-auth.db*
+
 # Panel-Einstellungen (generiert)
 server/settings.json

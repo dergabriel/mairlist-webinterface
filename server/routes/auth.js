@@ -75,11 +75,11 @@ router.get("/admin/users/:id", requireAuth, requireScope("admin"), (req, res, ne
 
 router.post("/admin/users", requireAuth, requireScope("admin"), (req, res, next) => {
   try {
-    const { name, description, password } = req.body || {};
+    const { name, description, password, role } = req.body || {};
     if (!name || !password) {
       return res.status(400).json({ error: "Name und Passwort sind erforderlich" });
     }
-    res.status(201).json(repo.createUser(name, description, password));
+    res.status(201).json(repo.createUser(name, description, password, role));
   } catch (e) { next(e); }
 });
 
@@ -116,13 +116,14 @@ router.put("/admin/users/:id/password", requireAuth, requireScope("admin"), (req
 
 router.put("/admin/users/:id/permissions", requireAuth, requireScope("admin"), (req, res, next) => {
   try {
-    const { scopeId, permissions } = req.body || {};
-    if (!scopeId || !permissions) {
-      return res.status(400).json({ error: "scopeId und permissions sind erforderlich" });
+    const { scopeId, permissions, role } = req.body || {};
+    const nextRole = role || permissions?.role;
+    if (!nextRole) {
+      return res.status(400).json({ error: "role ist erforderlich" });
     }
     const user = repo.getUserWithScopes(req.params.id);
     if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
-    res.json(repo.setUserPermissions(req.params.id, scopeId, permissions));
+    res.json(repo.setUserPermissions(req.params.id, scopeId ?? 1, nextRole));
   } catch (e) { next(e); }
 });
 
@@ -153,76 +154,7 @@ router.delete("/admin/users/:id/tokens/:tokenId", requireAuth, requireScope("adm
   } catch (e) { next(e); }
 });
 
-// ---- admin: group management ----
-
-router.get("/admin/groups", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    res.json(repo.getGroups());
-  } catch (e) { next(e); }
-});
-
-router.get("/admin/groups/:id", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const group = repo.getGroupById(req.params.id);
-    if (!group) return res.status(404).json({ error: "Gruppe nicht gefunden" });
-    res.json(group);
-  } catch (e) { next(e); }
-});
-
-router.post("/admin/groups", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const { name, description } = req.body || {};
-    if (!name) return res.status(400).json({ error: "Name ist erforderlich" });
-    res.status(201).json(repo.createGroup(name, description));
-  } catch (e) { next(e); }
-});
-
-router.put("/admin/groups/:id", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const { name, description } = req.body || {};
-    if (!name) return res.status(400).json({ error: "Name ist erforderlich" });
-    const group = repo.updateGroup(req.params.id, name, description);
-    if (!group) return res.status(404).json({ error: "Gruppe nicht gefunden" });
-    res.json(group);
-  } catch (e) { next(e); }
-});
-
-router.delete("/admin/groups/:id", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const deleted = repo.deleteGroup(req.params.id);
-    if (!deleted) return res.status(404).json({ error: "Gruppe nicht gefunden" });
-    res.status(204).end();
-  } catch (e) { next(e); }
-});
-
-router.post("/admin/groups/:id/members", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const { userId } = req.body || {};
-    if (!userId) return res.status(400).json({ error: "userId ist erforderlich" });
-    const group = repo.getGroupById(req.params.id);
-    if (!group) return res.status(404).json({ error: "Gruppe nicht gefunden" });
-    res.json(repo.addGroupMember(req.params.id, userId));
-  } catch (e) { next(e); }
-});
-
-router.delete("/admin/groups/:id/members/:userId", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const group = repo.getGroupById(req.params.id);
-    if (!group) return res.status(404).json({ error: "Gruppe nicht gefunden" });
-    res.json(repo.removeGroupMember(req.params.id, req.params.userId));
-  } catch (e) { next(e); }
-});
-
-router.put("/admin/groups/:id/permissions", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const { scopeId, permissions } = req.body || {};
-    if (!scopeId || !permissions) {
-      return res.status(400).json({ error: "scopeId und permissions sind erforderlich" });
-    }
-    const group = repo.getGroupById(req.params.id);
-    if (!group) return res.status(404).json({ error: "Gruppe nicht gefunden" });
-    res.json(repo.setGroupPermissions(req.params.id, scopeId, permissions));
-  } catch (e) { next(e); }
-});
+// Group management is not supported — the five fixed roles
+// (readonly/studio/dj/vtdj/admin) replace the group concept.
 
 module.exports = router;

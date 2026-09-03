@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import {
   getUsers, getAdminUserById, createUser, updateUser, deleteUser,
-  changeUserPassword, setUserPermissions,
+  changeUserPassword, setUserRole,
   getUserTokens, createUserToken, deleteUserToken,
 } from "../../lib/api";
 import { useAuth } from "../../lib/AuthContext";
@@ -37,6 +37,7 @@ function NewUserDialog({ onClose, onCreate }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState("readonly");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -45,7 +46,7 @@ function NewUserDialog({ onClose, onCreate }) {
     setSaving(true);
     setError(null);
     try {
-      await onCreate({ name: name.trim(), description: description.trim(), password });
+      await onCreate({ name: name.trim(), description: description.trim(), password, role });
     } catch (err) {
       setError(err.message);
       setSaving(false);
@@ -83,6 +84,14 @@ function NewUserDialog({ onClose, onCreate }) {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Passwort"
           />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs text-zinc-400">Rolle</span>
+          <select className={inputClass} value={role} onChange={(e) => setRole(e.target.value)}>
+            {ROLES.map((r) => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </select>
         </label>
 
         {error && (
@@ -160,11 +169,13 @@ function DeleteUserDialog({ user, onClose, onConfirm }) {
   );
 }
 
-const USER_LEVELS = ["Admin", "User", "ReadOnly"];
-const GENERAL_PERMISSIONS = ["All", "None"];
-const LIBRARY_PERMISSIONS = ["All", "ReadOnly", "None"];
-
-const emptyPermissions = () => ({ UserLevel: "User", GeneralPermissions: "None", LibraryPermissions: "None" });
+const ROLES = [
+  { value: "readonly", label: "Read-only — nur lesen" },
+  { value: "studio", label: "Studio — Playlists bearbeiten" },
+  { value: "dj", label: "DJ — Items + Playlists bearbeiten" },
+  { value: "vtdj", label: "VTDJ — wie DJ + Voice Tracking" },
+  { value: "admin", label: "Admin — alles inkl. Benutzerverwaltung" },
+];
 
 function formatDateTime(value) {
   if (!value) return "–";
@@ -331,10 +342,9 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
   const [description, setDescription] = useState(user.description || "");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [permissions, setPermissions] = useState(
-    () => user.scopes?.[0]?.permissions || emptyPermissions()
+  const [role, setRole] = useState(
+    () => user.scopes?.[0]?.permissions?.role || user.role || "readonly"
   );
-  const scopeId = user.scopes?.[0]?.scopeId ?? 1;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [toast, setToast] = useState(false);
@@ -345,7 +355,7 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
     setDescription(user.description || "");
     setNewPassword("");
     setConfirmPassword("");
-    setPermissions(user.scopes?.[0]?.permissions || emptyPermissions());
+    setRole(user.scopes?.[0]?.permissions?.role || user.role || "readonly");
     setError(null);
   }, [user]);
 
@@ -363,7 +373,7 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
       if (newPassword) {
         await changeUserPassword(user.id, newPassword);
       }
-      await setUserPermissions(user.id, scopeId, permissions);
+      await setUserRole(user.id, role);
       setNewPassword("");
       setConfirmPassword("");
       setToast(true);
@@ -418,36 +428,14 @@ function UserDetail({ user, currentUserId, onSaved, onDeleted }) {
       </div>
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-900">
-        <div className="border-b border-zinc-800 px-5 py-3 text-sm font-semibold text-zinc-100">Berechtigungen</div>
-        <div className="grid grid-cols-3 gap-4 px-5 py-5">
+        <div className="border-b border-zinc-800 px-5 py-3 text-sm font-semibold text-zinc-100">Rolle</div>
+        <div className="px-5 py-5">
           <label className="block">
-            <span className="mb-1.5 block text-sm text-zinc-400">Benutzerebene</span>
-            <select
-              className={inputClass}
-              value={permissions.UserLevel}
-              onChange={(e) => setPermissions({ ...permissions, UserLevel: e.target.value })}
-            >
-              {USER_LEVELS.map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-sm text-zinc-400">Allgemeine Rechte</span>
-            <select
-              className={inputClass}
-              value={permissions.GeneralPermissions}
-              onChange={(e) => setPermissions({ ...permissions, GeneralPermissions: e.target.value })}
-            >
-              {GENERAL_PERMISSIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-sm text-zinc-400">Bibliotheks-Rechte</span>
-            <select
-              className={inputClass}
-              value={permissions.LibraryPermissions}
-              onChange={(e) => setPermissions({ ...permissions, LibraryPermissions: e.target.value })}
-            >
-              {LIBRARY_PERMISSIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+            <span className="mb-1.5 block text-sm text-zinc-400">Rolle</span>
+            <select className={inputClass} value={role} onChange={(e) => setRole(e.target.value)}>
+              {ROLES.map((r) => (
+                <option key={r.value} value={r.value}>{r.label}</option>
+              ))}
             </select>
           </label>
         </div>

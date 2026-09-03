@@ -8,56 +8,14 @@
 const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
-const crypto = require("crypto");
 const { CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
-const { verifyPassword, hashPassword } = require("../lib/passwordHash");
+const webAuthDb = require("./webAuthDb");
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "../mairlist.mldb");
 const db = new Database(DB_PATH, { readonly: false });
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 console.log(`Content DB: ${DB_PATH}`);
-
-// mAirList keeps auth data (users, sessions, tokens, permissions) in a
-// separate auth.db next to the instance config, not in the content .mldb.
-// Resolve it with a 3-stage fallback:
-//   1. AUTH_DB_PATH env var, if set and the file exists
-//   2. auto-discovery at typical locations relative to DB_PATH
-//   3. fall back to the content DB itself (test DB has auth_* tables inline)
-function resolveAuthDb() {
-  const explicit = process.env.AUTH_DB_PATH;
-  if (explicit && fs.existsSync(explicit)) {
-    console.log(`Auth DB: ${explicit} (explicit AUTH_DB_PATH)`);
-    return new Database(explicit, { readonly: false });
-  }
-
-  const dbDir = path.dirname(DB_PATH);
-  const candidates = [
-    path.join(dbDir, "auth.db"),
-    path.join(dbDir, "config", "auth.db"),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      console.log(`Auth DB: ${candidate} (auto-discovered)`);
-      return new Database(candidate, { readonly: false });
-    }
-  }
-
-  console.log(`Auth DB: same as content DB (${DB_PATH}) — no separate auth.db found`);
-  return db;
-}
-
-const authDb = resolveAuthDb();
-if (authDb !== db) {
-  authDb.pragma("journal_mode = WAL");
-  authDb.pragma("foreign_keys = ON");
-}
-
-function authTableExists(name) {
-  return !!authDb
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(name);
-}
 
 const STATION = 1;
 const SUBPLAYLIST = 0;
@@ -671,7 +629,7 @@ function getDashboardStats() {
     totalItems: db.prepare("SELECT COUNT(*) AS count FROM items").get().count,
     totalStorages: db.prepare("SELECT COUNT(*) AS count FROM storages").get().count,
     totalFolders: db.prepare("SELECT COUNT(*) AS count FROM folders").get().count,
-    totalUsers: authDb.prepare("SELECT COUNT(*) AS count FROM auth_users").get().count,
+    totalUsers: webAuthDb.getUsers().length,
   };
 }
 
@@ -860,363 +818,60 @@ function savePlaylistItemOverrides(id, position, overrides) {
 
 // ---- auth ----
 //
-// mAirList stores auth data in a separate auth.db next to the instance
-// config (see resolveAuthDb() above), not in the content .mldb. All queries
-// below run against `authDb`, which points at that file when found and
-// falls back to the content `db` otherwise (legacy test DB).
-//
-// Real schema (see docs/SCHEMA.md / PRAGMA table_info, Phase F):
-//   auth_users(id, name, description, pw_salt, pw_hash)
-//   auth_user_scopes(user_id, scope_id, permissions)  -- permissions is a
-//     JSON blob, e.g. {"LibraryPermissions":"All", "UserLevel":"Admin", ...}
-//   auth_group_members(group_id, user_id) / auth_group_scopes(group_id, scope_id, permissions)
-//     -- NOT present in the real auth.db; only exist in the legacy test DB.
-//     Group functions guard with authTableExists() and no-op when absent.
-//   auth_sessions(id, user_id, scope_id, sid, expires, data)
-//
-// There are no named scope strings (auth_scopes.name is empty) — "scopes"
-// here means the set of permission JSON blobs a user can see, merged from
-// their own auth_user_scopes rows and any groups they belong to.
+// Auth (users, sessions, tokens, roles) is handled entirely by the
+// webinterface's own auth database (server/webinterface-auth.db), completely
+// independent of mAirList's content .mldb and its own (unreliable) auth.db.
+// See data/webAuthDb.js. Group-based permissions are not supported — the
+// five fixed roles (readonly/studio/dj/vtdj/admin) replace them.
 
-function getUserByUsername(username) {
-  const row = authDb
-    .prepare("SELECT id, name, pw_salt, pw_hash FROM auth_users WHERE name = ?")
-    .get(username);
-  if (!row) return null;
-  return { id: row.id, username: row.name, pwSalt: row.pw_salt, pwHash: row.pw_hash };
-}
+const {
+  getUserByUsername,
+  getUserById,
+  getScopesByUserId,
+  getScopesByGroupId,
+  createSession,
+  getSessionBySid,
+  deleteSession,
+  verifyUserPassword,
+  getUsers,
+  getUserWithScopes,
+  createUser,
+  updateUser,
+  deleteUser,
+  changeUserPassword,
+  getUserPermissions,
+  setUserPermissions,
+  getTokensByUserId,
+  createToken,
+  deleteToken,
+} = webAuthDb;
 
-function getUserById(id) {
-  const row = authDb.prepare("SELECT id, name FROM auth_users WHERE id = ?").get(id);
-  if (!row) return null;
-  return { id: row.id, username: row.name };
-}
-
-function parsePermissions(json) {
-  try {
-    return JSON.parse(json);
-  } catch {
-    return null;
-  }
-}
-
-// Direct grants: auth_user_scopes rows for this user.
-function getScopesByUserId(userId) {
-  const rows = authDb
-    .prepare("SELECT permissions FROM auth_user_scopes WHERE user_id = ?")
-    .all(userId);
-  return rows.map((r) => parsePermissions(r.permissions)).filter(Boolean);
-}
-
-// Group grants: every group this user belongs to, via auth_group_scopes.
-// auth_groups / auth_group_members / auth_group_scopes don't exist in the
-// real mAirList auth.db (group-based permissions aren't used there).
-function getScopesByGroupId(userId) {
-  if (!authTableExists("auth_group_members") || !authTableExists("auth_group_scopes")) return [];
-  const rows = authDb
-    .prepare(
-      `SELECT gs.permissions FROM auth_group_members gm
-       JOIN auth_group_scopes gs ON gs.group_id = gm.group_id
-       WHERE gm.user_id = ?`
-    )
-    .all(userId);
-  return rows.map((r) => parsePermissions(r.permissions)).filter(Boolean);
-}
-
-function createSession(userId, sid, expiresAt) {
-  authDb.prepare("INSERT INTO auth_sessions (user_id, scope_id, sid, expires) VALUES (?, 1, ?, ?)").run(
-    userId,
-    sid,
-    expiresAt
-  );
-}
-
-function getSessionBySid(sid) {
-  const row = authDb
-    .prepare("SELECT user_id, expires FROM auth_sessions WHERE sid = ?")
-    .get(sid);
-  if (!row) return null;
-  return { userId: row.user_id, expiresAt: row.expires };
-}
-
-function deleteSession(sid) {
-  authDb.prepare("DELETE FROM auth_sessions WHERE sid = ?").run(sid);
-}
-
-function verifyUserPassword(user, password) {
-  return verifyPassword(password, user.pwSalt, user.pwHash);
-}
-
-// ---- admin: user management ----
-
-function rowToUserSummary(row) {
-  return { id: row.id, name: row.name, description: row.description || "" };
-}
-
-function getUsers() {
-  return authDb.prepare("SELECT id, name, description FROM auth_users ORDER BY name").all().map(rowToUserSummary);
-}
-
-function getUserWithScopes(id) {
-  const row = authDb.prepare("SELECT id, name, description FROM auth_users WHERE id = ?").get(Number(id));
-  if (!row) return null;
-  return { ...rowToUserSummary(row), scopes: getUserPermissions(id) };
-}
-
-function createUser(name, description, password) {
-  const { pwSalt, pwHash } = hashPassword(password);
-  const info = authDb
-    .prepare("INSERT INTO auth_users (name, description, pw_salt, pw_hash) VALUES (?, ?, ?, ?)")
-    .run((name || "").trim(), description || "", pwSalt, pwHash);
-  return getUserWithScopes(info.lastInsertRowid);
-}
-
-function updateUser(id, name, description) {
-  const row = authDb.prepare("SELECT id FROM auth_users WHERE id = ?").get(Number(id));
-  if (!row) return null;
-  authDb.prepare("UPDATE auth_users SET name = ?, description = ? WHERE id = ?").run(
-    (name || "").trim(),
-    description || "",
-    Number(id)
-  );
-  return getUserWithScopes(id);
-}
-
-function deleteUser(id) {
-  const row = authDb.prepare("SELECT id FROM auth_users WHERE id = ?").get(Number(id));
-  if (!row) return false;
-  const userId = Number(id);
-  const hasGroupMembers = authTableExists("auth_group_members");
-  const run = authDb.transaction(() => {
-    authDb.prepare("DELETE FROM auth_user_scopes WHERE user_id = ?").run(userId);
-    if (hasGroupMembers) authDb.prepare("DELETE FROM auth_group_members WHERE user_id = ?").run(userId);
-    authDb.prepare("DELETE FROM auth_sessions WHERE user_id = ?").run(userId);
-    authDb.prepare("DELETE FROM auth_users WHERE id = ?").run(userId);
-  });
-  run();
-  return true;
-}
-
-function changeUserPassword(id, password) {
-  const row = authDb.prepare("SELECT id FROM auth_users WHERE id = ?").get(Number(id));
-  if (!row) return false;
-  const { pwSalt, pwHash } = hashPassword(password);
-  authDb.prepare("UPDATE auth_users SET pw_salt = ?, pw_hash = ? WHERE id = ?").run(pwSalt, pwHash, Number(id));
-  return true;
-}
-
-// auth_user_scopes rows for this user, joined with auth_scopes for its name.
-function getUserPermissions(id) {
-  const rows = authDb
-    .prepare(
-      `SELECT s.scope_id, sc.name AS scope_name, s.permissions
-       FROM auth_user_scopes s
-       JOIN auth_scopes sc ON sc.id = s.scope_id
-       WHERE s.user_id = ?`
-    )
-    .all(Number(id));
-  return rows.map((r) => ({
-    scopeId: r.scope_id,
-    scopeName: r.scope_name,
-    permissions: parsePermissions(r.permissions),
-  }));
-}
-
-// Upserts the permissions JSON blob for (userId, scopeId).
-function setUserPermissions(id, scopeId, permissions) {
-  const userId = Number(id);
-  const existing = authDb
-    .prepare("SELECT 1 FROM auth_user_scopes WHERE user_id = ? AND scope_id = ?")
-    .get(userId, scopeId);
-  const json = JSON.stringify(permissions);
-  if (existing) {
-    authDb.prepare("UPDATE auth_user_scopes SET permissions = ? WHERE user_id = ? AND scope_id = ?").run(
-      json,
-      userId,
-      scopeId
-    );
-  } else {
-    authDb.prepare("INSERT INTO auth_user_scopes (user_id, scope_id, permissions) VALUES (?, ?, ?)").run(
-      userId,
-      scopeId,
-      json
-    );
-  }
-  return getUserPermissions(id);
-}
-
-// ---- admin: API tokens ----
-//
-// auth_tokens(id, user_id, scope_id, token, refresh_token, auth_code,
-// permissions, created, expires) — see PRAGMA table_info(auth_tokens).
-
-function rowToToken(row) {
-  return {
-    id: row.id,
-    userId: row.user_id,
-    scopeId: row.scope_id,
-    token: row.token,
-    created: row.created,
-    expires: row.expires,
-  };
-}
-
-function getTokensByUserId(userId) {
-  return authDb
-    .prepare("SELECT id, user_id, scope_id, token, created, expires FROM auth_tokens WHERE user_id = ? ORDER BY created DESC")
-    .all(Number(userId))
-    .map(rowToToken);
-}
-
-function createToken(userId, scopeId) {
-  const token = crypto.randomBytes(32).toString("hex");
-  const info = authDb
-    .prepare("INSERT INTO auth_tokens (user_id, scope_id, token) VALUES (?, ?, ?)")
-    .run(Number(userId), scopeId, token);
-  const row = authDb
-    .prepare("SELECT id, user_id, scope_id, token, created, expires FROM auth_tokens WHERE id = ?")
-    .get(info.lastInsertRowid);
-  return rowToToken(row);
-}
-
-function deleteToken(tokenId) {
-  const info = authDb.prepare("DELETE FROM auth_tokens WHERE id = ?").run(Number(tokenId));
-  return info.changes > 0;
-}
-
-// ---- admin: group management ----
-
-function rowToGroupSummary(row) {
-  return { id: row.id, name: row.name, description: row.description || "" };
-}
-
-// auth_groups / auth_group_members / auth_group_scopes don't exist in the
-// real mAirList auth.db — only in the legacy test DB. All group functions
-// check for the table first and return an empty/no-op result instead of
-// crashing when it's absent.
-function requireGroupTables() {
-  return authTableExists("auth_groups") && authTableExists("auth_group_members") && authTableExists("auth_group_scopes");
-}
-
+// Groups are not supported by the webinterface's own auth model (roles
+// replace them). Kept as no-ops so any caller expecting these functions to
+// exist doesn't crash.
 function getGroups() {
-  if (!requireGroupTables()) return [];
-  return authDb.prepare("SELECT id, name, description FROM auth_groups ORDER BY name").all().map(rowToGroupSummary);
+  return [];
 }
-
-// auth_group_members rows for this group, joined with auth_users for their name.
-function getGroupMembers(id) {
-  if (!requireGroupTables()) return [];
-  const rows = authDb
-    .prepare(
-      `SELECT u.id, u.name, u.description
-       FROM auth_group_members gm
-       JOIN auth_users u ON u.id = gm.user_id
-       WHERE gm.group_id = ?
-       ORDER BY u.name`
-    )
-    .all(Number(id));
-  return rows.map(rowToUserSummary);
+function getGroupById() {
+  return null;
 }
-
-// auth_group_scopes rows for this group, joined with auth_scopes for its name.
-function getGroupPermissions(id) {
-  if (!requireGroupTables()) return [];
-  const rows = authDb
-    .prepare(
-      `SELECT s.scope_id, sc.name AS scope_name, s.permissions
-       FROM auth_group_scopes s
-       JOIN auth_scopes sc ON sc.id = s.scope_id
-       WHERE s.group_id = ?`
-    )
-    .all(Number(id));
-  return rows.map((r) => ({
-    scopeId: r.scope_id,
-    scopeName: r.scope_name,
-    permissions: parsePermissions(r.permissions),
-  }));
+function createGroup() {
+  return null;
 }
-
-function getGroupById(id) {
-  if (!requireGroupTables()) return null;
-  const row = authDb.prepare("SELECT id, name, description FROM auth_groups WHERE id = ?").get(Number(id));
-  if (!row) return null;
-  return { ...rowToGroupSummary(row), members: getGroupMembers(id), scopes: getGroupPermissions(id) };
+function updateGroup() {
+  return null;
 }
-
-function createGroup(name, description) {
-  if (!requireGroupTables()) return null;
-  const info = authDb
-    .prepare("INSERT INTO auth_groups (name, description) VALUES (?, ?)")
-    .run((name || "").trim(), description || "");
-  return getGroupById(info.lastInsertRowid);
+function deleteGroup() {
+  return false;
 }
-
-function updateGroup(id, name, description) {
-  if (!requireGroupTables()) return null;
-  const row = authDb.prepare("SELECT id FROM auth_groups WHERE id = ?").get(Number(id));
-  if (!row) return null;
-  authDb.prepare("UPDATE auth_groups SET name = ?, description = ? WHERE id = ?").run(
-    (name || "").trim(),
-    description || "",
-    Number(id)
-  );
-  return getGroupById(id);
+function addGroupMember() {
+  return null;
 }
-
-function deleteGroup(id) {
-  if (!requireGroupTables()) return false;
-  const row = authDb.prepare("SELECT id FROM auth_groups WHERE id = ?").get(Number(id));
-  if (!row) return false;
-  const groupId = Number(id);
-  const run = authDb.transaction(() => {
-    authDb.prepare("DELETE FROM auth_group_scopes WHERE group_id = ?").run(groupId);
-    authDb.prepare("DELETE FROM auth_group_members WHERE group_id = ?").run(groupId);
-    authDb.prepare("DELETE FROM auth_groups WHERE id = ?").run(groupId);
-  });
-  run();
-  return true;
+function removeGroupMember() {
+  return null;
 }
-
-function addGroupMember(groupId, userId) {
-  if (!requireGroupTables()) return null;
-  authDb.prepare("INSERT OR IGNORE INTO auth_group_members (group_id, user_id) VALUES (?, ?)").run(
-    Number(groupId),
-    Number(userId)
-  );
-  return getGroupById(groupId);
-}
-
-function removeGroupMember(groupId, userId) {
-  if (!requireGroupTables()) return null;
-  authDb.prepare("DELETE FROM auth_group_members WHERE group_id = ? AND user_id = ?").run(
-    Number(groupId),
-    Number(userId)
-  );
-  return getGroupById(groupId);
-}
-
-// Upserts the permissions JSON blob for (groupId, scopeId).
-function setGroupPermissions(groupId, scopeId, permissions) {
-  if (!requireGroupTables()) return [];
-  const gId = Number(groupId);
-  const existing = authDb
-    .prepare("SELECT 1 FROM auth_group_scopes WHERE group_id = ? AND scope_id = ?")
-    .get(gId, scopeId);
-  const json = JSON.stringify(permissions);
-  if (existing) {
-    authDb.prepare("UPDATE auth_group_scopes SET permissions = ? WHERE group_id = ? AND scope_id = ?").run(
-      json,
-      gId,
-      scopeId
-    );
-  } else {
-    authDb.prepare("INSERT INTO auth_group_scopes (group_id, scope_id, permissions) VALUES (?, ?, ?)").run(
-      gId,
-      scopeId,
-      json
-    );
-  }
-  return getGroupPermissions(groupId);
+function setGroupPermissions() {
+  return [];
 }
 
 module.exports = {

@@ -5,7 +5,6 @@ import {
   Copy,
   ListMusic,
   Users,
-  Tag,
   ScrollText,
   LogOut,
 } from "lucide-react";
@@ -28,7 +27,7 @@ function NavItem({ icon: Icon, label, active, onClick }) {
 export default function Sidebar({ activePage, onNavigate, user, showLogout = true, onListClick }) {
   const { logout } = useAuth();
   const isAdmin = user?.scopes?.some(
-    (s) => s.UserLevel === "Admin" || s?.permissions?.UserLevel === "Admin"
+    (s) => s.UserLevel === "Admin" || s.role === "admin" || s?.permissions?.UserLevel === "Admin" || s?.permissions?.role === "admin"
   );
 
   const handleLogout = async () => {
@@ -81,12 +80,6 @@ export default function Sidebar({ activePage, onNavigate, user, showLogout = tru
               label="Benutzer"
               active={activePage === "users"}
               onClick={() => onNavigate?.("users")}
-            />
-            <NavItem
-              icon={Tag}
-              label="Gruppen"
-              active={activePage === "groups"}
-              onClick={() => onNavigate?.("groups")}
             />
             <NavItem
               icon={ScrollText}

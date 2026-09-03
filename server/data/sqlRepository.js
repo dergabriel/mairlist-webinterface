@@ -19,7 +19,6 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, "../mairlist.mldb");
 // short-lived connection opened, used, and closed immediately per write.
 const db = new Database(DB_PATH, { readonly: true });
 db.pragma("busy_timeout = 5000");
-db.pragma("journal_mode = WAL");
 console.log(`Content DB: ${DB_PATH}`);
 
 function openWriteConnection() {

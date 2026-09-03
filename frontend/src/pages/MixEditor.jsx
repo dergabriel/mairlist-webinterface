@@ -78,9 +78,11 @@ function syntheticBars(seed, count = 160) {
 
 // Resolves the cue-in / start-next points a track actually uses for mixing.
 // startNext defaults to the track's own duration (i.e. no overlap: the next
-// track only starts once this one fully ends).
-function trackCues(item) {
-  const duration = Number(item.duration) || 0;
+// track only starts once this one fully ends). `realDuration` — wavesurfer's
+// decoded duration once the track is ready — takes priority over item.duration
+// (DB), which is only a placeholder until then; see computeLayout.
+function trackCues(item, realDuration) {
+  const duration = Number(realDuration) || Number(item.duration) || 0;
   const cueIn = Number(item.cue?.cueIn) || 0;
   const startNextRaw = item.cue?.startNext;
   const startNext = startNextRaw == null || startNextRaw === "" ? duration : Number(startNextRaw);
@@ -98,10 +100,13 @@ function clampStartNext(startNext, duration, cueIn) {
 // Lays every selected item on one shared timeline. Track 0 starts at 0;
 // every later track starts exactly where the previous track's startNext
 // marker sits on the timeline — no cueIn-relative shifting, no gaps.
-function computeLayout(items) {
+// audioDurations (real, decoded durations reported by wavesurfer once a
+// track is ready) take priority over item.duration (DB), which is only the
+// placeholder used until then — see trackCues.
+function computeLayout(items, audioDurations = []) {
   let cursor = 0;
   const tracks = items.map((item, i) => {
-    const { duration, cueIn, startNext: rawStartNext } = trackCues(item);
+    const { duration, cueIn, startNext: rawStartNext } = trackCues(item, audioDurations[i]);
     const startNext = clampStartNext(rawStartNext, duration, cueIn);
     const start = i === 0 ? 0 : cursor;
     const end = start + duration;
@@ -142,7 +147,7 @@ function TrackLabel({ track, focused, onFocus }) {
 function TrackRow({
   track, index, registerWs, onSeekPreview, onFocus, pxPerSec,
   overlapStartPx, overlapEndPx, onDragLane, onDragMarker, cueEdits,
-  onChipDrop, dragChipColor, dragBelowKey,
+  onChipDrop, dragChipColor, dragBelowKey, onReady,
 }) {
   const waveformRef = useRef(null);
   const wsRef = useRef(null);
@@ -198,7 +203,10 @@ function TrackRow({
     wsRef.current = ws;
     registerWs(index, ws);
 
-    ws.on("ready", () => setAudioState("ready"));
+    ws.on("ready", (readyDuration) => {
+      setAudioState("ready");
+      onReady(index, readyDuration);
+    });
     ws.on("error", () => setAudioState("unavailable"));
     ws.on("timeupdate", (t) => setPlayheadPct((t / Math.max(duration, 1)) * 100));
 
@@ -517,6 +525,20 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   const [saveOk, setSaveOk] = useState(null);
   const [dragChip, setDragChip] = useState(null); // { trackIndex, cueKey, color } while a chip is being dragged
 
+  // Real, decoded durations reported by wavesurfer per track once ready,
+  // keyed by track index. Until a track reports in, computeLayout falls back
+  // to item.duration (DB) as a placeholder so something renders immediately;
+  // each arrival triggers a re-layout so positions settle on real audio time.
+  const [audioDurations, setAudioDurations] = useState([]);
+  const onTrackReady = useCallback((index, duration) => {
+    setAudioDurations((prev) => {
+      if (prev[index] === duration) return prev;
+      const next = [...prev];
+      next[index] = duration;
+      return next;
+    });
+  }, []);
+
   const wsRefs = useRef([]);
   const registerWs = useCallback((index, ws) => { wsRefs.current[index] = ws; }, []);
 
@@ -533,7 +555,10 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     [items, cueEdits]
   );
 
-  const { tracks, totalWidth } = useMemo(() => computeLayout(editedItems), [editedItems]);
+  const { tracks, totalWidth } = useMemo(
+    () => computeLayout(editedItems, audioDurations),
+    [editedItems, audioDurations]
+  );
   const tracksRef = useRef(tracks);
   tracksRef.current = tracks;
 
@@ -654,20 +679,46 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     setSaveOk(null);
   }, [setStartNext]);
 
+  // Pending setTimeout ids from playAll's staggered track starts, so Stop can
+  // cancel starts that haven't fired yet (otherwise a track could begin
+  // playing seconds after the user hit Stop).
+  const playAllTimeoutsRef = useRef([]);
+
   const stopAll = useCallback(() => {
+    playAllTimeoutsRef.current.forEach((id) => clearTimeout(id));
+    playAllTimeoutsRef.current = [];
     wsRefs.current.forEach((ws) => ws?.pause());
     setPlaying(false);
   }, []);
 
+  // Starts track 0 immediately, then each following track at the point on
+  // the shared timeline where it's supposed to come in — i.e. delayed by how
+  // far its start sits past track 0's start, exactly mirroring the delayed
+  // trigger playFocus() already uses for a single transition.
   const playAll = useCallback(() => {
     setFocusTransition(null);
+    playAllTimeoutsRef.current.forEach((id) => clearTimeout(id));
+    playAllTimeoutsRef.current = [];
+
     tracks.forEach((t, i) => {
       const ws = wsRefs.current[i];
       if (!ws) return;
       const dur = ws.getDuration() || t.duration;
       ws.setTime(Math.min(t.cueIn, dur));
     });
-    tracks.forEach((_, i) => wsRefs.current[i]?.play());
+
+    const timelineStart = tracks[0]?.start ?? 0;
+    tracks.forEach((t, i) => {
+      const ws = wsRefs.current[i];
+      if (!ws) return;
+      const delayMs = Math.max((t.start - timelineStart) * 1000, 0);
+      if (delayMs === 0) {
+        ws.play();
+      } else {
+        const id = setTimeout(() => ws.play(), delayMs);
+        playAllTimeoutsRef.current.push(id);
+      }
+    });
     setPlaying(true);
   }, [tracks]);
 
@@ -895,6 +946,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
                     onChipDrop={setCueByChipDrop}
                     dragChipColor={dragChip?.color}
                     dragBelowKey={dragBelow?.index === i ? dragBelow.key : null}
+                    onReady={onTrackReady}
                   />
                 );
               })}

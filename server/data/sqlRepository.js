@@ -23,24 +23,35 @@ console.log(`Content DB: ${DB_PATH}`);
 
 function openWriteConnection() {
   const conn = new Database(DB_PATH, { readonly: false });
-  conn.pragma("busy_timeout = 5000");
-  conn.pragma("journal_mode = WAL");
+  // busy_timeout must be the very first pragma/statement after opening —
+  // it governs how long SQLite waits on a lock held by mAirList before
+  // giving up with SQLITE_BUSY, and that only applies to statements issued
+  // after it's set.
+  conn.pragma("busy_timeout = 15000");
+  // journal_mode is intentionally NOT set here: changing it requires an
+  // exclusive lock on the whole database, which is itself a common source
+  // of "database is locked" against mAirList. The DB is already in WAL
+  // mode (set by mAirList), so there's nothing to do.
   conn.pragma("foreign_keys = ON");
   return conn;
 }
 
 // Runs fn(writeDb) against a fresh short-lived write connection, closing it
-// afterwards regardless of outcome. Retries on SQLITE_BUSY (mAirList holding
-// the write lock despite busy_timeout) with a short backoff.
+// afterwards regardless of outcome. Retries on lock-contention errors
+// (mAirList holding the write lock despite busy_timeout) with backoff.
+const RETRYABLE_CODES = new Set(["SQLITE_BUSY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_LOCKED"]);
+const RETRY_BACKOFF_MS = [200, 400, 800, 1600];
+
 function withWriteConnection(fn) {
-  const maxAttempts = 3;
+  const maxAttempts = RETRY_BACKOFF_MS.length + 1;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const conn = openWriteConnection();
     try {
       return fn(conn);
     } catch (err) {
-      if (err.code === "SQLITE_BUSY" && attempt < maxAttempts) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
+      if (RETRYABLE_CODES.has(err.code) && attempt < maxAttempts) {
+        const delay = RETRY_BACKOFF_MS[attempt - 1];
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
         continue;
       }
       throw err;
@@ -446,7 +457,7 @@ function createItem(data = {}) {
       return id;
     });
 
-    return run();
+    return run.immediate();
   });
 
   return getItemById(internalId);
@@ -516,7 +527,7 @@ function updateItem(id, data = {}) {
       if (safe.folderId !== undefined) writeFolder(wdb, internalId, safe.folderId);
     });
 
-    run();
+    run.immediate();
   });
 
   return getItemById(id);
@@ -534,7 +545,7 @@ function deleteItem(id) {
       wdb.prepare("DELETE FROM item_folders WHERE item = ?").run(internalId);
       wdb.prepare("DELETE FROM items WHERE idx = ?").run(internalId);
     });
-    run();
+    run.immediate();
   });
   return true;
 }
@@ -800,7 +811,7 @@ function writeHour(date, hour, entryList) {
         );
       });
     });
-    run();
+    run.immediate();
   });
 }
 

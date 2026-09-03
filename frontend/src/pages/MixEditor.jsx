@@ -597,6 +597,10 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   // per-track progress bar no longer exists since playback is no longer
   // per-track.
   const [playheadSec, setPlayheadSec] = useState(0);
+  // Timeline position the next playAll() should start from, set by seeking
+  // (click on a lane, cue chip jump). Reset to null (→ track 0's cueIn) on
+  // stop so a fresh Play always restarts from the beginning.
+  const [seekPosition, setSeekPosition] = useState(null);
   const rafRef = useRef(null);
   const stopPlayheadLoop = useCallback(() => {
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -704,6 +708,16 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   const [dragBelow, setDragBelow] = useState(null);
   const dragBelowRef = useRef(null);
 
+  // Pending timeout id for the focus-mode auto-stop, so a new play action can
+  // cancel a stop that hasn't fired yet. Declared here (ahead of playAll/
+  // playFocus/stopAll below) so beginMarkerDrag can also cancel/reschedule it.
+  const stopTimeoutRef = useRef(null);
+
+  // Lets beginMarkerDrag (defined before playAll/playFocus/buildPlayerTracks
+  // below) call into the latest versions of those without reordering the
+  // whole callback block or widening beginMarkerDrag's own dependency list.
+  const restartAfterDragRef = useRef(null);
+
   // Deletes cue point `cueKey` on track `index` by clearing its edit.
   const clearCueEdit = useCallback((index, cueKey) => {
     setCueEdits((prev) => {
@@ -727,6 +741,14 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     const startValue = cueKey === "startNext" ? track.startNext
       : cueKey === "cueIn" ? track.cueIn
       : Number(track.item.cue?.[cueKey]) || 0;
+
+    // Dragging a marker edits computeLayout's inputs live, which can shift
+    // track start positions out from under any AudioBufferSourceNodes that
+    // are already scheduled and immutable — stop playback for the drag's
+    // duration so the model and the audible output can't desync, and
+    // restart (if it was playing) once the new values have settled.
+    const wasPlaying = mixPlayer.isPlaying();
+    if (wasPlaying) mixPlayer.stop();
 
     const onMove = (ev) => {
       const waveRect = getWaveformRect?.();
@@ -761,6 +783,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
       }
       dragBelowRef.current = null;
       setDragBelow(null);
+      if (wasPlaying) restartAfterDragRef.current?.();
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -782,10 +805,6 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     setSaveOk(null);
   }, [setStartNext]);
 
-  // Pending timeout id for the focus-mode auto-stop, so a new play action can
-  // cancel a stop that hasn't fired yet.
-  const stopTimeoutRef = useRef(null);
-
   const stopAll = useCallback(() => {
     if (stopTimeoutRef.current != null) {
       clearTimeout(stopTimeoutRef.current);
@@ -794,6 +813,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     mixPlayer.stop();
     stopPlayheadLoop();
     setPlaying(false);
+    setSeekPosition(null);
   }, [stopPlayheadLoop]);
 
   // Builds the track descriptors mixPlayer.play() expects: shared-timeline
@@ -820,14 +840,21 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     if (stopTimeoutRef.current != null) clearTimeout(stopTimeoutRef.current);
     await resumeContext();
     const playerTracks = buildPlayerTracks();
-    const timelineStart = tracks[0]?.start ?? 0;
+    // Track 0's `start` is always timeline 0 (see computeLayout), so a plain
+    // play must add its cueIn explicitly to actually begin there rather than
+    // at the raw start of the audio file.
+    const trackZeroStart = (tracks[0]?.start ?? 0) + (tracks[0]?.cueIn ?? 0);
+    const timelineStart = seekPosition ?? trackZeroStart;
     mixPlayer.play(playerTracks, timelineStart);
     startPlayheadLoop();
     setPlaying(true);
-  }, [buffersReady, buildPlayerTracks, tracks, startPlayheadLoop]);
+  }, [buffersReady, buildPlayerTracks, tracks, seekPosition, startPlayheadLoop]);
 
   // Plays just the transition window (±FOCUS_WINDOW around the previous
   // track's startNext point) so the handoff itself is audible in isolation.
+  // Recomputes prev/next from the current `tracks` each call, so a marker
+  // drag that shifted the transition (then called this again via
+  // restartAfterDragRef) auto-stops based on the new position, not the old.
   const playFocus = useCallback(async (transitionIndex) => {
     if (!buffersReady) return;
     const prev = tracks[transitionIndex];
@@ -852,12 +879,33 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     }, durationMs);
   }, [buffersReady, buildPlayerTracks, tracks, startPlayheadLoop, stopAll]);
 
-  // Moves the shared playhead to a point on the timeline without starting
-  // playback — used for click-to-seek on a lane and jumping to a cue chip.
+  // Restarts playback after a marker drag that paused it (see
+  // beginMarkerDrag). Re-enters focus mode at the same transition if one was
+  // active (recomputing its stop timeout from the now-current track values),
+  // otherwise resumes the full mix from wherever the playhead currently sits.
+  const restartAfterDrag = useCallback(() => {
+    if (focusTransition != null) {
+      playFocus(focusTransition);
+    } else {
+      setSeekPosition(playheadSec);
+      playAll();
+    }
+  }, [focusTransition, playFocus, playheadSec, playAll]);
+  restartAfterDragRef.current = restartAfterDrag;
+
+  // Moves the shared playhead to a point on the timeline — used for
+  // click-to-seek on a lane and jumping to a cue chip. While playback is
+  // running this restarts every track in sync at the new position; while
+  // stopped it just remembers the position for the next Play click.
   const seekTo = useCallback((timelineSec) => {
     setPlayheadSec(timelineSec);
-    mixPlayer.seek(timelineSec);
-  }, []);
+    setSeekPosition(timelineSec);
+    if (mixPlayer.isPlaying()) {
+      mixPlayer.seek(timelineSec, buildPlayerTracks());
+    } else {
+      mixPlayer.seek(timelineSec);
+    }
+  }, [buildPlayerTracks]);
 
   const onSeekPreview = (index, timeInTrack) => {
     setFocusedTrack(index);

@@ -113,14 +113,24 @@ class MixPlayer {
     });
   }
 
-  // Moves the (idle) playhead to a timeline position without starting
-  // playback. No-op while actually playing — pass through play() for that.
-  seek(timelineSec) {
-    if (this.playing) return;
-    this.timelineOffset = timelineSec;
+  // Moves the playhead to a timeline position. If playback is currently
+  // running, all tracks are stopped and immediately restarted from the new
+  // position (kept sample-synchronised); otherwise just remembers the
+  // position for the next play() call.
+  seek(timelineSec, tracks) {
+    if (this.playing && tracks) {
+      this.play(tracks, timelineSec);
+    } else {
+      this.timelineOffset = timelineSec;
+    }
   }
 
   stop() {
+    // Freeze the playhead at the current position before clearing the
+    // running clock, so a caller reading getCurrentTime() right after stop()
+    // (e.g. pausing mid-drag) sees where playback actually was, not where it
+    // last started from.
+    this.timelineOffset = this.getCurrentTime();
     this.sources.forEach((s) => {
       try { s.stop(); } catch { /* already stopped */ }
       try { s.disconnect(); } catch { /* already disconnected */ }

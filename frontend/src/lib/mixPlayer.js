@@ -44,26 +44,61 @@ export function resumeContext() {
 
 // Applies fadeIn/fadeOut/fadeEnd gain automation relative to `trackStartCtxTime`
 // (the AudioContext time at which the track's own time 0 lands), scheduled in
-// the track's own in-track seconds.
+// the track's own in-track seconds. `trackStartCtxTime` itself can be in the
+// past (or even negative) when starting mid-track via a large sourceOffset —
+// every AudioParam call below is guarded against that, since the Web Audio
+// API throws a RangeError for any scheduling time before ctx.currentTime.
+//
+// A ramp whose *endpoint* already lies in the past can't be scheduled at
+// all (there's nothing left to ramp) — in that case we skip straight to the
+// value the ramp would have reached by now (its target), rather than
+// throwing or leaving gain at a stale value. A ramp whose start lies in the
+// past but whose end is still upcoming is repositioned to begin "now" at the
+// value it should already be holding (linear interpolation at the jump-in
+// point), so the audible fade from that point on still sounds correct
+// instead of restarting the ramp from the wrong level.
 function scheduleFades(gainNode, trackStartCtxTime, cues, duration) {
   const gain = gainNode.gain;
   const { cueIn = 0, fadeIn, fadeOut, fadeEnd } = cues;
-  gain.cancelScheduledValues(trackStartCtxTime);
+  const now = getContext().currentTime;
+  // cancelScheduledValues itself throws for a negative time; clamping to
+  // `now` is safe since nothing before "now" can still be pending anyway.
+  gain.cancelScheduledValues(Math.max(trackStartCtxTime, now));
 
   const fadeInEnd = fadeIn != null && fadeIn !== "" ? Number(fadeIn) : null;
   const fadeOutStart = fadeOut != null && fadeOut !== "" ? Number(fadeOut) : null;
   const fadeOutEnd = fadeEnd != null && fadeEnd !== "" ? Number(fadeEnd) : duration;
 
+  // Schedules a linear ramp from (fromValue at fromCtxTime) to (toValue at
+  // toCtxTime), clamped so it never asks the AudioParam for a past time.
+  const scheduleRamp = (fromValue, fromCtxTime, toValue, toCtxTime) => {
+    if (toCtxTime <= now) {
+      // The whole ramp is already behind us — jump straight to its target.
+      gain.setValueAtTime(toValue, now);
+      return;
+    }
+    if (fromCtxTime < now) {
+      // We're jumping in partway through the ramp: interpolate the value it
+      // should have right now and restart the ramp from here, so the audible
+      // fade continues at the correct level instead of snapping to fromValue.
+      const progress = (now - fromCtxTime) / (toCtxTime - fromCtxTime);
+      const currentValue = fromValue + (toValue - fromValue) * progress;
+      gain.setValueAtTime(currentValue, now);
+      gain.linearRampToValueAtTime(toValue, toCtxTime);
+      return;
+    }
+    gain.setValueAtTime(fromValue, fromCtxTime);
+    gain.linearRampToValueAtTime(toValue, toCtxTime);
+  };
+
   if (fadeInEnd != null && fadeInEnd > cueIn) {
-    gain.setValueAtTime(0, trackStartCtxTime + cueIn);
-    gain.linearRampToValueAtTime(1, trackStartCtxTime + fadeInEnd);
+    scheduleRamp(0, trackStartCtxTime + cueIn, 1, trackStartCtxTime + fadeInEnd);
   } else {
-    gain.setValueAtTime(1, trackStartCtxTime + cueIn);
+    gain.setValueAtTime(1, Math.max(trackStartCtxTime + cueIn, now));
   }
 
   if (fadeOutStart != null && fadeOutEnd > fadeOutStart) {
-    gain.setValueAtTime(1, trackStartCtxTime + fadeOutStart);
-    gain.linearRampToValueAtTime(0, trackStartCtxTime + fadeOutEnd);
+    scheduleRamp(1, trackStartCtxTime + fadeOutStart, 0, trackStartCtxTime + fadeOutEnd);
   }
 }
 

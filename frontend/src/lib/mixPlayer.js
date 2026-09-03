@@ -138,10 +138,17 @@ class MixPlayer {
 
       const source = c.createBufferSource();
       source.buffer = buffer;
-      const gainNode = c.createGain();
-      source.connect(gainNode).connect(c.destination);
 
-      scheduleFades(gainNode, whenCtx - sourceOffset, t.cues || {}, t.duration);
+      // Two gain stages in series so normalization and fades stay decoupled:
+      // normGainNode applies the item's loudness-normalization factor once,
+      // fadeGainNode continues to ramp between 0 and 1 as before.
+      const normGain = Math.pow(10, (Number(t.gainDb) || 0) / 20);
+      const normGainNode = c.createGain();
+      normGainNode.gain.value = normGain;
+      const fadeGainNode = c.createGain();
+      source.connect(normGainNode).connect(fadeGainNode).connect(c.destination);
+
+      scheduleFades(fadeGainNode, whenCtx - sourceOffset, t.cues || {}, t.duration);
 
       source.start(whenCtx, sourceOffset, playDuration);
       this.sources.push(source);

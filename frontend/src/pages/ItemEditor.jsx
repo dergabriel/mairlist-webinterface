@@ -526,9 +526,14 @@ function CueEditorTab({ item, updateCue }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.internalId]);
 
+  // Normalization gain (from mAirList's LUFS analysis) applied on top of the
+  // user's volume slider, so items with different loudness play back evenly.
+  const gainDb = Number(item.playback?.gainDb) || 0;
+  const normGain = Math.pow(10, gainDb / 20);
+
   useEffect(() => {
-    wavesurferRef.current?.setVolume(volume);
-  }, [volume]);
+    wavesurferRef.current?.setVolume(volume * normGain);
+  }, [volume, normGain]);
 
   const audioReady = audioState === "ready";
 

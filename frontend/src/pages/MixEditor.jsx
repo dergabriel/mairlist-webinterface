@@ -824,6 +824,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     start: t.start,
     duration: t.duration,
     cueIn: t.cueIn,
+    gainDb: t.item.playback?.gainDb,
     cues: {
       fadeIn: cueEdits[i]?.fadeIn ?? t.item.cue?.fadeIn,
       fadeOut: t.item.cue?.fadeOut,

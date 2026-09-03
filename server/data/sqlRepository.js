@@ -12,10 +12,44 @@ const { CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
 const webAuthDb = require("./webAuthDb");
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "../mairlist.mldb");
-const db = new Database(DB_PATH, { readonly: false });
+
+// Main connection is readonly and stays open for the process lifetime — it
+// never holds a write lock, so it can't be the reason mAirList sees
+// "database is locked". Writes go through openWriteConnection() below: a
+// short-lived connection opened, used, and closed immediately per write.
+const db = new Database(DB_PATH, { readonly: true });
+db.pragma("busy_timeout = 5000");
 db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
 console.log(`Content DB: ${DB_PATH}`);
+
+function openWriteConnection() {
+  const conn = new Database(DB_PATH, { readonly: false });
+  conn.pragma("busy_timeout = 5000");
+  conn.pragma("journal_mode = WAL");
+  conn.pragma("foreign_keys = ON");
+  return conn;
+}
+
+// Runs fn(writeDb) against a fresh short-lived write connection, closing it
+// afterwards regardless of outcome. Retries on SQLITE_BUSY (mAirList holding
+// the write lock despite busy_timeout) with a short backoff.
+function withWriteConnection(fn) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const conn = openWriteConnection();
+    try {
+      return fn(conn);
+    } catch (err) {
+      if (err.code === "SQLITE_BUSY" && attempt < maxAttempts) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
+        continue;
+      }
+      throw err;
+    } finally {
+      conn.close();
+    }
+  }
+}
 
 const STATION = 1;
 const SUBPLAYLIST = 0;
@@ -111,16 +145,20 @@ function collectFolderAndDescendants(id) {
 }
 
 function createFolder(name, parentId) {
-  const info = db
-    .prepare("INSERT INTO folders (parent, name) VALUES (?, ?)")
-    .run(parentId == null ? null : Number(parentId), (name || "").trim());
+  const info = withWriteConnection((wdb) =>
+    wdb
+      .prepare("INSERT INTO folders (parent, name) VALUES (?, ?)")
+      .run(parentId == null ? null : Number(parentId), (name || "").trim())
+  );
   return getFolderById(info.lastInsertRowid);
 }
 
 function renameFolder(id, name) {
   const folder = getFolderById(id);
   if (!folder) return null;
-  db.prepare("UPDATE folders SET name = ? WHERE idx = ?").run((name || "").trim(), folder.id);
+  withWriteConnection((wdb) =>
+    wdb.prepare("UPDATE folders SET name = ? WHERE idx = ?").run((name || "").trim(), folder.id)
+  );
   return getFolderById(id);
 }
 
@@ -133,7 +171,9 @@ function moveFolder(id, newParentId) {
     return false;
   }
 
-  db.prepare("UPDATE folders SET parent = ? WHERE idx = ?").run(targetId, folder.id);
+  withWriteConnection((wdb) =>
+    wdb.prepare("UPDATE folders SET parent = ? WHERE idx = ?").run(targetId, folder.id)
+  );
   return getFolderById(id);
 }
 
@@ -145,7 +185,7 @@ function deleteFolder(id) {
   const hasItems = db.prepare("SELECT 1 FROM item_folders WHERE folder = ? LIMIT 1").get(folder.id);
   if (hasSubfolders || hasItems) return "not_empty";
 
-  db.prepare("DELETE FROM folders WHERE idx = ?").run(folder.id);
+  withWriteConnection((wdb) => wdb.prepare("DELETE FROM folders WHERE idx = ?").run(folder.id));
   return "ok";
 }
 
@@ -166,19 +206,23 @@ function getStorageById(id) {
 }
 
 function createStorage(name, location) {
-  const info = db
-    .prepare("INSERT INTO storages (name, defaultLocation) VALUES (?, ?)")
-    .run((name || "").trim(), location || "");
+  const info = withWriteConnection((wdb) =>
+    wdb
+      .prepare("INSERT INTO storages (name, defaultLocation) VALUES (?, ?)")
+      .run((name || "").trim(), location || "")
+  );
   return getStorageById(info.lastInsertRowid);
 }
 
 function updateStorage(id, name, location) {
   const storage = getStorageById(id);
   if (!storage) return null;
-  db.prepare("UPDATE storages SET name = ?, defaultLocation = ? WHERE idx = ?").run(
-    (name || "").trim(),
-    location || "",
-    storage.id
+  withWriteConnection((wdb) =>
+    wdb.prepare("UPDATE storages SET name = ?, defaultLocation = ? WHERE idx = ?").run(
+      (name || "").trim(),
+      location || "",
+      storage.id
+    )
   );
   return getStorageById(id);
 }
@@ -190,7 +234,7 @@ function deleteStorage(id) {
   const { count } = db.prepare("SELECT COUNT(*) AS count FROM items WHERE storage = ?").get(storage.id);
   if (count > 0) return { status: "in_use", count };
 
-  db.prepare("DELETE FROM storages WHERE idx = ?").run(storage.id);
+  withWriteConnection((wdb) => wdb.prepare("DELETE FROM storages WHERE idx = ?").run(storage.id));
   return { status: "ok" };
 }
 
@@ -371,44 +415,47 @@ function getAttributeDefinitions() {
 function createItem(data = {}) {
   const safe = pickWritable(data);
 
-  const insertItem = db.prepare(`
-    INSERT INTO items (externalid, title, artist, type, duration, amplification, level_loudness, endtype, comment, color, storage, filename, created, updated)
-    VALUES (@externalid, @title, @artist, @type, @duration, @amplification, @level_loudness, @endtype, @comment, @color, @storage, @filename, @now, @now)
-  `);
+  const internalId = withWriteConnection((wdb) => {
+    const insertItem = wdb.prepare(`
+      INSERT INTO items (externalid, title, artist, type, duration, amplification, level_loudness, endtype, comment, color, storage, filename, created, updated)
+      VALUES (@externalid, @title, @artist, @type, @duration, @amplification, @level_loudness, @endtype, @comment, @color, @storage, @filename, @now, @now)
+    `);
 
-  const run = db.transaction(() => {
-    const now = new Date().toISOString();
-    const info = insertItem.run({
-      externalid: safe.externalId ?? null,
-      title: safe.title || "",
-      artist: safe.artist || "",
-      type: typeToDb(safe.type || "music"),
-      duration: safe.duration != null ? Number(safe.duration) : 0,
-      amplification: safe.playback?.gainDb ?? 0,
-      level_loudness: safe.playback?.normalizedLufs ?? null,
-      endtype: safe.playback?.segueMode || "normal",
-      comment: safe.comment || "",
-      color: safe.color ?? null,
-      storage: safe.storageId ?? null,
-      filename: safe.relativePath ?? null,
-      now,
+    const run = wdb.transaction(() => {
+      const now = new Date().toISOString();
+      const info = insertItem.run({
+        externalid: safe.externalId ?? null,
+        title: safe.title || "",
+        artist: safe.artist || "",
+        type: typeToDb(safe.type || "music"),
+        duration: safe.duration != null ? Number(safe.duration) : 0,
+        amplification: safe.playback?.gainDb ?? 0,
+        level_loudness: safe.playback?.normalizedLufs ?? null,
+        endtype: safe.playback?.segueMode || "normal",
+        comment: safe.comment || "",
+        color: safe.color ?? null,
+        storage: safe.storageId ?? null,
+        filename: safe.relativePath ?? null,
+        now,
+      });
+      const id = info.lastInsertRowid;
+
+      if (safe.cue) writeCueMarkers(wdb, id, safe.cue);
+      if (safe.attributes) writeAttributes(wdb, id, safe.attributes);
+      if (safe.folderId != null) writeFolder(wdb, id, safe.folderId);
+
+      return id;
     });
-    const internalId = info.lastInsertRowid;
 
-    if (safe.cue) writeCueMarkers(internalId, safe.cue);
-    if (safe.attributes) writeAttributes(internalId, safe.attributes);
-    if (safe.folderId != null) writeFolder(internalId, safe.folderId);
-
-    return internalId;
+    return run();
   });
 
-  const internalId = run();
   return getItemById(internalId);
 }
 
-function writeCueMarkers(itemId, cue) {
-  const del = db.prepare("DELETE FROM item_cuemarkers WHERE item = ?");
-  const ins = db.prepare("INSERT INTO item_cuemarkers (item, type, value) VALUES (?, ?, ?)");
+function writeCueMarkers(wdb, itemId, cue) {
+  const del = wdb.prepare("DELETE FROM item_cuemarkers WHERE item = ?");
+  const ins = wdb.prepare("INSERT INTO item_cuemarkers (item, type, value) VALUES (?, ?, ?)");
   del.run(itemId);
   for (const [key, value] of Object.entries(cue)) {
     if (value == null) continue;
@@ -418,9 +465,9 @@ function writeCueMarkers(itemId, cue) {
   }
 }
 
-function writeAttributes(itemId, attributes) {
-  const del = db.prepare("DELETE FROM item_attributes WHERE item = ?");
-  const ins = db.prepare("INSERT INTO item_attributes (item, name, value) VALUES (?, ?, ?)");
+function writeAttributes(wdb, itemId, attributes) {
+  const del = wdb.prepare("DELETE FROM item_attributes WHERE item = ?");
+  const ins = wdb.prepare("INSERT INTO item_attributes (item, name, value) VALUES (?, ?, ?)");
   del.run(itemId);
   for (const [key, value] of Object.entries(attributes)) {
     if (value == null || value === "") continue;
@@ -428,11 +475,11 @@ function writeAttributes(itemId, attributes) {
   }
 }
 
-function writeFolder(itemId, folderId) {
-  const del = db.prepare("DELETE FROM item_folders WHERE item = ?");
+function writeFolder(wdb, itemId, folderId) {
+  const del = wdb.prepare("DELETE FROM item_folders WHERE item = ?");
   del.run(itemId);
   if (folderId != null) {
-    db.prepare("INSERT OR IGNORE INTO item_folders (item, folder) VALUES (?, ?)").run(itemId, Number(folderId));
+    wdb.prepare("INSERT OR IGNORE INTO item_folders (item, folder) VALUES (?, ?)").run(itemId, Number(folderId));
   }
 }
 
@@ -442,34 +489,37 @@ function updateItem(id, data = {}) {
   const safe = pickWritable(data);
   const internalId = Number(id);
 
-  const run = db.transaction(() => {
-    const now = new Date().toISOString();
-    const fields = [];
-    const params = { idx: internalId, now };
+  withWriteConnection((wdb) => {
+    const run = wdb.transaction(() => {
+      const now = new Date().toISOString();
+      const fields = [];
+      const params = { idx: internalId, now };
 
-    if (safe.title !== undefined) { fields.push("title = @title"); params.title = safe.title; }
-    if (safe.artist !== undefined) { fields.push("artist = @artist"); params.artist = safe.artist; }
-    if (safe.type !== undefined) { fields.push("type = @type"); params.type = typeToDb(safe.type); }
-    if (safe.duration !== undefined) { fields.push("duration = @duration"); params.duration = Number(safe.duration); }
-    if (safe.comment !== undefined) { fields.push("comment = @comment"); params.comment = safe.comment; }
-    if (safe.color !== undefined) { fields.push("color = @color"); params.color = safe.color; }
-    if (safe.storageId !== undefined) { fields.push("storage = @storage"); params.storage = safe.storageId; }
-    if (safe.relativePath !== undefined) { fields.push("filename = @filename"); params.filename = safe.relativePath; }
-    if (safe.externalId !== undefined) { fields.push("externalid = @externalid"); params.externalid = safe.externalId; }
-    if (safe.playback?.gainDb !== undefined) { fields.push("amplification = @amplification"); params.amplification = safe.playback.gainDb; }
-    if (safe.playback?.normalizedLufs !== undefined) { fields.push("level_loudness = @level_loudness"); params.level_loudness = safe.playback.normalizedLufs; }
-    if (safe.playback?.segueMode !== undefined) { fields.push("endtype = @endtype"); params.endtype = safe.playback.segueMode; }
+      if (safe.title !== undefined) { fields.push("title = @title"); params.title = safe.title; }
+      if (safe.artist !== undefined) { fields.push("artist = @artist"); params.artist = safe.artist; }
+      if (safe.type !== undefined) { fields.push("type = @type"); params.type = typeToDb(safe.type); }
+      if (safe.duration !== undefined) { fields.push("duration = @duration"); params.duration = Number(safe.duration); }
+      if (safe.comment !== undefined) { fields.push("comment = @comment"); params.comment = safe.comment; }
+      if (safe.color !== undefined) { fields.push("color = @color"); params.color = safe.color; }
+      if (safe.storageId !== undefined) { fields.push("storage = @storage"); params.storage = safe.storageId; }
+      if (safe.relativePath !== undefined) { fields.push("filename = @filename"); params.filename = safe.relativePath; }
+      if (safe.externalId !== undefined) { fields.push("externalid = @externalid"); params.externalid = safe.externalId; }
+      if (safe.playback?.gainDb !== undefined) { fields.push("amplification = @amplification"); params.amplification = safe.playback.gainDb; }
+      if (safe.playback?.normalizedLufs !== undefined) { fields.push("level_loudness = @level_loudness"); params.level_loudness = safe.playback.normalizedLufs; }
+      if (safe.playback?.segueMode !== undefined) { fields.push("endtype = @endtype"); params.endtype = safe.playback.segueMode; }
 
-    fields.push("updated = @now");
+      fields.push("updated = @now");
 
-    db.prepare(`UPDATE items SET ${fields.join(", ")} WHERE idx = @idx`).run(params);
+      wdb.prepare(`UPDATE items SET ${fields.join(", ")} WHERE idx = @idx`).run(params);
 
-    if (safe.cue) writeCueMarkers(internalId, safe.cue);
-    if (safe.attributes) writeAttributes(internalId, safe.attributes);
-    if (safe.folderId !== undefined) writeFolder(internalId, safe.folderId);
+      if (safe.cue) writeCueMarkers(wdb, internalId, safe.cue);
+      if (safe.attributes) writeAttributes(wdb, internalId, safe.attributes);
+      if (safe.folderId !== undefined) writeFolder(wdb, internalId, safe.folderId);
+    });
+
+    run();
   });
 
-  run();
   return getItemById(id);
 }
 
@@ -478,21 +528,25 @@ function deleteItem(id) {
   const existing = db.prepare("SELECT 1 FROM items WHERE idx = ?").get(internalId);
   if (!existing) return false;
 
-  const run = db.transaction(() => {
-    db.prepare("DELETE FROM item_cuemarkers WHERE item = ?").run(internalId);
-    db.prepare("DELETE FROM item_attributes WHERE item = ?").run(internalId);
-    db.prepare("DELETE FROM item_folders WHERE item = ?").run(internalId);
-    db.prepare("DELETE FROM items WHERE idx = ?").run(internalId);
+  withWriteConnection((wdb) => {
+    const run = wdb.transaction(() => {
+      wdb.prepare("DELETE FROM item_cuemarkers WHERE item = ?").run(internalId);
+      wdb.prepare("DELETE FROM item_attributes WHERE item = ?").run(internalId);
+      wdb.prepare("DELETE FROM item_folders WHERE item = ?").run(internalId);
+      wdb.prepare("DELETE FROM items WHERE idx = ?").run(internalId);
+    });
+    run();
   });
-  run();
   return true;
 }
 
 function moveItemToFolder(id, folderId) {
   const item = getItemById(id);
   if (!item) return null;
-  writeFolder(Number(id), folderId == null ? null : Number(folderId));
-  db.prepare("UPDATE items SET updated = ? WHERE idx = ?").run(new Date().toISOString(), Number(id));
+  withWriteConnection((wdb) => {
+    writeFolder(wdb, Number(id), folderId == null ? null : Number(folderId));
+    wdb.prepare("UPDATE items SET updated = ? WHERE idx = ?").run(new Date().toISOString(), Number(id));
+  });
   return getItemById(id);
 }
 
@@ -725,28 +779,30 @@ function resequenceEntries(entries, hour) {
 // shifts to avoid clobbering starttime/state/uniqueid on live/aired slots.
 function writeHour(date, hour, entryList) {
   const slot = buildSlot(date, hour);
-  const del = db.prepare("DELETE FROM playlist WHERE station = ? AND subplaylist = ? AND slot = ?");
-  // pos is the schema's position column (0-based); it is written explicitly
-  // from each entry's array index below, so ordering survives the delete+reinsert.
-  const ins = db.prepare(
-    "INSERT INTO playlist (station, subplaylist, slot, pos, item, duration, xmldata) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  );
-  const run = db.transaction(() => {
-    del.run(STATION, SUBPLAYLIST, slot);
-    entryList.forEach((entry, i) => {
-      const item = getItemById(entry.itemId);
-      ins.run(
-        STATION,
-        SUBPLAYLIST,
-        slot,
-        i,
-        Number(entry.itemId),
-        item ? item.duration : null,
-        entry.overrides ? JSON.stringify(entry.overrides) : null
-      );
+  withWriteConnection((wdb) => {
+    const del = wdb.prepare("DELETE FROM playlist WHERE station = ? AND subplaylist = ? AND slot = ?");
+    // pos is the schema's position column (0-based); it is written explicitly
+    // from each entry's array index below, so ordering survives the delete+reinsert.
+    const ins = wdb.prepare(
+      "INSERT INTO playlist (station, subplaylist, slot, pos, item, duration, xmldata) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    );
+    const run = wdb.transaction(() => {
+      del.run(STATION, SUBPLAYLIST, slot);
+      entryList.forEach((entry, i) => {
+        const item = getItemById(entry.itemId);
+        ins.run(
+          STATION,
+          SUBPLAYLIST,
+          slot,
+          i,
+          Number(entry.itemId),
+          item ? item.duration : null,
+          entry.overrides ? JSON.stringify(entry.overrides) : null
+        );
+      });
     });
+    run();
   });
-  run();
 }
 
 function reorderPlaylist(id, order) {

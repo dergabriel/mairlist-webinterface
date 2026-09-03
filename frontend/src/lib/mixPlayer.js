@@ -133,7 +133,12 @@ class MixPlayer {
 
       const sourceOffset = Math.max(startAtSeconds - t.start, t.cueIn ?? 0);
       const whenCtx = now + Math.max(t.start - startAtSeconds, 0);
-      const playDuration = Math.max(t.duration - sourceOffset, 0);
+      // Playback of this track must end at the earliest of: an explicit
+      // fadeEnd, else cueOut, else the track's full duration — mirrors the
+      // fallback chain resolveStartNext uses for the start side.
+      const cues = t.cues || {};
+      const stopAt = cues.fadeEnd ?? cues.cueOut ?? t.duration;
+      const playDuration = Math.max(stopAt - sourceOffset, 0);
       if (playDuration <= 0) return;
 
       const source = c.createBufferSource();
@@ -148,7 +153,7 @@ class MixPlayer {
       const fadeGainNode = c.createGain();
       source.connect(normGainNode).connect(fadeGainNode).connect(c.destination);
 
-      scheduleFades(fadeGainNode, whenCtx - sourceOffset, t.cues || {}, t.duration);
+      scheduleFades(fadeGainNode, whenCtx - sourceOffset, cues, t.duration);
 
       source.start(whenCtx, sourceOffset, playDuration);
       this.sources.push(source);

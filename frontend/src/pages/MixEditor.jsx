@@ -829,6 +829,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
       fadeIn: cueEdits[i]?.fadeIn ?? t.item.cue?.fadeIn,
       fadeOut: t.item.cue?.fadeOut,
       fadeEnd: t.item.cue?.fadeEnd,
+      cueOut: t.item.cue?.cueOut,
     },
   })), [tracks, cueEdits]);
 
@@ -925,6 +926,19 @@ export default function MixEditor({ context, onBack, onNavigate }) {
 
   useEffect(() => () => stopAll(), [stopAll]);
 
+  // MixEditor is kept mounted with display:none (not unmounted) when the app
+  // switches views, so the unmount cleanup above doesn't reliably fire on
+  // navigation. Guard playback directly in the navigation handlers instead.
+  const handleBack = useCallback(() => {
+    mixPlayer.stop();
+    onBack?.();
+  }, [onBack]);
+
+  const handleNavigate = useCallback((...args) => {
+    mixPlayer.stop();
+    onNavigate?.(...args);
+  }, [onNavigate]);
+
   // --- Save ---
 
   const buildOverridesFor = (i) => {
@@ -965,7 +979,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   if (items.length < 2) {
     return (
       <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
-        <Sidebar activePage="playlist" onNavigate={onNavigate} user={user} showLogout={false} />
+        <Sidebar activePage="playlist" onNavigate={handleNavigate} user={user} showLogout={false} />
         <main className="flex min-w-0 flex-1 flex-col">
           <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
             <div className="flex items-center gap-3">
@@ -976,7 +990,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
             </div>
           </header>
           <div className="flex items-center border-b border-zinc-800 px-6 py-3">
-            <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200">
+            <button onClick={handleBack} className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200">
               <ChevronLeft size={16} /> Zurück zur Playlist
             </button>
           </div>
@@ -994,7 +1008,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
-      <Sidebar activePage="playlist" onNavigate={onNavigate} user={user} showLogout={false} />
+      <Sidebar activePage="playlist" onNavigate={handleNavigate} user={user} showLogout={false} />
 
       {/* Main content */}
       <main className="flex min-w-0 flex-1 flex-col">
@@ -1009,7 +1023,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
 
         {/* Sub toolbar */}
         <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
-          <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200">
+          <button onClick={handleBack} className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-200">
             <ChevronLeft size={16} /> Zurück zur Playlist
           </button>
 

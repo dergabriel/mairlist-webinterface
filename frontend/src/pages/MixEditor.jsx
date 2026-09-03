@@ -7,6 +7,7 @@ import {
 import { getAudioUrl, savePlaylistItemOverrides } from "../lib/api";
 import { useAuth } from "../lib/AuthContext";
 import Sidebar from "../components/Sidebar";
+import { mixPlayer, preloadBuffers, resumeContext } from "../lib/mixPlayer";
 
 // --- Cue point catalogue (mirrors server/data/mockData.js CUE_POINTS) ---
 
@@ -76,16 +77,26 @@ function syntheticBars(seed, count = 160) {
   });
 }
 
+// mAirList's own StartNext fallback chain: if StartNext isn't set, FadeOut is
+// used as the effective start-next point; if that's not set either, CueOut;
+// and failing that, the track's full duration (i.e. no overlap).
+function resolveStartNext(cue, duration) {
+  const chain = [cue?.startNext, cue?.fadeOut, cue?.cueOut];
+  for (const raw of chain) {
+    if (raw != null && raw !== "") return Number(raw);
+  }
+  return duration;
+}
+
 // Resolves the cue-in / start-next points a track actually uses for mixing.
-// startNext defaults to the track's own duration (i.e. no overlap: the next
-// track only starts once this one fully ends). `realDuration` — wavesurfer's
-// decoded duration once the track is ready — takes priority over item.duration
-// (DB), which is only a placeholder until then; see computeLayout.
+// startNext falls back through fadeOut/cueOut/duration, mirroring mAirList's
+// own StartNext resolution (see resolveStartNext). `realDuration` —
+// wavesurfer's decoded duration once the track is ready — takes priority over
+// item.duration (DB), which is only a placeholder until then; see computeLayout.
 function trackCues(item, realDuration) {
   const duration = Number(realDuration) || Number(item.duration) || 0;
   const cueIn = Number(item.cue?.cueIn) || 0;
-  const startNextRaw = item.cue?.startNext;
-  const startNext = startNextRaw == null || startNextRaw === "" ? duration : Number(startNextRaw);
+  const startNext = resolveStartNext(item.cue, duration);
   return { duration, cueIn, startNext };
 }
 
@@ -147,14 +158,13 @@ function TrackLabel({ track, focused, onFocus }) {
 function TrackRow({
   track, index, registerWs, onSeekPreview, onFocus, pxPerSec,
   overlapStartPx, overlapEndPx, onDragLane, onDragMarker, cueEdits,
-  onChipDrop, dragChipColor, dragBelowKey, onReady,
+  onChipDrop, dragChipColor, dragBelowKey, onReady, playheadPct,
 }) {
   const waveformRef = useRef(null);
   const wsRef = useRef(null);
   const [audioState, setAudioState] = useState("loading");
   const [chipDragOver, setChipDragOver] = useState(false);
   const [dropLabel, setDropLabel] = useState(null); // { x, y, text, color }
-  const [playheadPct, setPlayheadPct] = useState(0);
   const { item, duration, start } = track;
   const bars = useMemo(() => syntheticBars(item.internalId), [item.internalId]);
 
@@ -197,7 +207,7 @@ function TrackRow({
       barRadius: 2,
       fillParent: true,
       normalize: true,
-      interact: true,
+      interact: false,
       url: getAudioUrl(item.internalId),
     });
     wsRef.current = ws;
@@ -208,7 +218,6 @@ function TrackRow({
       onReady(index, readyDuration);
     });
     ws.on("error", () => setAudioState("unavailable"));
-    ws.on("timeupdate", (t) => setPlayheadPct((t / Math.max(duration, 1)) * 100));
 
     return () => {
       registerWs(index, null);
@@ -341,11 +350,15 @@ function TrackRow({
           className={`h-full w-full ${draggableLane ? "" : "cursor-pointer"} ${audioReady ? "" : "invisible"}`}
         />
 
-        {/* playhead: orange vertical line tracking playback progress */}
-        <div
-          className="pointer-events-none absolute top-0 z-30 h-full w-px bg-orange-500"
-          style={{ left: `${playheadPct}%` }}
-        />
+        {/* playhead: orange vertical line tracking playback progress, driven
+            by mixPlayer's shared-timeline clock (see globalPlayheadSec in the
+            parent) rather than this track's own audio element */}
+        {playheadPct != null && (
+          <div
+            className="pointer-events-none absolute top-0 z-30 h-full w-px bg-orange-500"
+            style={{ left: `${playheadPct}%` }}
+          />
+        )}
 
         {/* fade in */}
         {fadeInEnd != null && fadeInEnd > cueInVal && (
@@ -520,6 +533,28 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   const [playing, setPlaying] = useState(false);
   const [focusTransition, setFocusTransition] = useState(null); // index of the transition, or null
   const [focusedTrack, setFocusedTrack] = useState(0); // index of the track shown in the cue chip strip
+
+  // Scroll container for the waveform lanes, used to keep the transition
+  // point centered as the user zooms (see the zoom effect below). A ref
+  // *callback* (not useRef+useEffect) because this component swaps between
+  // an early-return tree (no items yet) and the full tree below on the same
+  // mounted instance — a mount-only effect would attach to a stale, still-
+  // null ref if the container only appears once real items arrive.
+  const scrollElRef = useRef(null);
+  const scrollObserverRef = useRef(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const scrollRef = useCallback((el) => {
+    scrollElRef.current = el;
+    scrollObserverRef.current?.disconnect();
+    scrollObserverRef.current = null;
+    if (!el) return;
+    setViewportWidth(el.getBoundingClientRect().width);
+    const observer = new ResizeObserver((entries) => {
+      setViewportWidth(entries[0].contentRect.width);
+    });
+    observer.observe(el);
+    scrollObserverRef.current = observer;
+  }, []);
   const [savingScope, setSavingScope] = useState(null); // "hour" | "database" | null
   const [saveError, setSaveError] = useState(null);
   const [saveOk, setSaveOk] = useState(null);
@@ -542,9 +577,40 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   const wsRefs = useRef([]);
   const registerWs = useCallback((index, ws) => { wsRefs.current[index] = ws; }, []);
 
-  const pxPerSec = PX_PER_SEC * zoom;
-  const pxPerSecRef = useRef(pxPerSec);
-  pxPerSecRef.current = pxPerSec;
+  // mixPlayer's decoded AudioBuffers load in parallel with wavesurfer's own
+  // fetch; Play stays disabled until every track's buffer is ready, since
+  // play() silently skips tracks whose buffer hasn't decoded yet.
+  const [buffersReady, setBuffersReady] = useState(false);
+  const [bufferError, setBufferError] = useState(null);
+  useEffect(() => {
+    setBuffersReady(false);
+    setBufferError(null);
+    let cancelled = false;
+    preloadBuffers(items.map((it) => it.internalId))
+      .then(() => { if (!cancelled) setBuffersReady(true); })
+      .catch((err) => { if (!cancelled) setBufferError(err.message); });
+    return () => { cancelled = true; };
+  }, [items]);
+
+  // Global playhead position on the shared timeline (seconds), driven by
+  // mixPlayer's single AudioContext clock via requestAnimationFrame — the
+  // per-track progress bar no longer exists since playback is no longer
+  // per-track.
+  const [playheadSec, setPlayheadSec] = useState(0);
+  const rafRef = useRef(null);
+  const stopPlayheadLoop = useCallback(() => {
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+  }, []);
+  const startPlayheadLoop = useCallback(() => {
+    stopPlayheadLoop();
+    const tick = () => {
+      setPlayheadSec(mixPlayer.getCurrentTime());
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, [stopPlayheadLoop]);
+  useEffect(() => stopPlayheadLoop, [stopPlayheadLoop]);
 
   // Build display items with edited cue values layered on top for the layout calc.
   const editedItems = useMemo(
@@ -561,6 +627,43 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   );
   const tracksRef = useRef(tracks);
   tracksRef.current = tracks;
+
+  // Zoom minimum: fit the whole timeline to the visible lane width. Falls
+  // back to the base PX_PER_SEC while the viewport hasn't been measured yet.
+  const minZoom = useMemo(() => {
+    const laneViewport = viewportWidth - LABEL_WIDTH;
+    if (laneViewport <= 0 || totalWidth <= 0) return 0.25;
+    return Math.max(Math.min(laneViewport / (totalWidth * PX_PER_SEC), 4), 0.05);
+  }, [viewportWidth, totalWidth]);
+
+  const effectiveZoom = Math.max(zoom, minZoom);
+  const pxPerSec = PX_PER_SEC * effectiveZoom;
+  const pxPerSecRef = useRef(pxPerSec);
+  pxPerSecRef.current = pxPerSec;
+
+  // Point (in timeline seconds) the zoom slider keeps centered: the focused
+  // transition's startNext point, i.e. where the previous track hands off to
+  // the next one. Falls back to the first transition, then to 0 if there's
+  // only one track.
+  const zoomFocusSec = useMemo(() => {
+    const idx = focusTransition ?? 0;
+    const prev = tracks[idx];
+    return prev ? prev.start + prev.startNext : 0;
+  }, [tracks, focusTransition]);
+
+  // Re-center the scroll area on the transition point whenever pxPerSec
+  // (i.e. zoom) changes, so zooming keeps the transition in view instead of
+  // drifting toward the timeline's start.
+  useEffect(() => {
+    const el = scrollElRef.current;
+    if (!el) return;
+    const targetPx = LABEL_WIDTH + zoomFocusSec * pxPerSec;
+    // Center the focus point in the space right of the (sticky, non-scrolling)
+    // label column, so it lands in the middle of the visible waveform area.
+    const laneViewport = el.clientWidth - LABEL_WIDTH;
+    el.scrollLeft = Math.max(targetPx - LABEL_WIDTH - laneViewport / 2, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pxPerSec]);
 
   // Sets startNext of `trackIndex`, clamped to [cueIn, duration] — the same
   // bounds mAirList itself enforces (no starting before the track's own
@@ -679,83 +782,87 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     setSaveOk(null);
   }, [setStartNext]);
 
-  // Pending setTimeout ids from playAll's staggered track starts, so Stop can
-  // cancel starts that haven't fired yet (otherwise a track could begin
-  // playing seconds after the user hit Stop).
-  const playAllTimeoutsRef = useRef([]);
+  // Pending timeout id for the focus-mode auto-stop, so a new play action can
+  // cancel a stop that hasn't fired yet.
+  const stopTimeoutRef = useRef(null);
 
   const stopAll = useCallback(() => {
-    playAllTimeoutsRef.current.forEach((id) => clearTimeout(id));
-    playAllTimeoutsRef.current = [];
-    wsRefs.current.forEach((ws) => ws?.pause());
+    if (stopTimeoutRef.current != null) {
+      clearTimeout(stopTimeoutRef.current);
+      stopTimeoutRef.current = null;
+    }
+    mixPlayer.stop();
+    stopPlayheadLoop();
     setPlaying(false);
-  }, []);
+  }, [stopPlayheadLoop]);
 
-  // Starts track 0 immediately, then each following track at the point on
-  // the shared timeline where it's supposed to come in — i.e. delayed by how
-  // far its start sits past track 0's start, exactly mirroring the delayed
-  // trigger playFocus() already uses for a single transition.
-  const playAll = useCallback(() => {
+  // Builds the track descriptors mixPlayer.play() expects: shared-timeline
+  // start, in-track cueIn/duration, and the fade cue points (in-track
+  // seconds) it schedules gain automation from.
+  const buildPlayerTracks = useCallback(() => tracks.map((t, i) => ({
+    itemId: t.item.internalId,
+    start: t.start,
+    duration: t.duration,
+    cueIn: t.cueIn,
+    cues: {
+      fadeIn: cueEdits[i]?.fadeIn ?? t.item.cue?.fadeIn,
+      fadeOut: t.item.cue?.fadeOut,
+      fadeEnd: t.item.cue?.fadeEnd,
+    },
+  })), [tracks, cueEdits]);
+
+  // Plays every track from the start of the shared timeline (track 0's
+  // cueIn), sample-scheduled together through mixPlayer so overlaps are
+  // actually audible instead of relying on independent per-track clocks.
+  const playAll = useCallback(async () => {
+    if (!buffersReady) return;
     setFocusTransition(null);
-    playAllTimeoutsRef.current.forEach((id) => clearTimeout(id));
-    playAllTimeoutsRef.current = [];
-
-    tracks.forEach((t, i) => {
-      const ws = wsRefs.current[i];
-      if (!ws) return;
-      const dur = ws.getDuration() || t.duration;
-      ws.setTime(Math.min(t.cueIn, dur));
-    });
-
+    if (stopTimeoutRef.current != null) clearTimeout(stopTimeoutRef.current);
+    await resumeContext();
+    const playerTracks = buildPlayerTracks();
     const timelineStart = tracks[0]?.start ?? 0;
-    tracks.forEach((t, i) => {
-      const ws = wsRefs.current[i];
-      if (!ws) return;
-      const delayMs = Math.max((t.start - timelineStart) * 1000, 0);
-      if (delayMs === 0) {
-        ws.play();
-      } else {
-        const id = setTimeout(() => ws.play(), delayMs);
-        playAllTimeoutsRef.current.push(id);
-      }
-    });
+    mixPlayer.play(playerTracks, timelineStart);
+    startPlayheadLoop();
     setPlaying(true);
-  }, [tracks]);
+  }, [buffersReady, buildPlayerTracks, tracks, startPlayheadLoop]);
 
-  const playFocus = useCallback((transitionIndex) => {
+  // Plays just the transition window (±FOCUS_WINDOW around the previous
+  // track's startNext point) so the handoff itself is audible in isolation.
+  const playFocus = useCallback(async (transitionIndex) => {
+    if (!buffersReady) return;
     const prev = tracks[transitionIndex];
     const next = tracks[transitionIndex + 1];
     if (!prev || !next) return;
     setFocusTransition(transitionIndex);
+    if (stopTimeoutRef.current != null) clearTimeout(stopTimeoutRef.current);
+    await resumeContext();
 
-    const prevWs = wsRefs.current[transitionIndex];
-    const nextWs = wsRefs.current[transitionIndex + 1];
-    // prev.startNext is prev's own in-track time at the handoff point.
-    const prevStart = Math.max(prev.startNext - FOCUS_WINDOW, prev.cueIn);
-    const nextStart = next.cueIn;
+    const transitionAt = prev.start + prev.startNext;
+    const windowStart = Math.max(transitionAt - FOCUS_WINDOW, prev.start + prev.cueIn);
+    const windowEnd = transitionAt + FOCUS_WINDOW;
 
-    wsRefs.current.forEach((ws, i) => {
-      if (i !== transitionIndex && i !== transitionIndex + 1) ws?.pause();
-    });
-
-    if (prevWs) {
-      prevWs.setTime(prevStart);
-      prevWs.play();
-      setTimeout(() => prevWs.pause(), FOCUS_WINDOW * 1000);
-    }
-    const delayMs = Math.max((prev.startNext - prevStart) * 1000, 0);
-    if (nextWs) {
-      nextWs.setTime(nextStart);
-      setTimeout(() => nextWs.play(), delayMs);
-      setTimeout(() => nextWs.pause(), delayMs + FOCUS_WINDOW * 1000);
-    }
+    const playerTracks = buildPlayerTracks().filter((t, i) => i === transitionIndex || i === transitionIndex + 1);
+    mixPlayer.play(playerTracks, windowStart);
+    startPlayheadLoop();
     setPlaying(true);
-    setTimeout(() => setPlaying(false), delayMs + FOCUS_WINDOW * 1000);
-  }, [tracks]);
+
+    const durationMs = Math.max((windowEnd - windowStart) * 1000, 0);
+    stopTimeoutRef.current = setTimeout(() => {
+      stopAll();
+    }, durationMs);
+  }, [buffersReady, buildPlayerTracks, tracks, startPlayheadLoop, stopAll]);
+
+  // Moves the shared playhead to a point on the timeline without starting
+  // playback — used for click-to-seek on a lane and jumping to a cue chip.
+  const seekTo = useCallback((timelineSec) => {
+    setPlayheadSec(timelineSec);
+    mixPlayer.seek(timelineSec);
+  }, []);
 
   const onSeekPreview = (index, timeInTrack) => {
     setFocusedTrack(index);
-    wsRefs.current[index]?.setTime(timeInTrack);
+    const track = tracks[index];
+    if (track) seekTo(track.start + timeInTrack);
   };
 
   const jumpToCue = (point) => {
@@ -764,7 +871,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     const val = track.item.cue?.[point.key];
     if (val == null || val === "") return;
     const target = Math.min(Math.max(Number(val), 0), track.duration);
-    wsRefs.current[focusedTrack]?.setTime(target);
+    seekTo(track.start + target);
   };
 
   useEffect(() => () => stopAll(), [stopAll]);
@@ -860,10 +967,12 @@ export default function MixEditor({ context, onBack, onNavigate }) {
           <div className="flex items-center gap-2">
             <button
               onClick={playing ? stopAll : playAll}
-              className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-3 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+              disabled={!buffersReady && !playing}
+              className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-3 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
+              title={!buffersReady && !playing ? "Audio wird geladen…" : undefined}
             >
               {playing ? <Pause size={14} /> : <Play size={14} />}
-              {playing ? "Pause" : "Abspielen"}
+              {playing ? "Pause" : buffersReady ? "Abspielen" : "Lädt…"}
             </button>
             <button
               onClick={stopAll}
@@ -884,6 +993,12 @@ export default function MixEditor({ context, onBack, onNavigate }) {
           </div>
         </div>
 
+        {bufferError && (
+          <div className="flex items-center gap-2 border-b border-zinc-800 bg-red-500/5 px-6 py-2.5 text-sm text-red-500">
+            <AlertTriangle size={14} />
+            <span>Audio konnte nicht geladen werden: {bufferError}</span>
+          </div>
+        )}
         {saveError && (
           <div className="flex items-center gap-2 border-b border-zinc-800 bg-red-500/5 px-6 py-2.5 text-sm text-red-500">
             <AlertTriangle size={14} />
@@ -901,9 +1016,9 @@ export default function MixEditor({ context, onBack, onNavigate }) {
         <div className="flex items-center gap-2 border-b border-zinc-800 px-6 py-2 text-xs text-zinc-500">
           <span>Zoom</span>
           <input
-            type="range" min={0.25} max={4} step={0.25}
-            value={zoom}
-            onChange={(e) => setZoom(Number(e.target.value))}
+            type="range" min={minZoom} max={4} step={0.05}
+            value={Math.max(zoom, minZoom)}
+            onChange={(e) => setZoom(Math.max(Number(e.target.value), minZoom))}
             className="h-1 w-40 accent-orange-500"
           />
           <span className="tabular-nums text-zinc-600">{zoom.toFixed(2)}x</span>
@@ -913,7 +1028,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
             area, so track names stay put while the shared waveform timeline
             scrolls. One shared horizontal scrollbar drives everything, so the
             ruler at the bottom always lines up with the waveforms above it. */}
-        <div className="flex-1 overflow-auto">
+        <div ref={scrollRef} className="flex-1 overflow-auto">
           <div className="flex" style={{ width: LABEL_WIDTH + totalWidth * pxPerSec + 40 }}>
             <div className="sticky left-0 z-10 shrink-0">
               {tracks.map((track, i) => (
@@ -929,6 +1044,13 @@ export default function MixEditor({ context, onBack, onNavigate }) {
                 // where the previous track's own audio actually ends.
                 const overlapStartPx = prev ? track.start * pxPerSec : null;
                 const overlapEndPx = prev ? prev.end * pxPerSec : null;
+                // Global playhead (shared-timeline seconds) translated into
+                // this track's own local percentage; null while it's outside
+                // the track's span so the line only shows on active tracks.
+                const localSec = playheadSec - track.start;
+                const trackPlayheadPct = localSec >= 0 && localSec <= track.duration
+                  ? (localSec / Math.max(track.duration, 1)) * 100
+                  : null;
                 return (
                   <TrackRow
                     key={i}
@@ -947,6 +1069,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
                     dragChipColor={dragChip?.color}
                     dragBelowKey={dragBelow?.index === i ? dragBelow.key : null}
                     onReady={onTrackReady}
+                    playheadPct={trackPlayheadPct}
                   />
                 );
               })}

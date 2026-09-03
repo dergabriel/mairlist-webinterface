@@ -1,0 +1,142 @@
+// Sample-accurate multi-track playback engine for the Mix Editor. Wavesurfer
+// instances are used only for waveform display; actual playback runs through
+// a single shared AudioContext here so all tracks share one clock and can
+// truly overlap (setTimeout-per-instance can't guarantee that).
+import { getAudioUrl } from "./api";
+
+let ctx = null;
+function getContext() {
+  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  return ctx;
+}
+
+// AudioBuffer cache keyed by item id, so repeated plays don't re-fetch/decode.
+const bufferCache = new Map();
+
+export async function loadBuffer(itemId) {
+  if (bufferCache.has(itemId)) return bufferCache.get(itemId);
+  const promise = (async () => {
+    const res = await fetch(getAudioUrl(itemId));
+    if (!res.ok) throw new Error(`Audio konnte nicht geladen werden (${res.status})`);
+    const arrayBuffer = await res.arrayBuffer();
+    return getContext().decodeAudioData(arrayBuffer);
+  })();
+  bufferCache.set(itemId, promise);
+  try {
+    return await promise;
+  } catch (err) {
+    bufferCache.delete(itemId);
+    throw err;
+  }
+}
+
+export async function preloadBuffers(itemIds) {
+  return Promise.all(itemIds.map(loadBuffer));
+}
+
+export function resumeContext() {
+  const c = getContext();
+  if (c.state === "suspended") return c.resume();
+  return Promise.resolve();
+}
+
+// Applies fadeIn/fadeOut/fadeEnd gain automation relative to `trackStartCtxTime`
+// (the AudioContext time at which the track's own time 0 lands), scheduled in
+// the track's own in-track seconds.
+function scheduleFades(gainNode, trackStartCtxTime, cues, duration) {
+  const gain = gainNode.gain;
+  const { cueIn = 0, fadeIn, fadeOut, fadeEnd } = cues;
+  gain.cancelScheduledValues(trackStartCtxTime);
+
+  const fadeInEnd = fadeIn != null && fadeIn !== "" ? Number(fadeIn) : null;
+  const fadeOutStart = fadeOut != null && fadeOut !== "" ? Number(fadeOut) : null;
+  const fadeOutEnd = fadeEnd != null && fadeEnd !== "" ? Number(fadeEnd) : duration;
+
+  if (fadeInEnd != null && fadeInEnd > cueIn) {
+    gain.setValueAtTime(0, trackStartCtxTime + cueIn);
+    gain.linearRampToValueAtTime(1, trackStartCtxTime + fadeInEnd);
+  } else {
+    gain.setValueAtTime(1, trackStartCtxTime + cueIn);
+  }
+
+  if (fadeOutStart != null && fadeOutEnd > fadeOutStart) {
+    gain.setValueAtTime(1, trackStartCtxTime + fadeOutStart);
+    gain.linearRampToValueAtTime(0, trackStartCtxTime + fadeOutEnd);
+  }
+}
+
+// One active playback session. `tracks` entries: { itemId, duration, cueIn,
+// start (shared-timeline seconds), sourceOffset (in-track seconds to start
+// reading from), cues: { fadeIn, fadeOut, fadeEnd } }.
+class MixPlayer {
+  constructor() {
+    this.sources = [];
+    this.startCtxTime = null; // ctx.currentTime at which timeline position 0 played
+    this.timelineOffset = 0; // timeline seconds that correspond to startCtxTime
+    this.playing = false;
+  }
+
+  // Schedules every track so it lands at the right point on the shared
+  // timeline, starting playback from `startAtSeconds` (shared-timeline time).
+  // Tracks whose (start + duration) already lies before startAtSeconds are
+  // skipped; tracks already in progress start mid-way via sourceOffset.
+  play(tracks, startAtSeconds = 0) {
+    this.stop();
+    const c = getContext();
+    const now = c.currentTime + 0.05; // small lead-in so scheduling isn't racing the clock
+    this.startCtxTime = now;
+    this.timelineOffset = startAtSeconds;
+    this.playing = true;
+
+    tracks.forEach((t) => {
+      const buffer = bufferCache.get(t.itemId);
+      if (!buffer || typeof buffer.then === "function") return; // not decoded yet
+      const trackEnd = t.start + t.duration;
+      if (trackEnd <= startAtSeconds) return;
+
+      const sourceOffset = Math.max(startAtSeconds - t.start, t.cueIn ?? 0);
+      const whenCtx = now + Math.max(t.start - startAtSeconds, 0);
+      const playDuration = Math.max(t.duration - sourceOffset, 0);
+      if (playDuration <= 0) return;
+
+      const source = c.createBufferSource();
+      source.buffer = buffer;
+      const gainNode = c.createGain();
+      source.connect(gainNode).connect(c.destination);
+
+      scheduleFades(gainNode, whenCtx - sourceOffset, t.cues || {}, t.duration);
+
+      source.start(whenCtx, sourceOffset, playDuration);
+      this.sources.push(source);
+    });
+  }
+
+  // Moves the (idle) playhead to a timeline position without starting
+  // playback. No-op while actually playing — pass through play() for that.
+  seek(timelineSec) {
+    if (this.playing) return;
+    this.timelineOffset = timelineSec;
+  }
+
+  stop() {
+    this.sources.forEach((s) => {
+      try { s.stop(); } catch { /* already stopped */ }
+      try { s.disconnect(); } catch { /* already disconnected */ }
+    });
+    this.sources = [];
+    this.playing = false;
+    this.startCtxTime = null;
+  }
+
+  // Current position on the shared timeline, in seconds.
+  getCurrentTime() {
+    if (!this.playing || this.startCtxTime == null) return this.timelineOffset;
+    return this.timelineOffset + (getContext().currentTime - this.startCtxTime);
+  }
+
+  isPlaying() {
+    return this.playing;
+  }
+}
+
+export const mixPlayer = new MixPlayer();

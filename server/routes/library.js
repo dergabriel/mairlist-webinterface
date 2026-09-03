@@ -27,10 +27,9 @@ const AUDIO_CONTENT_TYPES = {
 // Felder die ein Client bei createItem/updateItem setzen darf.
 // Schützt vor versehentlichem Überschreiben von id, createdAt etc.
 const ITEM_WRITABLE_FIELDS = new Set([
-  "title", "artist", "type", "comment", "color", "cover",
-  "gain", "normalization", "segueMode",
-  "folderId", "storageId", "filename",
-  "attributes", "cueMarkers",
+  "type", "containerType", "title", "artist", "duration", "endTime",
+  "storageId", "relativePath", "folderId", "comment", "color", "cover",
+  "cue", "playback", "attributes",
   "scheduledStart", "scheduledEnd", "scheduledDays",
 ]);
 

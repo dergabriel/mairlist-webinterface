@@ -319,7 +319,7 @@ function GeneralTab({ item, update }) {
   );
 }
 
-const MIN_ZOOM = 1;
+const MIN_ZOOM = 1; // fit-to-width; the actual px/sec floor is computed per-item from container width
 const MAX_ZOOM = 16;
 
 // Tick spacing shrinks as we zoom in, so the axis stays readable instead of
@@ -335,7 +335,7 @@ const tickIntervalFor = (dur, zoomLevel) => {
 // orange-500 for the played part (progress).
 const WAVE_COLOR = "#52525b"; // zinc-600
 const PROGRESS_COLOR = "#f97316"; // orange-500
-const BASE_PX_PER_SEC = 40; // zoomLevel 1 baseline; wavesurfer's minPxPerSec scales from here
+const BASE_PX_PER_SEC_FALLBACK = 40; // used only until the container has been measured
 
 function CueEditorTab({ item, updateCue }) {
   // audioDuration is wavesurfer's own decoded duration, set once the audio is
@@ -349,6 +349,13 @@ function CueEditorTab({ item, updateCue }) {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [volume, setVolume] = useState(0.7);
   const [audioState, setAudioState] = useState("loading"); // "loading" | "ready" | "unavailable"
+
+  // px/sec at zoomLevel 1: fit-to-width for the current item, i.e. the whole
+  // waveform exactly fills the container with no internal scroll. Recomputed
+  // whenever the container is resized or the real duration changes, so
+  // "zoom all the way out" always lands back on the complete waveform instead
+  // of some fixed px/sec value that may over- or under-shoot the container.
+  const [minPxPerSec, setMinPxPerSec] = useState(BASE_PX_PER_SEC_FALLBACK);
 
   // Wavesurfer's wrapper can render wider than its container and scroll
   // internally once zoomed in (see calculateWaveformLayout in wavesurfer's
@@ -443,9 +450,10 @@ function CueEditorTab({ item, updateCue }) {
       barWidth: 2,
       barGap: 1,
       barRadius: 2,
-      minPxPerSec: BASE_PX_PER_SEC,
+      minPxPerSec: BASE_PX_PER_SEC_FALLBACK,
       fillParent: true,
       normalize: true,
+      autoCenter: false, // don't let wavesurfer re-pan/zoom the view during playback
       url: getAudioUrl(item.internalId),
     });
     wavesurferRef.current = ws;
@@ -463,9 +471,25 @@ function CueEditorTab({ item, updateCue }) {
       });
     };
 
+    // Fit-to-width px/sec for the current container + duration; this is the
+    // zoom-out floor (MIN_ZOOM) so "zoom all the way out" always lands on the
+    // complete waveform rather than a fixed px/sec that under/overshoots it.
+    const fitToWidth = (durationSecs) => {
+      const scrollEl = ws.getWrapper()?.parentElement;
+      const containerWidth = scrollEl?.clientWidth;
+      if (!containerWidth || !durationSecs) return null;
+      return containerWidth / durationSecs;
+    };
+
     ws.on("ready", (readyDuration) => {
       setAudioDuration(readyDuration);
       setAudioState("ready");
+      const fit = fitToWidth(readyDuration);
+      if (fit) {
+        setMinPxPerSec(fit);
+        setZoomLevel(1);
+        ws.zoom(fit);
+      }
       syncScroll();
     });
     ws.on("error", () => setAudioState("unavailable"));
@@ -476,7 +500,20 @@ function CueEditorTab({ item, updateCue }) {
     ws.on("scroll", syncScroll);
     ws.on("zoom", () => requestAnimationFrame(syncScroll));
     ws.on("redraw", syncScroll);
-    ws.on("resize", syncScroll);
+    ws.on("resize", () => {
+      syncScroll();
+      // Container width changed (e.g. window resize): recompute the
+      // fit-to-width floor and, if we're still at the zoomed-out end,
+      // re-fit so the full waveform keeps exactly filling the container.
+      const fit = fitToWidth(ws.getDuration());
+      if (fit) {
+        setMinPxPerSec(fit);
+        setZoomLevel((level) => {
+          if (level <= 1) ws.zoom(fit);
+          return level;
+        });
+      }
+    });
     // relativeX is 0..1 against wavesurfer's own wrapper — correct even when
     // zoomed/scrolled, unlike a manual getBoundingClientRect() against the
     // outer (non-scrolling) container.
@@ -504,9 +541,10 @@ function CueEditorTab({ item, updateCue }) {
     return out;
   }, [dur, zoomLevel]);
 
+  // level 1 == fit-to-width (minPxPerSec); level N == N times that px/sec.
   const applyZoom = (level) => {
     setZoomLevel(level);
-    if (audioReady) wavesurferRef.current?.zoom(BASE_PX_PER_SEC * level);
+    if (audioReady) wavesurferRef.current?.zoom(minPxPerSec * level);
   };
   const zoomIn = () => applyZoom(Math.min(zoomLevel * 2, MAX_ZOOM));
   const zoomOut = () => applyZoom(Math.max(zoomLevel / 2, MIN_ZOOM));

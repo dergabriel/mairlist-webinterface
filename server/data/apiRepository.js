@@ -652,9 +652,17 @@ const deleteFolder = notImplemented("deleteFolder");
 // that batch resolving; these have no equivalent single-shot endpoint in
 // the mAirListDB Server API (see docs/MAIRLISTDB-API.md), so an empty
 // result is the honest answer rather than a guess.
+// Deliberately synchronous (not async/Promise-returning): the routes that
+// call these (GET /api/storages, /api/types, /api/attributes, /api/items,
+// /api/folders/:id/children in server/routes/library.js) do
+// `res.json(repo.getX())` without awaiting, matching sqlRepository.js's
+// synchronous functions of the same name. An async stub here would hand
+// res.json() an unresolved Promise (serializes to `{}`), which is what
+// broke DatabaseManager.jsx's `[...items]` spread in api-mode — items
+// arrived as `{}` instead of `[]`, and `{}` isn't iterable.
 const warnedOnce = new Set();
 function emptyStub(name, emptyValue) {
-  return async () => {
+  return () => {
     if (!warnedOnce.has(name)) {
       warnedOnce.add(name);
       console.warn(`[apiRepository] ${name}() ist im api-Modus noch nicht implementiert, liefert leeren Wert`);

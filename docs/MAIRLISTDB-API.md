@@ -10,6 +10,12 @@ tatsächlich beobachtet wurden. Response-Formate sind anhand echter Antworten
 protokolliert, PUT-Bodies wurden (Stand dieser Dokumentation) noch nicht
 verifiziert und sind als Annahme markiert.
 
+**Implementiert in:** [`server/data/apiRepository.js`](../server/data/apiRepository.js)
+(`DATA_SOURCE=api`) — die Repository-Funktionen setzen exakt die hier
+dokumentierten Endpunkte um. Funktionsumfang und aktueller Stand (was
+verfügbar ist, was bewusst als "noch nicht verfügbar" abgefangen wird):
+siehe [`docs/FEATURES.md` – API-basierte Datenquelle](FEATURES.md#-api-basierte-datenquelle-mairlistdb-server).
+
 ## Grundlagen
 
 - **Base URL:** `http://<server>:8840`

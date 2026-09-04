@@ -30,7 +30,7 @@ Vorbild ist das 2023 begonnene Projekt **TubeLive**. Der Look ist in [`DESIGN.md
 | [`SETUP.md`](SETUP.md) | Lokale Entwicklung, Git, Projektstruktur |
 | [`docs/SCHEMA.md`](docs/SCHEMA.md) | Echtes DB-Schema aus einer .mldb Datei |
 | [`docs/FIELD-SEMANTICS.md`](docs/FIELD-SEMANTICS.md) | Bestätigte Einheiten und Feldformate |
-| [`docs/MAIRLISTDB-API.md`](docs/MAIRLISTDB-API.md) | Dokumentation der mAirListDB Server REST API (Port 8840), Basis für die geplante API-basierte Repository-Implementierung (löst das SQLite-Locking-Problem mit parallel laufendem mAirList) |
+| [`docs/MAIRLISTDB-API.md`](docs/MAIRLISTDB-API.md) | Dokumentation der mAirListDB Server REST API (Port 8840), Basis für `server/data/apiRepository.js` (löst das SQLite-Locking-Problem mit parallel laufendem mAirList) |
 
 ---
 
@@ -38,7 +38,9 @@ Vorbild ist das 2023 begonnene Projekt **TubeLive**. Der Look ist in [`DESIGN.md
 
 Die mAirListDB läuft auf einem echten SQL Server (PostgreSQL, MariaDB/MySQL oder MSSQL). Direkter Datenbankzugriff ist möglich. Das Schema ist in [`docs/SCHEMA.md`](docs/SCHEMA.md) dokumentiert, Feldbedeutungen und Einheiten in [`docs/FIELD-SEMANTICS.md`](docs/FIELD-SEMANTICS.md).
 
-**Aktueller Modus: echte SQLite-DB.** Die gesamte Oberfläche spricht nur mit der Zwischenschicht `server/data/repository.js` (Mock) oder `server/data/sqlRepository.js` (SQLite, aktiviert via `DATA_SOURCE=sqlite`). Umschalten per Umgebungsvariable, Frontend und API bleiben unverändert. DB-Pfad über `DB_PATH`, Standard `./mairlist.mldb`. Die `.mldb` Datei gehört nicht ins Repo (`.gitignore`).
+**Aktueller Modus: echte SQLite-DB.** Die gesamte Oberfläche spricht nur mit der Zwischenschicht `server/data/repository.js` (Mock), `server/data/sqlRepository.js` (SQLite, aktiviert via `DATA_SOURCE=sqlite`) oder `server/data/apiRepository.js` (mAirListDB Server REST-API, aktiviert via `DATA_SOURCE=api`). Umschalten per Umgebungsvariable, Frontend und API bleiben unverändert. DB-Pfad über `DB_PATH`, Standard `./mairlist.mldb`. Die `.mldb` Datei gehört nicht ins Repo (`.gitignore`).
+
+**Dritte Datenquelle: mAirListDB Server API (`DATA_SOURCE=api`).** Statt die `.mldb`-Datei direkt zu öffnen, spricht `apiRepository.js` mit dem mAirListDB Server über dessen REST-API (Port 8840, siehe [`docs/MAIRLISTDB-API.md`](docs/MAIRLISTDB-API.md)). Löst das SQLite-Locking-Problem ("database is locked" bei parallel laufendem mAirList) strukturell, da nicht mehr auf dieselbe Datei zugegriffen wird. Konfiguration über `API_DB_BASE_URL`, `API_DB_USER`, `API_DB_PASSWORD`, `API_DB_STATION` (siehe `server/.env.production.example`). Lese-Pfade (Folders/Items/Playlists/Audio-Proxy/Artists/Titles) und der zentrale Schreib-Pfad (`updateItem`, `writeHour`) sind fertig und mit 19 Smoke-Tests gegen die Produktivinstanz verifiziert (`server/scripts/smoke-reads-api.js`, `smoke-writes-api.js`). Was dort noch fehlt, ist in [`docs/FEATURES.md`](docs/FEATURES.md#-api-basierte-datenquelle-mairlistdb-server) klar als "noch nicht verfügbar" gelistet — betroffene Funktionen werfen einen sprechenden Fehler statt zu crashen oder falsche Daten zu liefern. Die Webinterface-eigene Benutzerverwaltung (`server/data/webAuthDb.js`) ist von `DATA_SOURCE` komplett unabhängig und funktioniert in allen drei Modi identisch.
 
 ## ⚠️ Grundregeln
 
@@ -78,7 +80,7 @@ Details je Phase in [`docs/FEATURES.md`](docs/FEATURES.md).
 
 ## 🧱 Tech Stack
 
-Backend Node.js und Express, Frontend React mit Tailwind im Look des `DESIGN.md`, Datenbank SQLite (aktuell via `better-sqlite3`), PostgreSQL/MariaDB/MSSQL (geplant, echter mAirList SQL Server), Waveform wavesurfer.js, Audio Aufnahme MediaRecorder API, Reverse Proxy Caddy mit TLS.
+Backend Node.js und Express, Frontend React mit Tailwind im Look des `DESIGN.md`, Datenbank SQLite (aktuell via `better-sqlite3`) oder wahlweise Zugriff über die mAirListDB Server REST-API (`server/data/apiRepository.js`, `DATA_SOURCE=api`), PostgreSQL/MariaDB/MSSQL (geplant, echter mAirList SQL Server), Waveform wavesurfer.js, Audio Aufnahme MediaRecorder API, Reverse Proxy Caddy mit TLS.
 
 ## 🤖 Hinweise zum Vibecoding
 

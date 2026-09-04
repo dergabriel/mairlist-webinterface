@@ -12,6 +12,7 @@ Legende: ✅ fertig (gegen Mock) · 🚧 in Arbeit · ⬜ offen · 🔽 späte P
 | B–E | siehe Bereichs-Tabellen unten (Bibliothek-Feinheiten, Mix Editor, Voice Tracking) | ⬜ offen |
 | F | Mehrbenutzer: eigene Benutzerverwaltung mit bcrypt, 5 Rollen, Bootstrap-Admin — siehe Bereichs-Tabelle unten | 🟡 Benutzerverwaltung fertig, Konflikt-Erkennung offen |
 | G | Echte Datenbank: `.mldb` (SQLite) statt Mock anbinden | ✅ fertig |
+| — | Dritte Datenquelle: mAirListDB Server REST-API statt direktem SQLite-Zugriff (`DATA_SOURCE=api`) — siehe [Bereichs-Tabelle unten](#-api-basierte-datenquelle-mairlistdb-server) | 🟡 Kernfunktionen fertig, einige Funktionen bewusst noch offen |
 | H, I | unverändert offen | ⬜ offen |
 
 **Phase G – abgeschlossen:**
@@ -62,6 +63,57 @@ Legende: ✅ fertig (gegen Mock) · 🚧 in Arbeit · ⬜ offen · 🔽 späte P
 - `writeHour()` macht DELETE+INSERT der ganzen Stunde statt gezielter Position-Shifts
 - `cover` und `containerType` bleiben `null` (`xmldata`/`options` noch nicht geparst)
 - Noch offen aus FIELD-SEMANTICS.md: `items.color` Format, `items.endtype` Werte, `playlist.xmldata` Override-Format, `item_cuedata.xmldata` für Hüllkurven
+
+---
+
+## 🔌 API-basierte Datenquelle (mAirListDB Server)
+
+Dritte Repository-Implementierung neben Mock und SQLite:
+`server/data/apiRepository.js`, aktiviert über `DATA_SOURCE=api`. Statt
+die `.mldb`-Datei direkt mit `better-sqlite3` zu öffnen, spricht sie mit
+dem mAirListDB Server über dessen REST-API (Port 8840, siehe
+[`docs/MAIRLISTDB-API.md`](MAIRLISTDB-API.md)). Löst das
+SQLite-Locking-Problem ("database is locked" bei parallel laufendem
+mAirList) strukturell, da nicht mehr auf dieselbe Datei zugegriffen
+wird.
+
+Konfiguration: `API_DB_BASE_URL`, `API_DB_USER`, `API_DB_PASSWORD`,
+`API_DB_STATION` in `.env` (siehe
+`server/.env.production.example`). Die Webinterface-eigene
+Benutzerverwaltung (`server/data/webAuthDb.js`, bcrypt) ist von
+`DATA_SOURCE` unabhängig und funktioniert in allen drei Modi identisch.
+
+Verifiziert mit 19 Smoke-Tests gegen die Produktivinstanz
+(`server/scripts/smoke-reads-api.js`, `smoke-writes-api.js`).
+
+**Verfügbar:**
+
+| Funktion | Status |
+|---|---|
+| `getCapabilities`, `getPermissions` | ✅ |
+| `getFolders` (flache Liste) | ✅ |
+| `getFolderTree` (aus `getFolders()` clientseitig verschachtelt aufgebaut) | ✅ |
+| `getItemsByFolder`, `getItemById`, `getItemsByIds` | ✅ |
+| `getItemFolders`, `getItemRestrictions`, `getItemHistory` | ✅ |
+| `getPlaylistHour`, `getPlaylistAttributes` | ✅ |
+| `writeHour` (Playlist-Stunde speichern, volle Ersetzung) | ✅ |
+| `getArtists`, `getTitles` (Distinct-Listen) | ✅ |
+| `getAudioStreamUrl`, `getAudioStream` (Audio-Proxy, Original + low-quality; Zugangsdaten bleiben serverseitig, landen nie im Frontend) | ✅ |
+| `updateItem` (Items inkl. Cue-Punkte, Gain, Attribute speichern) | ✅ |
+
+**Bewusst noch nicht implementiert** (werfen einen klaren "im
+api-Modus noch nicht verfügbar"-Fehler statt zu crashen oder falsche
+Daten zu liefern):
+
+| Funktion / Bereich | Status |
+|---|---|
+| `createItem`, `deleteItem` | ⬜ Endpunkt nicht verifiziert |
+| Ordner-CRUD: `createFolder`, `renameFolder`, `moveFolder`, `deleteFolder` | ⬜ |
+| Storage-Verwaltung: `getStorages`, `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
+| Item-Suche (`searchItems`), `getItems`, `getItemTypes`, `getAttributeKeys`, `getAttributeDefinitions`, `getCuePoints` | ⬜ |
+| `moveItemToFolder`, `uploadFile`, `resolveAudioPath` | ⬜ |
+| `getPlaylistsByDate`, `getPlaylistById`, `reorderPlaylist`, `insertPlaylistItem`, `removePlaylistItem`, `savePlaylistItemOverrides` | ⬜ |
+| Dashboard/Logs-Aggregation: `getLogs`, `getDashboardStats`, `getRecentLogs`, `getTodayPlaylist` | ⬜ |
 
 ---
 

@@ -166,10 +166,10 @@ router.get("/attributes", requireScope("library.read"), (req, res, next) => {
 });
 
 // GET /api/items?type=&artist=&folderId=&storageId=&attributeKey=&attributeValue=
-router.get("/items", requireScope("library.read"), (req, res, next) => {
+router.get("/items", requireScope("library.read"), async (req, res, next) => {
   try {
     const { type, artist, folderId, storageId, attributeKey, attributeValue } = req.query;
-    res.json(repo.getItems({ type, artist, folderId, storageId, attributeKey, attributeValue }));
+    res.json(await repo.getItems({ type, artist, folderId, storageId, attributeKey, attributeValue }));
   } catch (e) { next(e); }
 });
 
@@ -340,12 +340,12 @@ router.post("/upload", requireScope("library.write"), (req, res, next) => {
 });
 
 // GET /api/playlists?date=YYYY-MM-DD -> all 24 hours for that date, each flagged hasEntries
-router.get("/playlists", requireScope("library.read"), (req, res, next) => {
+router.get("/playlists", requireScope("library.read"), async (req, res, next) => {
   try {
     const { date } = req.query;
     if (!date) return res.status(400).json({ error: "date ist erforderlich" });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date muss im Format YYYY-MM-DD sein" });
-    res.json(repo.getPlaylistsByDate(date));
+    res.json(await repo.getPlaylistsByDate(date));
   } catch (e) { next(e); }
 });
 

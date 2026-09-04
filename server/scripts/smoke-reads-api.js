@@ -80,6 +80,31 @@ async function main() {
 
   const items = await run("getItemsByFolder", () => repo.getItemsByFolder(folderId ?? (folders && folders[0] && folders[0].id)));
 
+  await run("getItems (folderId only)", async () => {
+    const targetFolderId = folderId ?? (folders && folders[0] && folders[0].id);
+    const result = await repo.getItems({ folderId: targetFolderId });
+    if (!Array.isArray(result)) throw new Error("expected an array");
+    return { count: result.length };
+  });
+
+  await run("getItems (no folderId)", async () => {
+    const result = await repo.getItems({});
+    if (!Array.isArray(result) || result.length !== 0) {
+      throw new Error("expected an empty array when folderId is omitted");
+    }
+    return { ok: "returned [] as expected" };
+  });
+
+  if (items && items.length > 0) {
+    const sample = items[0];
+    await run("getItems (filtered by type)", async () => {
+      const result = await repo.getItems({ folderId: folderId ?? (folders && folders[0] && folders[0].id), type: sample.type });
+      if (!Array.isArray(result)) throw new Error("expected an array");
+      if (!result.every((i) => i.type === sample.type)) throw new Error("filter by type leaked non-matching items");
+      return { count: result.length };
+    });
+  }
+
   await run("getItemById", async () => {
     const item = await repo.getItemById(itemId);
     if (!item) throw new Error(`item ${itemId} not found`);
@@ -99,6 +124,16 @@ async function main() {
 
   await run("getPlaylistHour", () => repo.getPlaylistHour(year, month, day, hour));
   await run("getPlaylistAttributes", () => repo.getPlaylistAttributes(year, month, day, hour));
+
+  const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  await run("getPlaylistsByDate", async () => {
+    const result = await repo.getPlaylistsByDate(dateStr);
+    if (!Array.isArray(result) || result.length !== 24) {
+      throw new Error(`expected 24 hour entries, got ${Array.isArray(result) ? result.length : typeof result}`);
+    }
+    const hasHasEntries = result.some((h) => h.hasEntries);
+    return { hours: result.length, anyWithEntries: hasHasEntries };
+  });
 
   const item = await repo.getItemById(itemId);
   await run("getAudioStream (default)", async () => {

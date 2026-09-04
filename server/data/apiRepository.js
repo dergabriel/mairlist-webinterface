@@ -319,6 +319,38 @@ async function getItemsByFolder(folderId) {
   return list.map((apiItem) => mapApiItemToInternal(apiItem, folderId ?? null));
 }
 
+// sqlRepository.js's getItems(filters) can list the whole library
+// (no folderId) via a plain SQL scan; the API has no such unfiltered
+// items endpoint (GET /api/v1/items always requires folder=<id> or
+// ids=<id,...>, see docs/MAIRLISTDB-API.md). So folderId is required
+// here — the frontend always supplies one when browsing library.js's
+// GET /api/items (the folder tree UI), and the remaining filters
+// (type/artist/storageId/attributeKey+Value) are applied client-side
+// on top of that folder's items, mirroring sqlRepository.js's own
+// post-query filtering for folderId/attributeKey there.
+async function getItems(filters = {}) {
+  if (filters.folderId == null) return [];
+
+  let result = await getItemsByFolder(filters.folderId);
+
+  if (filters.type) {
+    result = result.filter((i) => i.type === typeToCode(filters.type));
+  }
+  if (filters.artist) {
+    result = result.filter((i) => i.artist === filters.artist);
+  }
+  if (filters.storageId != null) {
+    result = result.filter((i) => resolveStorageFile(i)?.storageId === String(filters.storageId));
+  }
+  if (filters.attributeKey) {
+    result = result.filter(
+      (i) => String(i.attributes?.[filters.attributeKey] ?? "") === String(filters.attributeValue)
+    );
+  }
+
+  return result;
+}
+
 async function getItemById(id) {
   if (id === null || id === undefined || id === "") return null;
   try {
@@ -511,6 +543,29 @@ async function getPlaylistAttributes(year, month, day, hour) {
   return apiRequest("GET", path);
 }
 
+const playlistHourId = (date, hour) => `${date}-${String(hour).padStart(2, "0")}`;
+
+// Mirrors sqlRepository.js's getPlaylistsByDate(date): one entry per hour
+// of the day (0-23), each flagged hasEntries. The API has no single
+// per-day endpoint (only per-hour, see docs/MAIRLISTDB-API.md), so this
+// loops getPlaylistHour() across all 24 hours — safe to fire concurrently
+// since apiRequest() already serializes through the shared concurrency
+// queue (MAX_CONCURRENT, default 3).
+async function getPlaylistsByDate(date) {
+  const [year, month, day] = date.split("-").map(Number);
+
+  const hours = await Promise.all(
+    Array.from({ length: 24 }, (_, hour) => getPlaylistHour(year, month, day, hour))
+  );
+
+  return hours.map((data, hour) => ({
+    id: playlistHourId(date, hour),
+    date,
+    hour,
+    hasEntries: Array.isArray(data?.Items) && data.Items.length > 0,
+  }));
+}
+
 // Maps an internal playlist entry (a slot with a `time` and an `item`,
 // the shape returned/consumed by sqlRepository.js's playlist functions)
 // to the API's { Class: "Playlist", Time: {...}, Item: {...} } wrapper.
@@ -682,14 +737,12 @@ const updateStorage = notImplemented("updateStorage");
 const deleteStorage = notImplemented("deleteStorage");
 const getItemTypes = emptyStub("getItemTypes", []);
 const getAttributeKeys = emptyStub("getAttributeKeys", []);
-const getItems = emptyStub("getItems", []);
 const searchItems = notImplemented("searchItems");
 const getCuePoints = notImplemented("getCuePoints");
 const getAttributeDefinitions = notImplemented("getAttributeDefinitions");
 const moveItemToFolder = notImplemented("moveItemToFolder");
 const uploadFile = notImplemented("uploadFile");
 const resolveAudioPath = notImplemented("resolveAudioPath");
-const getPlaylistsByDate = notImplemented("getPlaylistsByDate");
 const getPlaylistById = notImplemented("getPlaylistById");
 const reorderPlaylist = notImplemented("reorderPlaylist");
 const insertPlaylistItem = notImplemented("insertPlaylistItem");

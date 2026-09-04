@@ -9,6 +9,7 @@ const router = express.Router();
 const repo = process.env.DATA_SOURCE === "sqlite"
   ? require("../data/sqlRepository")
   : require("../data/repository");
+const apiRepo = process.env.DATA_SOURCE === "api" ? require("../data/apiRepository") : null;
 const { requireAuth, requireScope } = require("../middleware/auth");
 const { getSettings, saveSettings } = require("../lib/settings");
 
@@ -192,6 +193,25 @@ router.get("/items/:id/history", requireScope("library.read"), (req, res, next) 
 // with Range support so the browser can seek. 404 if the item, its storage,
 // or the file on disk isn't found.
 router.get("/items/:id/audio", requireScope("library.read"), (req, res, next) => {
+  if (process.env.DATA_SOURCE === "api") {
+    (async () => {
+      const item = await apiRepo.getItemById(req.params.id);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+
+      const quality = req.query.quality === "low" ? "low" : "default";
+      const result = await apiRepo.getAudioStream(item, quality);
+      if (!result) return res.status(404).json({ error: "Für dieses Element ist keine Audiodatei hinterlegt" });
+
+      const contentType = AUDIO_CONTENT_TYPES[path.extname(item.relativePath || "").toLowerCase()] || result.contentType;
+      res.writeHead(200, {
+        "Content-Type": contentType,
+        "Content-Length": result.buffer.length,
+      });
+      res.end(result.buffer);
+    })().catch(next);
+    return;
+  }
+
   try {
     const item = repo.getItemById(req.params.id);
     if (!item) return res.status(404).json({ error: "Item not found" });

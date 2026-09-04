@@ -76,6 +76,26 @@ async function main() {
   await run("getPlaylistHour", () => repo.getPlaylistHour(year, month, day, hour));
   await run("getPlaylistAttributes", () => repo.getPlaylistAttributes(year, month, day, hour));
 
+  const item = await repo.getItemById(itemId);
+  const defaultAudio = await run("getAudioStream (default)", async () => {
+    const result = await repo.getAudioStream(item, "default");
+    if (!result || !result.buffer || result.buffer.length === 0) {
+      throw new Error("expected non-empty buffer");
+    }
+    return { bytes: result.buffer.length, contentType: result.contentType };
+  });
+
+  await run("getAudioStream (low)", async () => {
+    const result = await repo.getAudioStream(item, "low");
+    if (!result || !result.buffer || result.buffer.length === 0) {
+      throw new Error("expected non-empty buffer");
+    }
+    if (defaultAudio && result.buffer.length >= defaultAudio.bytes) {
+      throw new Error(`expected transcoded "low" (${result.buffer.length} bytes) smaller than "default" (${defaultAudio.bytes} bytes)`);
+    }
+    return { bytes: result.buffer.length, contentType: result.contentType };
+  });
+
   await run("getArtists", () => repo.getArtists());
   await run("getTitles", () => repo.getTitles());
 

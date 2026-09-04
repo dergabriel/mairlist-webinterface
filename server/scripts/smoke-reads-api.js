@@ -54,6 +54,30 @@ async function main() {
     await run("getFolders (child of first)", () => repo.getFolders(folders[0].id));
   }
 
+  const allFolders = await run("getFolders (all, flat)", () => repo.getFolders());
+
+  await run("getFolderTree", async () => {
+    const tree = await repo.getFolderTree();
+    if (!Array.isArray(tree) || tree.length === 0) {
+      throw new Error("expected a non-empty array of root folders");
+    }
+    for (const root of tree) {
+      if (!Array.isArray(root.children)) {
+        throw new Error(`root folder ${root.id} (${root.name}) is missing a children array`);
+      }
+    }
+
+    const countNodes = (nodes) =>
+      nodes.reduce((sum, node) => sum + 1 + countNodes(node.children), 0);
+    const treeCount = countNodes(tree);
+    const flatCount = allFolders ? allFolders.length : null;
+    if (flatCount != null && treeCount !== flatCount) {
+      throw new Error(`tree has ${treeCount} folders but getFolders() returned ${flatCount}`);
+    }
+
+    return { rootFolders: tree.length, totalFolders: treeCount };
+  });
+
   const items = await run("getItemsByFolder", () => repo.getItemsByFolder(folderId ?? (folders && folders[0] && folders[0].id)));
 
   await run("getItemById", async () => {

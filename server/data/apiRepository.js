@@ -526,7 +526,17 @@ function notImplemented(name) {
   };
 }
 
-const getFolderTree = notImplemented("getFolderTree");
+// Builds the same nested { id, name, parentId, children } tree shape as
+// sqlRepository.js's getFolderTree(), from getFolders()'s flat list (which
+// already normalizes parentId to null for root, matching rowToFolder there).
+async function getFolderTree() {
+  const all = await getFolders();
+  const byParent = (parentId) =>
+    all
+      .filter((f) => f.parentId === parentId)
+      .map((f) => ({ ...f, children: byParent(f.id) }));
+  return byParent(null);
+}
 const getFolderById = notImplemented("getFolderById");
 const getFolderChildren = notImplemented("getFolderChildren");
 const createFolder = notImplemented("createFolder");

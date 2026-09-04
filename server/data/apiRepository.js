@@ -50,8 +50,12 @@ function authHeader() {
 // Central request helper. `query` is a plain object of query params;
 // station is appended automatically unless the caller already set it or
 // explicitly passes station: null to omit it (e.g. /permissions,
-// /capabilities have no station scoping per the API docs).
-async function apiRequest(method, path, { query = {}, body, withStation = true } = {}) {
+// /capabilities have no station scoping per the API docs). `rawFlags` is
+// an array of bare query flags sent without a value or "=" (e.g. the API's
+// `?artists&...` / `?titles&...` distinct-list flags) — URLSearchParams
+// can't express a valueless flag (it always serializes `set(k, "")` as
+// `k=`), so these are appended to the built query string directly.
+async function apiRequest(method, path, { query = {}, rawFlags = [], body, withStation = true } = {}) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined || value === null) continue;
@@ -59,7 +63,7 @@ async function apiRequest(method, path, { query = {}, body, withStation = true }
   }
   if (withStation && !params.has("station")) params.set("station", STATION);
 
-  const qs = params.toString();
+  const qs = [...rawFlags, params.toString()].filter(Boolean).join("&");
   const url = `${BASE_URL}${path}${qs ? `?${qs}` : ""}`;
 
   const controller = new AbortController();
@@ -215,13 +219,17 @@ async function getItemsByIds(ids) {
   return list.map(mapApiItemToInternal);
 }
 
+// Response is a bare array of folder ID strings, e.g. ["8"] — not folder
+// objects (unlike the `Folders` array embedded in
+// /api/v1/items?folder=<id> responses). Resolve each ID against the full
+// folder tree (getFolders()) to return proper { id, name, parentId }
+// folder objects.
 async function getItemFolders(itemId) {
   const data = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/folders`);
-  if (process.env.API_DB_DEBUG) {
-    console.log(`[apiRepository] getItemFolders(${itemId}) raw response:`, JSON.stringify(data));
-  }
-  const list = Array.isArray(data) ? data : data?.Folders || [];
-  return list.map(rowToFolder);
+  const ids = Array.isArray(data) ? data : data?.Folders || [];
+  const allFolders = await getFolders();
+  const byId = new Map(allFolders.map((f) => [String(f.id), f]));
+  return ids.map((id) => byId.get(String(id))).filter(Boolean);
 }
 
 async function getItemRestrictions(itemId) {
@@ -262,27 +270,23 @@ async function getCapabilities() {
 
 // ---- artists / titles (distinct-value search) ----
 //
-// TODO: docs/MAIRLISTDB-API.md documents these as
-// `?artists&time=...&station=1` / `?titles&time=...&station=1`, but the
-// expected format of `time` was never captured from real traffic (ISO
-// timestamp? date? from/to window?). Sending `time=` as an empty string
-// previously — which is what actually shipped — is a malformed value, and
-// is the most likely reason the server fell back to returning full item
-// objects instead of a distinct name list.
-//
-// Fix attempt: omit `time` entirely per option (a) in the fix task, since
-// an absent optional param is safer than a guessed-wrong one. NOT verified
-// against a live server (no reachable instance / credentials at fix time).
-// If the server still returns full item objects with `time` omitted, the
-// format is genuinely undocumented — do not reshape the item objects into
-// fake "distinct list" output; that would misrepresent unverified data as
-// verified. Whoever picks this up next should re-check both functions
-// against a live instance and update this comment once the real `time`
-// format (or its unnecessity) is confirmed.
+// docs/MAIRLISTDB-API.md documents these as `?artists&time=...&station=1` /
+// `?titles&time=...&station=1` — `artists`/`titles` is a bare flag (no
+// "=value"), which URLSearchParams cannot express (see apiRequest's
+// `rawFlags`). Two fix attempts so far both still returned full item
+// objects instead of a distinct name list against a live server:
+//   1. sending `time=` as an empty string (malformed value)
+//   2. omitting `time` entirely
+// `rawFlags` now sends `artists`/`titles` as true bare flags (no previous
+// attempt did this — both still went through URLSearchParams as `key=`),
+// but the real `time` format is still unconfirmed. This is a known open
+// point — see "Offene Punkte" in docs/MAIRLISTDB-API.md. Not a blocker:
+// artists/titles search is a nice-to-have, not core functionality.
 
 async function getArtists(searchTerm) {
   const data = await apiRequest("GET", "/api/v1/items", {
-    query: { artists: "", ...(searchTerm ? { q: searchTerm } : {}) },
+    rawFlags: ["artists"],
+    query: searchTerm ? { q: searchTerm } : {},
   });
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.Artists)) return data.Artists;
@@ -293,7 +297,8 @@ async function getArtists(searchTerm) {
 
 async function getTitles(searchTerm) {
   const data = await apiRequest("GET", "/api/v1/items", {
-    query: { titles: "", ...(searchTerm ? { q: searchTerm } : {}) },
+    rawFlags: ["titles"],
+    query: searchTerm ? { q: searchTerm } : {},
   });
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.Titles)) return data.Titles;

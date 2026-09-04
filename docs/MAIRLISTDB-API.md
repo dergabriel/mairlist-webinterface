@@ -500,6 +500,15 @@ getestet.
 - [ ] Pagination bei Items in einzelnen großen Ordnern (limit/offset
       o. ä.?) – bei Folders selbst nicht beobachtet, bei Items noch
       nicht spezifisch getestet
+- [ ] **`time`-Parameter bei `?artists`/`?titles`:** Format nicht
+      verifiziert (ISO-Timestamp? Datum? Von/Bis-Fenster?). Auch mit
+      `artists`/`titles` als echtem bare Flag (ohne `=`) und ohne
+      `time`-Parameter liefert der Server weiterhin komplette
+      Item-Objekte statt einer Distinct-Liste — Ursache ungeklärt,
+      vermutlich doch der fehlende/falsche `time`-Wert. Nicht
+      blockierend: Artist-/Titel-Suche ist ein Nice-to-have-Feature,
+      `getArtists`/`getTitles` in `apiRepository.js` funktionieren
+      (liefern nur mehr Daten als nötig)
 - [ ] Rate-Limiting oder Verbindungslimits
 - [ ] **Alternative Authentifizierung per Token:** Der offizielle
       mAirList-Client bietet in seiner "Internet Client"-Konfiguration

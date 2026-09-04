@@ -619,39 +619,45 @@ async function getFolderTree() {
   return byParent(null);
 }
 const getFolderById = notImplemented("getFolderById");
-const getFolderChildren = notImplemented("getFolderChildren");
 const createFolder = notImplemented("createFolder");
 const renameFolder = notImplemented("renameFolder");
 const moveFolder = notImplemented("moveFolder");
 const deleteFolder = notImplemented("deleteFolder");
 
-// These four are loaded alongside getFolderTree() in one Promise.all by
-// the frontend (Playlist.jsx, DatabaseManager.jsx) — if any of them threw
-// (as notImplemented() did), the whole batch rejected and the sidebar
-// tree never rendered even though /api/tree itself had already succeeded.
-// Returning an empty array keeps that batch resolving; these catalogues
-// (storages, item types, attribute keys, full item listing) genuinely
-// have no equivalent single-shot endpoint in the mAirListDB Server API
-// (see docs/MAIRLISTDB-API.md), so an empty list is the honest answer
-// rather than a guess.
+// The functions below are loaded alongside getFolderTree() by the
+// frontend (Playlist.jsx, DatabaseManager.jsx), sometimes inside the same
+// Promise.all as the tree fetch — if any of them threw (as
+// notImplemented() did), the whole batch rejected and the sidebar tree
+// never rendered even though /api/tree itself had already succeeded.
+// Returning an empty result of the *correct shape* (matching
+// sqlRepository.js's return type for the same function — array vs.
+// object — exactly, since the frontend spreads/iterates these) keeps
+// that batch resolving; these have no equivalent single-shot endpoint in
+// the mAirListDB Server API (see docs/MAIRLISTDB-API.md), so an empty
+// result is the honest answer rather than a guess.
 const warnedOnce = new Set();
-function emptyStub(name) {
+function emptyStub(name, emptyValue) {
   return async () => {
     if (!warnedOnce.has(name)) {
       warnedOnce.add(name);
-      console.warn(`[apiRepository] ${name}() ist im api-Modus noch nicht implementiert, liefert leeres Array`);
+      console.warn(`[apiRepository] ${name}() ist im api-Modus noch nicht implementiert, liefert leeren Wert`);
     }
-    return [];
+    // Return a fresh deep copy each call so callers can't mutate shared
+    // state (emptyValue's array-valued properties, e.g. { folders: [],
+    // items: [] }, would otherwise be the same array instance every call).
+    return structuredClone(emptyValue);
   };
 }
 
-const getStorages = emptyStub("getStorages");
+// sqlRepository.js: getFolderChildren(id) -> { folders: [], items: [] }
+const getFolderChildren = emptyStub("getFolderChildren", { folders: [], items: [] });
+const getStorages = emptyStub("getStorages", []);
 const createStorage = notImplemented("createStorage");
 const updateStorage = notImplemented("updateStorage");
 const deleteStorage = notImplemented("deleteStorage");
-const getItemTypes = emptyStub("getItemTypes");
-const getAttributeKeys = emptyStub("getAttributeKeys");
-const getItems = emptyStub("getItems");
+const getItemTypes = emptyStub("getItemTypes", []);
+const getAttributeKeys = emptyStub("getAttributeKeys", []);
+const getItems = emptyStub("getItems", []);
 const searchItems = notImplemented("searchItems");
 const getCuePoints = notImplemented("getCuePoints");
 const getAttributeDefinitions = notImplemented("getAttributeDefinitions");

@@ -216,7 +216,10 @@ async function getItemsByIds(ids) {
     query: { ids: ids.join(","), icons: "true" },
   });
   const list = Array.isArray(data) ? data : data?.Items || [];
-  return list.map(mapApiItemToInternal);
+  // No folder field on this response either (see docs) — folderId stays
+  // null, consistent with getItemById. Must not pass map's index arg
+  // through as folderId.
+  return list.map((apiItem) => mapApiItemToInternal(apiItem));
 }
 
 // Response is a bare array of folder ID strings, e.g. ["8"] — not folder

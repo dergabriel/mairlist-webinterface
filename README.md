@@ -30,6 +30,7 @@ Vorbild ist das 2023 begonnene Projekt **TubeLive**. Der Look ist in [`DESIGN.md
 | [`SETUP.md`](SETUP.md) | Lokale Entwicklung, Git, Projektstruktur |
 | [`docs/SCHEMA.md`](docs/SCHEMA.md) | Echtes DB-Schema aus einer .mldb Datei |
 | [`docs/FIELD-SEMANTICS.md`](docs/FIELD-SEMANTICS.md) | Bestätigte Einheiten und Feldformate |
+| [`docs/MAIRLISTDB-API.md`](docs/MAIRLISTDB-API.md) | Dokumentation der mAirListDB Server REST API (Port 8840), Basis für die geplante API-basierte Repository-Implementierung (löst das SQLite-Locking-Problem mit parallel laufendem mAirList) |
 
 ---
 

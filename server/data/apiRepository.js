@@ -568,6 +568,21 @@ async function getCapabilities() {
 // point — see "Offene Punkte" in docs/MAIRLISTDB-API.md. Not a blocker:
 // artists/titles search is a nice-to-have, not core functionality.
 
+// Frontend expects a plain array here (Playlist.jsx/DatabaseManager.jsx
+// set it straight into an `artists` state array and iterate it in
+// LibraryTree's ListSection). Falling through to the raw unexpected
+// payload (an object, per the TODO above) instead of an array broke
+// that iteration in api-mode — same class of bug as the getStorages/
+// getItemTypes/etc. stubs above, fixed the same way: empty array
+// instead of a non-array value, with a one-time warning.
+function warnOnceUnexpectedShape(name) {
+  const key = `${name}:unexpected-shape`;
+  if (!warnedOnce.has(key)) {
+    warnedOnce.add(key);
+    console.warn(`[apiRepository] ${name}(): unerwartetes Antwortformat vom Server, liefert leeres Array`);
+  }
+}
+
 async function getArtists(searchTerm) {
   const data = await apiRequest("GET", "/api/v1/items", {
     rawFlags: ["artists"],
@@ -575,9 +590,11 @@ async function getArtists(searchTerm) {
   });
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.Artists)) return data.Artists;
-  // TODO: unexpected shape (likely still full item objects) — `time`
-  // format remains unconfirmed, see comment above.
-  return data;
+  // Unexpected shape (likely still full item objects) — `time` format
+  // remains unconfirmed, see comment above. Must not return a non-array
+  // here; callers rely on Array methods (map/length) without guarding.
+  warnOnceUnexpectedShape("getArtists");
+  return [];
 }
 
 async function getTitles(searchTerm) {
@@ -587,9 +604,9 @@ async function getTitles(searchTerm) {
   });
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.Titles)) return data.Titles;
-  // TODO: unexpected shape (likely still full item objects) — `time`
-  // format remains unconfirmed, see comment above.
-  return data;
+  // Unexpected shape — see getArtists above.
+  warnOnceUnexpectedShape("getTitles");
+  return [];
 }
 
 // ---- not yet implemented via the mAirListDB Server API ----

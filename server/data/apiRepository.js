@@ -169,6 +169,48 @@ function mapApiItemToInternal(apiItem, folderId = null) {
   };
 }
 
+// Inverse of mapMarkersToInternal(): only writes markers that actually
+// have a value (not undefined/null) into the API object. The internal
+// cue object always has all CUE_TO_DB keys present (initialized to null
+// by mapMarkersToInternal for markers absent in the API response), so a
+// naive full round-trip would send e.g. `HookIn: null` for markers the
+// item never had — safer to omit them entirely than risk the server
+// interpreting a null/0 as "set this marker to zero".
+function mapMarkersToApi(cue) {
+  const markers = {};
+  if (!cue) return markers;
+  for (const [key, dbKey] of Object.entries(CUE_TO_DB)) {
+    const value = cue[key];
+    if (value !== undefined && value !== null) markers[dbKey] = value;
+  }
+  return markers;
+}
+
+// Inverse of mapApiItemToInternal(). Only fields the API is known to
+// accept are written back (Title, Artist, Duration, Type, Markers,
+// Amplification, Attributes, Filename, DatabaseID, Class) — internal
+// fields with no API counterpart (folderId, comment, color, cover,
+// endTime, storageId, externalId, playHistory, updatedAt,
+// playback.normalizedLufs/segueMode) are deliberately left out, since
+// it's unverified whether the server ignores unknown fields on PUT or
+// rejects them.
+function mapInternalItemToApi(internalItem) {
+  return {
+    Class: internalItem.containerType === "Container" ? "Container" : "File",
+    DatabaseID: String(internalItem.internalId ?? internalItem.id),
+    Title: internalItem.title ?? "",
+    Artist: internalItem.artist ?? "",
+    Duration: internalItem.duration ?? 0,
+    Type: internalItem.type
+      ? internalItem.type.charAt(0).toUpperCase() + internalItem.type.slice(1)
+      : "",
+    Filename: internalItem.relativePath ?? undefined,
+    Amplification: internalItem.playback?.gainDb ?? 0,
+    Markers: mapMarkersToApi(internalItem.cue),
+    Attributes: internalItem.attributes || {},
+  };
+}
+
 function rowToFolder(apiFolder) {
   if (!apiFolder) return null;
   return {
@@ -235,6 +277,62 @@ async function getItemFolders(itemId) {
   return ids.map((id) => byId.get(String(id))).filter(Boolean);
 }
 
+// Mirrors sqlRepository.js's updateItem's writable-field set (see also
+// ITEM_WRITABLE_FIELDS in server/routes/library.js). Only fields the API
+// round-trip actually supports (see mapInternalItemToApi) are applied;
+// folderId/comment/color/cover etc. are accepted here (for interface
+// parity with sqlRepository.js) but silently have no effect, since the
+// API has no per-item field for them.
+const API_WRITABLE_FIELDS = new Set([
+  "title", "artist", "type", "duration", "relativePath", "cue", "playback", "attributes",
+]);
+
+function pickWritable(changes) {
+  return Object.fromEntries(
+    Object.entries(changes || {}).filter(([key]) => API_WRITABLE_FIELDS.has(key))
+  );
+}
+
+async function updateItem(id, changes) {
+  const current = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(id)}`);
+  if (!current) return null;
+
+  const safe = pickWritable(changes);
+  const merged = { ...current };
+
+  if (safe.title !== undefined) merged.Title = safe.title;
+  if (safe.artist !== undefined) merged.Artist = safe.artist;
+  if (safe.type !== undefined) merged.Type = safe.type.charAt(0).toUpperCase() + safe.type.slice(1);
+  if (safe.duration !== undefined) merged.Duration = Number(safe.duration);
+  if (safe.relativePath !== undefined) merged.Filename = safe.relativePath;
+  if (safe.playback?.gainDb !== undefined) merged.Amplification = safe.playback.gainDb;
+  if (safe.attributes !== undefined) merged.Attributes = { ...(merged.Attributes || {}), ...safe.attributes };
+  if (safe.cue !== undefined) {
+    merged.Markers = { ...(merged.Markers || {}), ...mapMarkersToApi(safe.cue) };
+  }
+
+  await apiRequest("PUT", `/api/v1/items/${encodeURIComponent(id)}`, { body: merged });
+
+  return getItemById(id);
+}
+
+// Endpoint not verified against the live server (CreateItems capability
+// is advertised, but no creation request has been observed in traffic —
+// see docs/MAIRLISTDB-API.md "Offene Punkte"). Deliberately not guessing
+// a path.
+async function createItem() {
+  throw new Error(
+    "createItem über API noch nicht implementiert — Endpunkt nicht verifiziert, siehe docs/MAIRLISTDB-API.md offene Punkte"
+  );
+}
+
+// No delete endpoint observed in traffic — see docs/MAIRLISTDB-API.md.
+async function deleteItem() {
+  throw new Error(
+    "deleteItem über API noch nicht implementiert — Endpunkt nicht verifiziert, siehe docs/MAIRLISTDB-API.md offene Punkte"
+  );
+}
+
 async function getItemRestrictions(itemId) {
   return apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/restrictions`);
 }
@@ -258,6 +356,37 @@ async function getPlaylistHour(year, month, day, hour) {
 async function getPlaylistAttributes(year, month, day, hour) {
   const path = `/api/v1/playlists/${year}/${pad2(month)}/${pad2(day)}/${pad2(hour)}/0/attributes`;
   return apiRequest("GET", path);
+}
+
+// Maps an internal playlist entry (a slot with a `time` and an `item`,
+// the shape returned/consumed by sqlRepository.js's playlist functions)
+// to the API's { Class: "Playlist", Time: {...}, Item: {...} } wrapper.
+function mapInternalEntryToApi(entry) {
+  return {
+    Class: "Playlist",
+    Time: { Class: "Time", Value: entry.time },
+    Item: mapInternalItemToApi(entry.item),
+  };
+}
+
+// `items` is the full replacement list for the hour (internal shape:
+// [{ time, item }, ...]) — not a diff. Loads the current hour first only
+// to carry its VersionInfo through to the PUT (see docs: unverified
+// whether the server requires this for conflict detection, sent along
+// out of caution). Returns the new version number reported by the
+// server; does not attempt to detect or resolve version conflicts (also
+// unverified — see docs/MAIRLISTDB-API.md offene Punkte).
+async function writeHour(year, month, day, hour, items) {
+  const path = `/api/v1/playlists/${year}/${pad2(month)}/${pad2(day)}/${pad2(hour)}/0`;
+  const current = await apiRequest("GET", path);
+
+  const body = {
+    Items: (items || []).map(mapInternalEntryToApi),
+    VersionInfo: current?.VersionInfo,
+  };
+
+  const result = await apiRequest("PUT", path, { body });
+  return result?.Version ?? null;
 }
 
 // ---- permissions / capabilities ----
@@ -314,6 +443,7 @@ module.exports = {
   ApiNotFoundError,
   ApiUnreachableError,
   mapApiItemToInternal,
+  mapInternalItemToApi,
   getFolders,
   getItemsByFolder,
   getItemById,
@@ -321,8 +451,12 @@ module.exports = {
   getItemFolders,
   getItemRestrictions,
   getItemHistory,
+  updateItem,
+  createItem,
+  deleteItem,
   getPlaylistHour,
   getPlaylistAttributes,
+  writeHour,
   getPermissions,
   getCapabilities,
   getArtists,

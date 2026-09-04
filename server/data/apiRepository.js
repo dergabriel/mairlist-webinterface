@@ -27,6 +27,77 @@ const STATION = process.env.API_DB_STATION || "1";
 
 const REQUEST_TIMEOUT_MS = 10000;
 
+// ---- concurrency limiter ----
+//
+// The mAirListDB Server's dbserver.ini caps MaxCachedConnections at 5 by
+// default; past that it returns HTTP 500 "database is locked" under
+// concurrent load (e.g. ~12 parallel requests firing off the dashboard on
+// page load). We stay under that cap (default 3) so other clients (the
+// real mAirList client) still have headroom. Small hand-rolled queue
+// instead of a dependency: an active-request counter plus a FIFO list of
+// resolvers waiting for a free slot.
+const MAX_CONCURRENT = Number(process.env.API_DB_MAX_CONCURRENT) || 3;
+
+let activeRequests = 0;
+const waitQueue = [];
+
+function acquireSlot() {
+  if (activeRequests < MAX_CONCURRENT) {
+    activeRequests++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => waitQueue.push(resolve));
+}
+
+function releaseSlot() {
+  const next = waitQueue.shift();
+  if (next) {
+    next();
+  } else {
+    activeRequests--;
+  }
+}
+
+async function withConcurrencyLimit(fn) {
+  await acquireSlot();
+  try {
+    return await fn();
+  } finally {
+    releaseSlot();
+  }
+}
+
+// ---- retry on transient "database is locked" errors ----
+//
+// Only retries the specific SQLite contention error the server surfaces
+// under load (500 + "database is locked" in the body) — any other error
+// (404, 401, network failure, unrelated 500s) passes straight through.
+const RETRY_DELAYS_MS = [300, 600, 1200];
+
+function isDatabaseLockedError(err) {
+  return err instanceof DatabaseLockedError;
+}
+
+async function withRetry(fn) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isDatabaseLockedError(err) || attempt >= RETRY_DELAYS_MS.length) throw err;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
+class DatabaseLockedError extends Error {
+  constructor(path, status, body) {
+    super(`mAirListDB Server: ${path} failed with ${status} (database is locked)`);
+    this.name = "DatabaseLockedError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 class ApiNotFoundError extends Error {
   constructor(path) {
     super(`mAirListDB Server: resource not found: ${path}`);
@@ -56,6 +127,12 @@ function authHeader() {
 // can't express a valueless flag (it always serializes `set(k, "")` as
 // `k=`), so these are appended to the built query string directly.
 async function apiRequest(method, path, { query = {}, rawFlags = [], body, withStation = true } = {}) {
+  return withConcurrencyLimit(() =>
+    withRetry(() => doApiRequest(method, path, { query, rawFlags, body, withStation }))
+  );
+}
+
+async function doApiRequest(method, path, { query = {}, rawFlags = [], body, withStation = true } = {}) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined || value === null) continue;
@@ -91,6 +168,9 @@ async function apiRequest(method, path, { query = {}, rawFlags = [], body, withS
   }
   if (!response.ok) {
     const text = await response.text().catch(() => "");
+    if (response.status === 500 && /database is locked/i.test(text)) {
+      throw new DatabaseLockedError(path, response.status, text);
+    }
     throw new Error(`mAirListDB Server: ${method} ${path} failed with ${response.status}${text ? `: ${text}` : ""}`);
   }
 
@@ -240,6 +320,7 @@ async function getItemsByFolder(folderId) {
 }
 
 async function getItemById(id) {
+  if (id === null || id === undefined || id === "") return null;
   try {
     const data = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(id)}`);
     // No folder field on the single-item response (see docs) — folderId

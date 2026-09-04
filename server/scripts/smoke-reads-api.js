@@ -127,6 +127,20 @@ async function main() {
   await run("getArtists", () => repo.getArtists());
   await run("getTitles", () => repo.getTitles());
 
+  // Simulates the browser's dashboard page load, which fires ~12 requests
+  // in parallel. Without the concurrency limiter in apiRepository.js this
+  // exceeds the mAirListDB Server's MaxCachedConnections (default 5) and
+  // the server responds with 500 "database is locked".
+  await run("parallel load (12x getFolders)", async () => {
+    const results = await Promise.all(
+      Array.from({ length: 12 }, () => repo.getFolders(folderId))
+    );
+    if (results.some((r) => !Array.isArray(r))) {
+      throw new Error("one or more parallel requests did not return an array");
+    }
+    return { requests: results.length };
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail > 0 ? 1 : 0);
 }

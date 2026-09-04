@@ -101,6 +101,20 @@ Verifiziert mit 19 Smoke-Tests gegen die Produktivinstanz
 | `getAudioStreamUrl`, `getAudioStream` (Audio-Proxy, Original + low-quality; Zugangsdaten bleiben serverseitig, landen nie im Frontend) | ✅ |
 | `updateItem` (Items inkl. Cue-Punkte, Gain, Attribute speichern) | ✅ |
 
+**Bewusst leer statt Fehler** (`getStorages`, `getItemTypes`,
+`getAttributeKeys`, `getItems`): Diese vier Funktionen liefern im
+api-Modus ein leeres Array statt eines Fehlers. Grund: Das Frontend
+(`Playlist.jsx`, `DatabaseManager.jsx`) lädt den Ordnerbaum zusammen
+mit diesen vier Listen in einem gemeinsamen `Promise.all` — würde
+auch nur eine davon werfen, schlägt der gesamte Batch fehl und die
+Sidebar zeigt "Baum nicht verfügbar", obwohl `/api/tree` selbst
+erfolgreich war. Ein leeres Array lässt die UI laden; es gibt für
+diese Funktionen aber (noch) keinen entsprechenden Single-Shot-Endpunkt
+in der mAirListDB Server API (siehe `docs/MAIRLISTDB-API.md`). Jede
+dieser Funktionen loggt beim ersten Aufruf seit Serverstart einmalig
+eine `console.warn`-Zeile, damit der leere Zustand im Server-Log
+sichtbar bleibt, ohne bei jedem Request zu spammen.
+
 **Bewusst noch nicht implementiert** (werfen einen klaren "im
 api-Modus noch nicht verfügbar"-Fehler statt zu crashen oder falsche
 Daten zu liefern):
@@ -109,8 +123,8 @@ Daten zu liefern):
 |---|---|
 | `createItem`, `deleteItem` | ⬜ Endpunkt nicht verifiziert |
 | Ordner-CRUD: `createFolder`, `renameFolder`, `moveFolder`, `deleteFolder` | ⬜ |
-| Storage-Verwaltung: `getStorages`, `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
-| Item-Suche (`searchItems`), `getItems`, `getItemTypes`, `getAttributeKeys`, `getAttributeDefinitions`, `getCuePoints` | ⬜ |
+| Storage-Verwaltung: `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
+| Item-Suche (`searchItems`), `getAttributeDefinitions`, `getCuePoints` | ⬜ |
 | `moveItemToFolder`, `uploadFile`, `resolveAudioPath` | ⬜ |
 | `getPlaylistsByDate`, `getPlaylistById`, `reorderPlaylist`, `insertPlaylistItem`, `removePlaylistItem`, `savePlaylistItemOverrides` | ⬜ |
 | Dashboard/Logs-Aggregation: `getLogs`, `getDashboardStats`, `getRecentLogs`, `getTodayPlaylist` | ⬜ |

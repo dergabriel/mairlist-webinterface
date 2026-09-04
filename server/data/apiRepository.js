@@ -624,13 +624,34 @@ const createFolder = notImplemented("createFolder");
 const renameFolder = notImplemented("renameFolder");
 const moveFolder = notImplemented("moveFolder");
 const deleteFolder = notImplemented("deleteFolder");
-const getStorages = notImplemented("getStorages");
+
+// These four are loaded alongside getFolderTree() in one Promise.all by
+// the frontend (Playlist.jsx, DatabaseManager.jsx) — if any of them threw
+// (as notImplemented() did), the whole batch rejected and the sidebar
+// tree never rendered even though /api/tree itself had already succeeded.
+// Returning an empty array keeps that batch resolving; these catalogues
+// (storages, item types, attribute keys, full item listing) genuinely
+// have no equivalent single-shot endpoint in the mAirListDB Server API
+// (see docs/MAIRLISTDB-API.md), so an empty list is the honest answer
+// rather than a guess.
+const warnedOnce = new Set();
+function emptyStub(name) {
+  return async () => {
+    if (!warnedOnce.has(name)) {
+      warnedOnce.add(name);
+      console.warn(`[apiRepository] ${name}() ist im api-Modus noch nicht implementiert, liefert leeres Array`);
+    }
+    return [];
+  };
+}
+
+const getStorages = emptyStub("getStorages");
 const createStorage = notImplemented("createStorage");
 const updateStorage = notImplemented("updateStorage");
 const deleteStorage = notImplemented("deleteStorage");
-const getItemTypes = notImplemented("getItemTypes");
-const getAttributeKeys = notImplemented("getAttributeKeys");
-const getItems = notImplemented("getItems");
+const getItemTypes = emptyStub("getItemTypes");
+const getAttributeKeys = emptyStub("getAttributeKeys");
+const getItems = emptyStub("getItems");
 const searchItems = notImplemented("searchItems");
 const getCuePoints = notImplemented("getCuePoints");
 const getAttributeDefinitions = notImplemented("getAttributeDefinitions");

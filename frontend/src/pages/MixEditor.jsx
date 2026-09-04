@@ -108,20 +108,24 @@ function clampStartNext(startNext, duration, cueIn) {
   return Math.min(Math.max(startNext, cueIn), duration);
 }
 
-// Lays every selected item on one shared timeline. Track 0 starts at 0;
-// every later track starts exactly where the previous track's startNext
-// marker sits on the timeline — no cueIn-relative shifting, no gaps.
-// audioDurations (real, decoded durations reported by wavesurfer once a
-// track is ready) take priority over item.duration (DB), which is only the
-// placeholder used until then — see trackCues.
+// Lays every selected item on one shared timeline. `start` is where each
+// track's CueIn point lands — for track 0 that's timeline 0; for every later
+// track it's exactly where the previous track's startNext marker sits, so
+// there's no gap between the overlap zone and the audible start of the next
+// track (mirrors mAirList: the file content before CueIn is never placed on
+// the timeline). `end` is where the track's audio actually finishes playing,
+// i.e. `duration - cueIn` seconds after `start`. audioDurations (real,
+// decoded durations reported by wavesurfer once a track is ready) take
+// priority over item.duration (DB), which is only the placeholder used until
+// then — see trackCues.
 function computeLayout(items, audioDurations = []) {
   let cursor = 0;
   const tracks = items.map((item, i) => {
     const { duration, cueIn, startNext: rawStartNext } = trackCues(item, audioDurations[i]);
     const startNext = clampStartNext(rawStartNext, duration, cueIn);
     const start = i === 0 ? 0 : cursor;
-    const end = start + duration;
-    cursor = start + startNext;
+    const end = start + (duration - cueIn);
+    cursor = start + (startNext - cueIn);
     return { item, duration, cueIn, startNext, start, end };
   });
   const totalWidth = tracks.length ? Math.max(...tracks.map((t) => t.end)) : 0;
@@ -165,7 +169,7 @@ function TrackRow({
   const [audioState, setAudioState] = useState("loading");
   const [chipDragOver, setChipDragOver] = useState(false);
   const [dropLabel, setDropLabel] = useState(null); // { x, y, text, color }
-  const { item, duration, start } = track;
+  const { item, duration, start, cueIn } = track;
   const bars = useMemo(() => syntheticBars(item.internalId), [item.internalId]);
 
   const cueVal = (key) => {
@@ -228,7 +232,11 @@ function TrackRow({
   }, [item.internalId, pxPerSec]);
 
   const widthPx = Math.max(duration, 1) * pxPerSec;
-  const leftPx = start * pxPerSec;
+  // The waveform is drawn from the file's real sample 0, but `start` is the
+  // timeline position of the CueIn point (see computeLayout) — so the box's
+  // visual left edge sits `cueIn` seconds before `start`, putting the CueIn
+  // marker (drawn at pctOf(cueIn) inside the box) exactly on `start`.
+  const leftPx = (start - cueIn) * pxPerSec;
   const audioReady = audioState === "ready";
   const draggableLane = index > 0;
   const laneBg = index % 2 === 0 ? "bg-zinc-900" : "bg-zinc-950";
@@ -652,7 +660,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
   const zoomFocusSec = useMemo(() => {
     const idx = focusTransition ?? 0;
     const prev = tracks[idx];
-    return prev ? prev.start + prev.startNext : 0;
+    return prev ? prev.start + (prev.startNext - prev.cueIn) : 0;
   }, [tracks, focusTransition]);
 
   // Re-center the scroll area on the transition point whenever pxPerSec
@@ -818,10 +826,14 @@ export default function MixEditor({ context, onBack, onNavigate }) {
 
   // Builds the track descriptors mixPlayer.play() expects: shared-timeline
   // start, in-track cueIn/duration, and the fade cue points (in-track
-  // seconds) it schedules gain automation from.
+  // seconds) it schedules gain automation from. mixPlayer's `start` is the
+  // timeline position of the file's sample 0, whereas track.start (from
+  // computeLayout) is the timeline position of CueIn — convert between the
+  // two here so the audio engine's math (sourceOffset, whenCtx) stays
+  // unchanged while the visual layout anchors on CueIn instead.
   const buildPlayerTracks = useCallback(() => tracks.map((t, i) => ({
     itemId: t.item.internalId,
-    start: t.start,
+    start: t.start - t.cueIn,
     duration: t.duration,
     cueIn: t.cueIn,
     gainDb: t.item.playback?.gainDb,
@@ -842,10 +854,9 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     if (stopTimeoutRef.current != null) clearTimeout(stopTimeoutRef.current);
     await resumeContext();
     const playerTracks = buildPlayerTracks();
-    // Track 0's `start` is always timeline 0 (see computeLayout), so a plain
-    // play must add its cueIn explicitly to actually begin there rather than
-    // at the raw start of the audio file.
-    const trackZeroStart = (tracks[0]?.start ?? 0) + (tracks[0]?.cueIn ?? 0);
+    // track.start is already track 0's CueIn position on the shared timeline
+    // (see computeLayout), so a plain play begins exactly there.
+    const trackZeroStart = tracks[0]?.start ?? 0;
     const timelineStart = seekPosition ?? trackZeroStart;
     mixPlayer.play(playerTracks, timelineStart);
     startPlayheadLoop();
@@ -866,8 +877,8 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     if (stopTimeoutRef.current != null) clearTimeout(stopTimeoutRef.current);
     await resumeContext();
 
-    const transitionAt = prev.start + prev.startNext;
-    const windowStart = Math.max(transitionAt - FOCUS_WINDOW, prev.start + prev.cueIn);
+    const transitionAt = prev.start + (prev.startNext - prev.cueIn);
+    const windowStart = Math.max(transitionAt - FOCUS_WINDOW, prev.start);
     const windowEnd = transitionAt + FOCUS_WINDOW;
 
     const playerTracks = buildPlayerTracks().filter((t, i) => i === transitionIndex || i === transitionIndex + 1);
@@ -909,10 +920,13 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     }
   }, [buildPlayerTracks]);
 
+  // timeInTrack/target below are in-track seconds measured from the file's
+  // sample 0 (waveform-local); track.start is the CueIn timeline position
+  // (see computeLayout), so sample 0 sits at track.start - track.cueIn.
   const onSeekPreview = (index, timeInTrack) => {
     setFocusedTrack(index);
     const track = tracks[index];
-    if (track) seekTo(track.start + timeInTrack);
+    if (track) seekTo(track.start - track.cueIn + timeInTrack);
   };
 
   const jumpToCue = (point) => {
@@ -921,7 +935,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
     const val = track.item.cue?.[point.key];
     if (val == null || val === "") return;
     const target = Math.min(Math.max(Number(val), 0), track.duration);
-    seekTo(track.start + target);
+    seekTo(track.start - track.cueIn + target);
   };
 
   useEffect(() => () => stopAll(), [stopAll]);
@@ -1110,7 +1124,7 @@ export default function MixEditor({ context, onBack, onNavigate }) {
                 // Global playhead (shared-timeline seconds) translated into
                 // this track's own local percentage; null while it's outside
                 // the track's span so the line only shows on active tracks.
-                const localSec = playheadSec - track.start;
+                const localSec = playheadSec - (track.start - track.cueIn);
                 const trackPlayheadPct = localSec >= 0 && localSec <= track.duration
                   ? (localSec / Math.max(track.duration, 1)) * 100
                   : null;

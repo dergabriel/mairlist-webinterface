@@ -26,8 +26,9 @@ function openWriteConnection() {
   // busy_timeout must be the very first pragma/statement after opening —
   // it governs how long SQLite waits on a lock held by mAirList before
   // giving up with SQLITE_BUSY, and that only applies to statements issued
-  // after it's set.
-  conn.pragma("busy_timeout = 15000");
+  // after it's set. Kept short: fail fast and let withWriteConnection's
+  // retry loop back off, rather than holding mAirList up for seconds.
+  conn.pragma("busy_timeout = 1000");
   // journal_mode is intentionally NOT set here: changing it requires an
   // exclusive lock on the whole database, which is itself a common source
   // of "database is locked" against mAirList. The DB is already in WAL
@@ -40,7 +41,7 @@ function openWriteConnection() {
 // afterwards regardless of outcome. Retries on lock-contention errors
 // (mAirList holding the write lock despite busy_timeout) with backoff.
 const RETRYABLE_CODES = new Set(["SQLITE_BUSY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_LOCKED"]);
-const RETRY_BACKOFF_MS = [200, 400, 800, 1600];
+const RETRY_BACKOFF_MS = [300, 600, 1200, 2400];
 
 function withWriteConnection(fn) {
   const maxAttempts = RETRY_BACKOFF_MS.length + 1;
@@ -457,7 +458,7 @@ function createItem(data = {}) {
       return id;
     });
 
-    return run.immediate();
+    return run();
   });
 
   return getItemById(internalId);
@@ -527,7 +528,7 @@ function updateItem(id, data = {}) {
       if (safe.folderId !== undefined) writeFolder(wdb, internalId, safe.folderId);
     });
 
-    run.immediate();
+    run();
   });
 
   return getItemById(id);
@@ -545,7 +546,7 @@ function deleteItem(id) {
       wdb.prepare("DELETE FROM item_folders WHERE item = ?").run(internalId);
       wdb.prepare("DELETE FROM items WHERE idx = ?").run(internalId);
     });
-    run.immediate();
+    run();
   });
   return true;
 }
@@ -811,7 +812,7 @@ function writeHour(date, hour, entryList) {
         );
       });
     });
-    run.immediate();
+    run();
   });
 }
 

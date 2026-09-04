@@ -57,8 +57,8 @@ function pickWritableFields(body) {
 }
 
 // GET /api/tree -> folder tree for the sidebar
-router.get("/tree", requireScope("library.read"), (req, res, next) => {
-  try { res.json(repo.getFolderTree()); } catch (e) { next(e); }
+router.get("/tree", requireScope("library.read"), async (req, res, next) => {
+  try { res.json(await repo.getFolderTree()); } catch (e) { next(e); }
 });
 
 // POST /api/folders -> create a new folder. Body: { name, parentId? }

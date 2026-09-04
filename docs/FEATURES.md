@@ -251,6 +251,7 @@ mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper
 | Konflikt-Erkennung: Warnung wenn zwei Nutzer dieselbe Playlist bearbeiten | ⬜ Phase Mehrbenutzer |
 | Playlist-Import aus Dritt-Software (Musicmaster etc.) | ❌ nicht geplant |
 | Mehrere Stationen mit getrennten Playlists | 🔽 |
+| Mehrere Stationen mit mehreren Playlists pro Station | 🔽 |
 
 ---
 
@@ -354,6 +355,30 @@ Panel-Settings über `frontend/src/pages/Settings.jsx`, persistiert in `server/s
 | Heutige Playlist | ✅ |
 | Letzte Wiedergaben | ✅ |
 | Systemstatus: Data Source, Server, aktueller Benutzer/Rolle | ✅ |
+
+---
+
+## 🔀 Multi-Station & Multi-Playlist
+
+**Ziel:** Mehrere Stationen pro Datenbank verwalten, mit Umschalter im UI,
+sowie mehrere Playlisten pro Station (über das mAirList-Original hinausgehend).
+
+### Konzept (angelehnt an mAirList Multi-Station Scheduling)
+- Stationen teilen sich: Audio-Bibliothek, Storages, Hour/Music-Templates
+- Getrennt pro Station: Playlisten, Template-Zuweisung, Advertising-Settings
+- Jede Station kann mehrere Playlisten haben (Hauptplaylist + beliebig viele weitere),
+  z.B. für Subsender oder parallele Ausspielwege
+
+### Geplante Funktionen
+- [ ] Schema-Check: Station-Tabelle/Spalten in echter .mldb prüfen (PRAGMA table_info)
+- [ ] Standard-Station in den Einstellungen festlegbar
+- [ ] Station-Switcher im UI (Sidebar/Header)
+- [ ] Mehrere Playlisten pro Station verwaltbar (anlegen, umbenennen, löschen)
+- [ ] Repository-Layer: Station-Filter für Playlist, Logs, Dashboard
+- [ ] AppDataContext: Caching pro Station statt global
+
+### Status
+🔽 Nicht Teil von Phase I, spätere Phase (noch zu benennen)
 
 ---
 

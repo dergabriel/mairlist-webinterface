@@ -8,6 +8,8 @@ const multer = require("multer");
 const router = express.Router();
 const repo = process.env.DATA_SOURCE === "sqlite"
   ? require("../data/sqlRepository")
+  : process.env.DATA_SOURCE === "api"
+  ? require("../data/apiRepository")
   : require("../data/repository");
 const apiRepo = process.env.DATA_SOURCE === "api" ? require("../data/apiRepository") : null;
 const { requireAuth, requireScope } = require("../middleware/auth");
@@ -154,8 +156,8 @@ router.get("/types", requireScope("library.read"), (req, res, next) => {
 });
 
 // GET /api/artists
-router.get("/artists", requireScope("library.read"), (req, res, next) => {
-  try { res.json(repo.getArtists()); } catch (e) { next(e); }
+router.get("/artists", requireScope("library.read"), async (req, res, next) => {
+  try { res.json(await repo.getArtists()); } catch (e) { next(e); }
 });
 
 // GET /api/attributes -> attribute keys present in the library, each with its distinct values
@@ -172,18 +174,18 @@ router.get("/items", requireScope("library.read"), (req, res, next) => {
 });
 
 // GET /api/items/:id
-router.get("/items/:id", requireScope("library.read"), (req, res, next) => {
+router.get("/items/:id", requireScope("library.read"), async (req, res, next) => {
   try {
-    const item = repo.getItemById(req.params.id);
+    const item = await repo.getItemById(req.params.id);
     if (!item) return res.status(404).json({ error: "Item not found" });
     res.json(item);
   } catch (e) { next(e); }
 });
 
 // GET /api/items/:id/history -> play history, newest first
-router.get("/items/:id/history", requireScope("library.read"), (req, res, next) => {
+router.get("/items/:id/history", requireScope("library.read"), async (req, res, next) => {
   try {
-    const history = repo.getItemHistory(req.params.id);
+    const history = await repo.getItemHistory(req.params.id);
     if (history === null) return res.status(404).json({ error: "Item not found" });
     res.json(history);
   } catch (e) { next(e); }
@@ -192,7 +194,7 @@ router.get("/items/:id/history", requireScope("library.read"), (req, res, next) 
 // GET /api/items/:id/audio -> streams the item's audio file from storage,
 // with Range support so the browser can seek. 404 if the item, its storage,
 // or the file on disk isn't found.
-router.get("/items/:id/audio", requireScope("library.read"), (req, res, next) => {
+router.get("/items/:id/audio", requireScope("library.read"), async (req, res, next) => {
   if (process.env.DATA_SOURCE === "api") {
     (async () => {
       const item = await apiRepo.getItemById(req.params.id);
@@ -213,7 +215,7 @@ router.get("/items/:id/audio", requireScope("library.read"), (req, res, next) =>
   }
 
   try {
-    const item = repo.getItemById(req.params.id);
+    const item = await repo.getItemById(req.params.id);
     if (!item) return res.status(404).json({ error: "Item not found" });
 
     const filePath = repo.resolveAudioPath(req.params.id);
@@ -293,17 +295,17 @@ router.get("/attributes/definitions", requireScope("library.read"), (req, res, n
 });
 
 // POST /api/items -> create a new item
-router.post("/items", requireScope("library.write"), (req, res, next) => {
+router.post("/items", requireScope("library.write"), async (req, res, next) => {
   try {
-    const item = repo.createItem(pickWritableFields(req.body));
+    const item = await repo.createItem(pickWritableFields(req.body));
     res.status(201).json(item);
   } catch (e) { next(e); }
 });
 
 // PUT /api/items/:id -> update an existing item
-router.put("/items/:id", requireScope("library.write"), (req, res, next) => {
+router.put("/items/:id", requireScope("library.write"), async (req, res, next) => {
   try {
-    const item = repo.updateItem(req.params.id, pickWritableFields(req.body));
+    const item = await repo.updateItem(req.params.id, pickWritableFields(req.body));
     if (!item) return res.status(404).json({ error: "Item not found" });
     res.json(item);
   } catch (e) { next(e); }
@@ -439,9 +441,9 @@ router.put("/settings", requireScope("admin"), (req, res, next) => {
 });
 
 // DELETE /api/items/:id -> delete an item
-router.delete("/items/:id", requireScope("library.write"), (req, res, next) => {
+router.delete("/items/:id", requireScope("library.write"), async (req, res, next) => {
   try {
-    const deleted = repo.deleteItem(req.params.id);
+    const deleted = await repo.deleteItem(req.params.id);
     if (!deleted) return res.status(404).json({ error: "Item not found" });
     res.status(204).end();
   } catch (e) { next(e); }

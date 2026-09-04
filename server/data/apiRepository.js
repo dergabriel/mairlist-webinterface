@@ -511,6 +511,52 @@ async function getTitles(searchTerm) {
   return data;
 }
 
+// ---- not yet implemented via the mAirListDB Server API ----
+//
+// These have no counterpart in the API (folders are a flat parent-lookup
+// via getFolders(parentId), not a tree/CRUD API; storages, item search,
+// dashboard/log aggregation, and the mock-style playlist-by-date/id
+// lookups have no matching endpoint at all). Named stubs (rather than a
+// generic proxy) so each throws with the actual function name, and so
+// library.js can call `repo.<name>()` the same way regardless of
+// DATA_SOURCE.
+function notImplemented(name) {
+  return () => {
+    throw new Error(`Diese Funktion ist im api-Modus noch nicht verfügbar: ${name}`);
+  };
+}
+
+const getFolderTree = notImplemented("getFolderTree");
+const getFolderById = notImplemented("getFolderById");
+const getFolderChildren = notImplemented("getFolderChildren");
+const createFolder = notImplemented("createFolder");
+const renameFolder = notImplemented("renameFolder");
+const moveFolder = notImplemented("moveFolder");
+const deleteFolder = notImplemented("deleteFolder");
+const getStorages = notImplemented("getStorages");
+const createStorage = notImplemented("createStorage");
+const updateStorage = notImplemented("updateStorage");
+const deleteStorage = notImplemented("deleteStorage");
+const getItemTypes = notImplemented("getItemTypes");
+const getAttributeKeys = notImplemented("getAttributeKeys");
+const getItems = notImplemented("getItems");
+const searchItems = notImplemented("searchItems");
+const getCuePoints = notImplemented("getCuePoints");
+const getAttributeDefinitions = notImplemented("getAttributeDefinitions");
+const moveItemToFolder = notImplemented("moveItemToFolder");
+const uploadFile = notImplemented("uploadFile");
+const resolveAudioPath = notImplemented("resolveAudioPath");
+const getPlaylistsByDate = notImplemented("getPlaylistsByDate");
+const getPlaylistById = notImplemented("getPlaylistById");
+const reorderPlaylist = notImplemented("reorderPlaylist");
+const insertPlaylistItem = notImplemented("insertPlaylistItem");
+const removePlaylistItem = notImplemented("removePlaylistItem");
+const savePlaylistItemOverrides = notImplemented("savePlaylistItemOverrides");
+const getLogs = notImplemented("getLogs");
+const getDashboardStats = notImplemented("getDashboardStats");
+const getRecentLogs = notImplemented("getRecentLogs");
+const getTodayPlaylist = notImplemented("getTodayPlaylist");
+
 module.exports = {
   ApiNotFoundError,
   ApiUnreachableError,
@@ -535,4 +581,34 @@ module.exports = {
   getCapabilities,
   getArtists,
   getTitles,
+  getFolderTree,
+  getFolderById,
+  getFolderChildren,
+  createFolder,
+  renameFolder,
+  moveFolder,
+  deleteFolder,
+  getStorages,
+  createStorage,
+  updateStorage,
+  deleteStorage,
+  getItemTypes,
+  getAttributeKeys,
+  getItems,
+  searchItems,
+  getCuePoints,
+  getAttributeDefinitions,
+  moveItemToFolder,
+  uploadFile,
+  resolveAudioPath,
+  getPlaylistsByDate,
+  getPlaylistById,
+  reorderPlaylist,
+  insertPlaylistItem,
+  removePlaylistItem,
+  savePlaylistItemOverrides,
+  getLogs,
+  getDashboardStats,
+  getRecentLogs,
+  getTodayPlaylist,
 };

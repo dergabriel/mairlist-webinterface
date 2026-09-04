@@ -28,7 +28,7 @@ verifiziert und sind als Annahme markiert.
 |---|---|---|
 | GET | `/api/v1/capabilities` | Liste aktivierter Server-Features, z. B. `EditItems`, `CreateItems`, `EditPlaylist`, `EditFolders`, `EditStorages`, `EditStations`, `EditSubplaylists`, `FolderConfig`, `AssignFolders`, `MultiFolders`, `MiniScheduler`, `AdScheduler`, `PlaylistAttributes` |
 | GET | `/api/v1/permissions` | Berechtigungen des eingeloggten Users (siehe unten) |
-| GET | `/api/v1/config?station=1` | Server-/Stations-Konfiguration (Struktur noch nicht im Detail erfasst) |
+| GET | `/api/v1/config?station=1` | Server-/Stations-Konfiguration (siehe unten, VERIFIZIERT) |
 | GET | `/api/v1/config/<key>?station=1` | Einzelner Konfigurationswert |
 | GET | `/api/v1/stations/<id>/config/<key>?station=1` | Stations-spezifischer Konfigurationswert |
 
@@ -47,17 +47,141 @@ verifiziert und sind als Annahme markiert.
 }
 ```
 
+### Response: `/api/v1/config?station=1` – VERIFIZIERT
+
+```json
+{
+  "MaxPenalty": "2",
+  "ArtistGroups": "[]",
+  "ImportItemType": "Unknown",
+  "ImportTranscodeSettingsFileExtension": "",
+  "ImportTranscodeCondition": "Always",
+  "ImportTranscodeSettingsAudioFormat": "MP3",
+  "ImportTranscodeSettingsMimeType": "",
+  "TrackSeparationPenalty": "2",
+  "ImportTranscodeSettingsBitrate": "320",
+  "TrackSeparation": "3",
+  "PlaylistAttributes": "<StandardAttributes/>",
+  "ImportStorageSubfolder": "",
+  "TitleSeparationPenalty": "2",
+  "ArchivedFilenamesAttribute": "",
+  "ImportStorage": "1",
+  "schemaversion": "24",
+  "ImportTranscodeSettingsEncoderOptions": "",
+  "ImportTranscodeSettingsMode": "Stereo",
+  "TitleSeparation": "3",
+  "WeekReference": "2017-01-02",
+  "ImportImportTasks": "All",
+  "StandardAttributes": "<StandardAttributes>...</StandardAttributes>",
+  "Dummy": "off",
+  "dbid": "{C7861752-3801-44FD-939C-4B56DDDA661B}",
+  "ArtistSeparation": "2",
+  "ImportOverwritePolicy": "Rename",
+  "MasterPlaylistTargetDuration": "3600",
+  "AutoCreateErrorItem": "off",
+  "ArtistSeparationPenalty": "1",
+  "AutoCreateErrorItemFolder": ""
+}
+```
+
+**Anmerkungen:**
+- Flaches Key-Value-Objekt, ALLE Werte als String (auch numerisch
+  aussehende wie `"MaxPenalty": "2"` oder `"schemaversion": "24"`)
+- `dbid`: eindeutige GUID der Datenbank, identisch mit der
+  `DatabaseID`/Registry-Zeichenkette aus `dbserver.ini`
+  (`{C7861752-3801-44FD-939C-4B56DDDA661B}`)
+- **`StandardAttributes` – sehr wichtig für den Umbau:** enthält XML
+  (als String innerhalb des JSON) und definiert das **Schema** für die
+  `Attributes` jedes Items. Entschlüsselt:
+  ```xml
+  <StandardAttributes>
+    <StandardAttribute Name="Jahr"/>
+    <StandardAttribute Name="Album"/>
+    <StandardAttribute Name="Track"/>
+    <StandardAttribute Name="Genre" Kind="DropDown"/>
+    <StandardAttribute Name="Komponist"/>
+    <StandardAttribute Name="Label" Kind="DropDown"/>
+    <StandardAttribute Name="Labelcode" Kind="DropDown"/>
+    <StandardAttribute Name="ISRC"/>
+    <StandardAttribute Name="Sprache" Kind="DropDown"/>
+    <StandardAttribute Name="Stimmung" Kind="DropDown">
+      <Values>
+        <Value>Low</Value>
+        <Value>Medium</Value>
+        <Value>High</Value>
+      </Values>
+    </StandardAttribute>
+    <StandardAttribute Name="Branding" Kind="DropDown">
+      <Values>
+        <Value>Ja</Value>
+        <Value>Nein</Value>
+      </Values>
+    </StandardAttribute>
+    <StandardAttribute Name="Opener" Kind="Check">
+      <Values>
+        <Value>Ja</Value>
+      </Values>
+    </StandardAttribute>
+  </StandardAttributes>
+  ```
+  Das erklärt den bei Item 2605 beobachteten Wert `"Stimmung": "High"` –
+  `Stimmung` ist ein Dropdown-Attribut mit genau den drei Werten
+  Low/Medium/High. Für ein Attribute-Editor-UI im Webinterface muss
+  dieses XML geparst werden, um zu wissen welche Attribute-Felder
+  existieren und welcher Typ/welche Dropdown-Werte pro Feld gültig sind
+  (freier Text vs. `Kind="DropDown"` vs. `Kind="Check"`)
+- `PlaylistAttributes` ist ebenfalls XML, hier aber leer
+  (`<StandardAttributes/>`) – vermutlich das gleiche Konzept für
+  playlist-spezifische Attribute, aktuell ungenutzt in diesem Bestand
+- Weitere Felder betreffen Scheduler-Regeln (`ArtistSeparation`,
+  `TitleSeparation`, `TrackSeparation` + jeweilige `*Penalty`-Werte),
+  Import-Verhalten (`Import*`-Felder) und allgemeine Server-Konfiguration
+
 ## Folders (Ordnerbaum)
 
 | Methode | Pfad | Beschreibung |
 |---|---|---|
-| GET | `/api/v1/folders?station=1` | Alle Ordner (oder Top-Level, noch zu verifizieren ob vollständiger Baum oder nur root) |
-| GET | `/api/v1/folders?parent=<id>&station=1` | Unterordner eines Ordners |
+| GET | `/api/v1/folders?station=1` | **VERIFIZIERT:** liefert den KOMPLETTEN Ordnerbaum auf einmal, nicht nur die Root-Ebene (getestet: 155 Ordner in einer einzigen Antwort) |
+| GET | `/api/v1/folders?parent=<id>&station=1` | Unterordner eines bestimmten Ordners (gefiltert) |
 | GET | `/api/v1/folders/<id>/config?station=1` | Ordner-spezifische Konfiguration |
 
-Beobachtete Felder pro Folder-Objekt (aus Kontext erschlossen, noch nicht
-als eigenständige Response dokumentiert): `ID`, `Parent` (kann `"root"`
-sein), `Name`, `SubfolderCount`.
+### Response: `/api/v1/folders?station=1` – VERIFIZIERT
+
+Response ist in ein Wrapper-Objekt eingebettet, nicht direkt ein Array:
+
+```json
+{
+  "value": [
+    {
+      "SubfolderCount": 0,
+      "Parent": "5",
+      "ID": "50",
+      "Name": "0-Divers"
+    },
+    {
+      "SubfolderCount": 3,
+      "Parent": "root",
+      "ID": "1",
+      "Name": "Musik"
+    }
+  ],
+  "Count": 155
+}
+```
+
+**Anmerkungen:**
+- `value` enthält den kompletten Baum als flache Liste (alle Ebenen
+  gemischt), Hierarchie ergibt sich aus `Parent` → `ID`-Verkettung
+- Top-Level-Ordner haben `Parent: "root"` (String, kein null)
+- `Count` ist die Gesamtzahl aller Ordner in der Antwort – bei 155
+  Ordnern kam alles in einer einzigen Response, **kein Hinweis auf
+  Pagination** wurde beobachtet (keine `nextPage`/`offset`-Felder o. ä.)
+- Alle Felder als String, auch `ID`/`Parent`/`SubfolderCount` obwohl
+  numerisch aussehend – konsistent mit `DatabaseID` bei Items
+- Für den Ordnerbaum im Frontend reicht vermutlich EIN Request beim
+  Start (kompletter Baum), Lazy-Loading via `parent=<id>` ist optional
+  möglich aber angesichts der überschaubaren Größe (155 Ordner bei
+  diesem Bestand) nicht zwingend nötig
 
 ## Items (Library)
 
@@ -103,17 +227,87 @@ sein), `Name`, `SubfolderCount`.
 }
 ```
 
-**Anmerkungen:**
-- `Markers` enthält nur tatsächlich gesetzte Cue-Punkte (nicht alle 17
-  möglichen Typen), Schlüssel in PascalCase (`CueIn`, `CueOut`, `FadeOut`,
-  `FadeEnd`, `StartNext`, `Ramp1`/`2`/`3`, `Hook`/`HookIn`/`HookOut`, etc. –
-  vollständige Liste noch nicht durch Beobachtung bestätigt, nur die drei
-  oben gezeigten)
+### Response: `/api/v1/items?folder=<id>&station=1` – VERIFIZIERT (erweitert)
+
+Anders als `/api/v1/folders` liefert dieser Endpunkt ein **rohes Array**,
+kein `{value, Count}`-Wrapper:
+
+```json
+[
+  {
+    "NextUse": "",
+    "Artist": "Hier",
+    "Duration": 5.825,
+    "Folders": [
+      { "ID": "19", "Name": "IDs" },
+      { "ID": "33", "Name": "Sweeper" }
+    ],
+    "Attributes": {
+      "Konto": "Adobe Audition 13.0 (Windows)",
+      "Datum": "2020-10-17T23:14:25+02:00"
+    },
+    "Amplification": -10.8787836821338,
+    "LastUse": "2026-09-04T05:00:00",
+    "Levels": {
+      "Loudness": -12.1212163178662,
+      "TruePeak": -2.54295110702515,
+      "Peak": -2.99994254112244
+    },
+    "LastPlayed": "2026-09-04T05:07:35",
+    "Markers": {
+      "FadeOut": 2.514,
+      "CueOut": 4.504,
+      "StartNext": 1.2
+    },
+    "DatabaseID": "804",
+    "Title": "DXR_Sweeper_HierIst",
+    "Type": "Sweeper",
+    "Filename": "/storages/1/files/DXR_Sweeper_HierIst.wav",
+    "Class": "File",
+    "EffectiveDuration": 1.2
+  }
+]
+```
+
+**Neu gegenüber der Einzel-Item-Response (`/items/<id>`):**
+- `Folders`: Array aller Ordner-Zuordnungen dieses Items (ID + Name),
+  ein Item kann in mehreren Ordnern gleichzeitig gelistet sein
+  (hier gleichzeitig in "IDs" und "Sweeper")
+- `NextUse` / `LastUse`: geplante bzw. letzte Verwendung laut Scheduler
+  (ISO-Timestamp oder leerer String wenn nicht geplant)
+- `LastPlayed`: Zeitpunkt der letzten tatsächlichen Wiedergabe
+  (ISO-Timestamp)
+- `EffectiveDuration`: abweichend von `Duration` – vermutlich die
+  tatsächliche Hörzeit unter Berücksichtigung von `StartNext`
+  (`EffectiveDuration` liegt bei allen beobachteten Items nahe am
+  `StartNext`-Wert, z. B. `StartNext: 1.2` → `EffectiveDuration: 1.2`).
+  Das deutet darauf hin, dass `EffectiveDuration` die Zeit bis zum
+  Übergangspunkt ist, nicht die volle Dateidauer
+
+Die Einzel-Item-Response (`GET /api/v1/items/<id>`) enthält diese
+zusätzlichen Felder NICHT (siehe Beispiel oben) – sie liefert einen
+schlankeren Datensatz ohne `Folders`/`NextUse`/`LastUse`/`LastPlayed`/
+`EffectiveDuration`.
+
+**Allgemeine Anmerkungen (für beide Response-Varianten):**
+- `Markers` enthält nur tatsächlich gesetzte Cue-Punkte, nicht alle
+  denkbaren Typen. **Bislang bei ~20 stichprobenartig geprüften Items
+  (Musik + Sweeper) nur folgende vier Marker-Typen beobachtet:**
+  `CueIn`, `CueOut`, `FadeOut`, `StartNext`. Weder `FadeIn`, `FadeEnd`,
+  `Hook`/`HookIn`/`HookOut` noch `Ramp1`/`2`/`3` wurden bisher gesehen –
+  möglicherweise nutzt dieser Bestand diese Marker-Typen schlicht nicht,
+  oder sie werden anders benannt. Bei Bedarf gezielt ein Item mit
+  bekannten Hook-/Ramp-Punkten (z. B. im Cue Editor sichtbar) über die
+  API abfragen um das zu klären.
 - `Amplification` = Normalisierungs-Gain in dB (entspricht `gainDb` im
   aktuellen Datenmodell)
 - `Levels.Loudness` = LUFS-Wert
 - `Class` unterscheidet u. a. `"File"` und `"Container"` (siehe Playlists
   unten für ein Container-Beispiel)
+- `Attributes` ist nicht auf ein festes Schema beschränkt – beobachtet
+  wurden sowohl fachliche Attribute (`"Stimmung": "High"`) als auch
+  technische Metadaten (`"Konto"`, `"Datum"` – vermutlich automatisch
+  von der Aufnahme-/Schnittsoftware gesetzt, hier "Adobe Audition 13.0")
 
 ### PUT `/api/v1/items/<id>` – VERIFIZIERT
 
@@ -279,24 +473,33 @@ getestet.
 - [x] **PUT-Body für `/api/v1/playlists/...`** – verifiziert, siehe oben
 - [x] Fehlerformat bei nicht existierender Ressource – verifiziert
       (404, Klartext-Body)
-- [ ] Vollständige Liste möglicher `Markers`-Schlüssel (aktuell nur
-      `CueIn`, `CueOut`, `FadeOut`, `FadeEnd`?, `StartNext` bestätigt) –
-      Restliche 17 Cue-Punkt-Typen (Ramp1-3, Hook/HookIn/HookOut etc.)
-      noch nicht an einem echten Item mit allen Markern beobachtet
+- [ ] Vollständige Liste möglicher `Markers`-Schlüssel – bei ~20
+      stichprobenartig geprüften Items (Musik + alle Sweeper-Items)
+      wurden ausschließlich `CueIn`, `CueOut`, `FadeOut`, `StartNext`
+      beobachtet. `FadeIn`, `FadeEnd`, `Hook`/`HookIn`/`HookOut`,
+      `Ramp1`/`2`/`3` bisher nicht gesehen – noch zu klären ob diese
+      Marker-Typen in diesem Bestand einfach nicht genutzt werden, oder
+      ob sie anders im JSON heißen als angenommen
 - [ ] Verhalten bei echtem Versionskonflikt (zwei überlappende
       Schreibvorgänge) – bisher nur der Erfolgsfall getestet
 - [ ] Fehlerformat bei ungültigem PUT-Body (kaputtes JSON, falscher
       Datentyp)
-- [ ] `/api/v1/config` und `/api/v1/config/<key>` Response-Struktur
-- [ ] `/api/v1/folders?station=1` ohne `parent` – kompletter Baum oder nur
-      Root-Ebene?
+- [x] `/api/v1/config` Response-Struktur – verifiziert, siehe oben
+      (inkl. `StandardAttributes`-XML-Schema für Item-Attribute)
+- [x] `/api/v1/folders?station=1` ohne `parent` – verifiziert: liefert
+      den kompletten Baum, siehe oben
+- [x] Pagination bei Ordnern – kein Hinweis auf Pagination bei 155
+      Ordnern in einer Antwort. Für Items in großen Ordnern weiterhin
+      ungeklärt (Ordner mit sehr vielen Items noch nicht getestet)
 - [ ] Item-Erstellung (`POST`? welcher Pfad? `CreateItems`-Capability
       deutet auf einen eigenen Endpunkt hin, noch nicht beobachtet)
 - [ ] Ordner-Erstellung/Löschen (`EditFolders`-Capability, Endpunkt noch
       nicht beobachtet)
 - [ ] Storage-Verwaltung (`EditStorages`-Capability, Endpunkt noch nicht
       beobachtet)
-- [ ] Pagination bei großen Ordnern (limit/offset o. ä.?)
+- [ ] Pagination bei Items in einzelnen großen Ordnern (limit/offset
+      o. ä.?) – bei Folders selbst nicht beobachtet, bei Items noch
+      nicht spezifisch getestet
 - [ ] Rate-Limiting oder Verbindungslimits
 - [ ] **Alternative Authentifizierung per Token:** Der offizielle
       mAirList-Client bietet in seiner "Internet Client"-Konfiguration

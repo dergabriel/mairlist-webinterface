@@ -78,6 +78,28 @@ async function main() {
     return { rootFolders: tree.length, totalFolders: treeCount };
   });
 
+  const targetFolderId = folderId ?? (folders && folders[0] && folders[0].id);
+
+  await run("getFolderById", async () => {
+    const folder = await repo.getFolderById(targetFolderId);
+    if (!folder) throw new Error(`folder ${targetFolderId} not found`);
+    return folder;
+  });
+
+  await run("getFolderById (unknown id)", async () => {
+    const folder = await repo.getFolderById("999999999");
+    if (folder !== null) throw new Error("expected null for nonexistent folder");
+    return { ok: "returned null as expected" };
+  });
+
+  await run("getFolderChildren", async () => {
+    const children = await repo.getFolderChildren(targetFolderId);
+    if (!Array.isArray(children.folders) || !Array.isArray(children.items)) {
+      throw new Error("expected { folders: [], items: [] }");
+    }
+    return { folders: children.folders.length, items: children.items.length };
+  });
+
   const items = await run("getItemsByFolder", () => repo.getItemsByFolder(folderId ?? (folders && folders[0] && folders[0].id)));
 
   await run("getItems (folderId only)", async () => {
@@ -133,6 +155,20 @@ async function main() {
     }
     const hasHasEntries = result.some((h) => h.hasEntries);
     return { hours: result.length, anyWithEntries: hasHasEntries };
+  });
+
+  const playlistId = `${dateStr}-${String(hour).padStart(2, "0")}`;
+  await run("getPlaylistById", async () => {
+    const playlist = await repo.getPlaylistById(playlistId);
+    if (!playlist) throw new Error(`playlist ${playlistId} not found`);
+    if (!Array.isArray(playlist.entries)) throw new Error("expected an entries array");
+    return { id: playlist.id, date: playlist.date, hour: playlist.hour, entries: playlist.entries.length };
+  });
+
+  await run("getPlaylistById (malformed id)", async () => {
+    const playlist = await repo.getPlaylistById("not-a-playlist-id");
+    if (playlist !== null) throw new Error("expected null for malformed id");
+    return { ok: "returned null as expected" };
   });
 
   const item = await repo.getItemById(itemId);

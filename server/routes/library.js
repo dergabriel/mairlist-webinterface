@@ -104,11 +104,11 @@ router.delete("/folders/:id", requireScope("library.write"), (req, res, next) =>
 });
 
 // GET /api/folders/:id/children -> direct items and subfolders of a folder (not recursive)
-router.get("/folders/:id/children", requireScope("library.read"), (req, res, next) => {
+router.get("/folders/:id/children", requireScope("library.read"), async (req, res, next) => {
   try {
-    const folder = repo.getFolderById(req.params.id);
+    const folder = await repo.getFolderById(req.params.id);
     if (!folder) return res.status(404).json({ error: "Folder not found" });
-    res.json(repo.getFolderChildren(req.params.id));
+    res.json(await repo.getFolderChildren(req.params.id));
   } catch (e) { next(e); }
 });
 
@@ -350,9 +350,9 @@ router.get("/playlists", requireScope("library.read"), async (req, res, next) =>
 });
 
 // GET /api/playlists/:id -> one hour's playlist with resolved items
-router.get("/playlists/:id", requireScope("library.read"), (req, res, next) => {
+router.get("/playlists/:id", requireScope("library.read"), async (req, res, next) => {
   try {
-    const playlist = repo.getPlaylistById(req.params.id);
+    const playlist = await repo.getPlaylistById(req.params.id);
     if (!playlist) return res.status(404).json({ error: "Playlist not found" });
     res.json(playlist);
   } catch (e) { next(e); }

@@ -566,6 +566,48 @@ async function getPlaylistsByDate(date) {
   }));
 }
 
+const PLAYLIST_ID_RE = /^(\d{4}-\d{2}-\d{2})-(\d{2})$/;
+
+function parsePlaylistId(id) {
+  const match = PLAYLIST_ID_RE.exec(id);
+  if (!match) return null;
+  return { date: match[1], hour: parseInt(match[2], 10) };
+}
+
+// Mirrors sqlRepository.js's getPlaylistById(id) -> { id, date, hour,
+// entries: [{ position, itemId, scheduledStart, overrides, item }] }.
+// `overrides` has no API counterpart (the API's PlaylistItemAttributes
+// only appears on Container sub-items, not top-level slots — see
+// docs/MAIRLISTDB-API.md) and stays undefined here.
+//
+// Container items (Class: "Container", e.g. ad blocks) are mapped as a
+// single playlist entry via mapApiItemToInternal (which already sets
+// containerType from Class) — their nested Items list isn't flattened
+// into separate entries. See docs/FEATURES.md: nested Container
+// sub-items aren't editable/expandable yet in api-mode.
+async function getPlaylistById(id) {
+  const parsed = parsePlaylistId(id);
+  if (!parsed) return null;
+  const { date, hour } = parsed;
+  const [year, month, day] = date.split("-").map(Number);
+
+  const data = await getPlaylistHour(year, month, day, hour);
+  const apiItems = Array.isArray(data?.Items) ? data.Items : [];
+
+  const entries = apiItems.map((entry, index) => {
+    const item = mapApiItemToInternal(entry.Item, null);
+    return {
+      position: index + 1,
+      itemId: item ? item.id : null,
+      scheduledStart: entry.Time?.Value ?? "",
+      overrides: undefined,
+      item,
+    };
+  });
+
+  return { id, date, hour, entries };
+}
+
 // Maps an internal playlist entry (a slot with a `time` and an `item`,
 // the shape returned/consumed by sqlRepository.js's playlist functions)
 // to the API's { Class: "Playlist", Time: {...}, Item: {...} } wrapper.
@@ -690,7 +732,15 @@ async function getFolderTree() {
       .map((f) => ({ ...f, children: byParent(f.id) }));
   return byParent(null);
 }
-const getFolderById = notImplemented("getFolderById");
+
+// No single-folder endpoint in the API (see docs/MAIRLISTDB-API.md) —
+// getFolders() already fetches the complete 155-folder tree in one
+// request, so look the id up in that flat list rather than adding a
+// second round-trip.
+async function getFolderById(id) {
+  const all = await getFolders();
+  return all.find((f) => String(f.id) === String(id)) ?? null;
+}
 const createFolder = notImplemented("createFolder");
 const renameFolder = notImplemented("renameFolder");
 const moveFolder = notImplemented("moveFolder");
@@ -729,8 +779,16 @@ function emptyStub(name, emptyValue) {
   };
 }
 
-// sqlRepository.js: getFolderChildren(id) -> { folders: [], items: [] }
-const getFolderChildren = emptyStub("getFolderChildren", { folders: [], items: [] });
+// sqlRepository.js: getFolderChildren(id) -> { folders: [], items: [] }.
+// Direct (non-recursive) subfolders come from filtering the same
+// getFolders() list getFolderById() uses; items come from the already
+// existing getItemsByFolder(id).
+async function getFolderChildren(id) {
+  const all = await getFolders();
+  const folders = all.filter((f) => String(f.parentId) === String(id));
+  const items = await getItemsByFolder(id);
+  return { folders, items };
+}
 const getStorages = emptyStub("getStorages", []);
 const createStorage = notImplemented("createStorage");
 const updateStorage = notImplemented("updateStorage");
@@ -743,7 +801,6 @@ const getAttributeDefinitions = notImplemented("getAttributeDefinitions");
 const moveItemToFolder = notImplemented("moveItemToFolder");
 const uploadFile = notImplemented("uploadFile");
 const resolveAudioPath = notImplemented("resolveAudioPath");
-const getPlaylistById = notImplemented("getPlaylistById");
 const reorderPlaylist = notImplemented("reorderPlaylist");
 const insertPlaylistItem = notImplemented("insertPlaylistItem");
 const removePlaylistItem = notImplemented("removePlaylistItem");

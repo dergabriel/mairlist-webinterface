@@ -126,7 +126,12 @@ function mapMarkersToInternal(markers) {
 // nested under Item in playlist/folder responses) to the internal item
 // shape used throughout the app (same fields as sqlRepository.js's
 // rowToItem()).
-function mapApiItemToInternal(apiItem) {
+//
+// `folderId` is not part of the item response itself (see docs) — pass it
+// in explicitly when the caller already knows which folder the item came
+// from (e.g. getItemsByFolder). Otherwise it's left null; use
+// getItemFolders(id) to look up an item's folder assignments.
+function mapApiItemToInternal(apiItem, folderId = null) {
   if (!apiItem) return null;
 
   return {
@@ -141,7 +146,7 @@ function mapApiItemToInternal(apiItem) {
     endTime: null,
     storageId: null,
     relativePath: apiItem.Filename || null,
-    folderId: null,
+    folderId,
     comment: "",
     color: null,
     cover: null,
@@ -183,12 +188,17 @@ async function getFolders(parentId) {
 async function getItemsByFolder(folderId) {
   const data = await apiRequest("GET", "/api/v1/items", { query: { folder: folderId } });
   const list = Array.isArray(data) ? data : data?.Items || [];
-  return list.map(mapApiItemToInternal);
+  // The API doesn't echo the folder back on each item, but since we
+  // queried this exact folder, every returned item belongs to it.
+  return list.map((apiItem) => mapApiItemToInternal(apiItem, folderId ?? null));
 }
 
 async function getItemById(id) {
   try {
     const data = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(id)}`);
+    // No folder field on the single-item response (see docs) — folderId
+    // stays null here. Call getItemFolders(id) if the folder assignment
+    // is needed.
     return mapApiItemToInternal(data);
   } catch (err) {
     if (err instanceof ApiNotFoundError) return null;
@@ -207,6 +217,9 @@ async function getItemsByIds(ids) {
 
 async function getItemFolders(itemId) {
   const data = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/folders`);
+  if (process.env.API_DB_DEBUG) {
+    console.log(`[apiRepository] getItemFolders(${itemId}) raw response:`, JSON.stringify(data));
+  }
   const list = Array.isArray(data) ? data : data?.Folders || [];
   return list.map(rowToFolder);
 }
@@ -249,22 +262,44 @@ async function getCapabilities() {
 
 // ---- artists / titles (distinct-value search) ----
 //
-// TODO: the `time` query parameter's expected format is not documented
-// (docs/MAIRLISTDB-API.md marks it as unclear). Using an empty string as a
-// placeholder default until real traffic clarifies the expected format.
+// TODO: docs/MAIRLISTDB-API.md documents these as
+// `?artists&time=...&station=1` / `?titles&time=...&station=1`, but the
+// expected format of `time` was never captured from real traffic (ISO
+// timestamp? date? from/to window?). Sending `time=` as an empty string
+// previously — which is what actually shipped — is a malformed value, and
+// is the most likely reason the server fell back to returning full item
+// objects instead of a distinct name list.
+//
+// Fix attempt: omit `time` entirely per option (a) in the fix task, since
+// an absent optional param is safer than a guessed-wrong one. NOT verified
+// against a live server (no reachable instance / credentials at fix time).
+// If the server still returns full item objects with `time` omitted, the
+// format is genuinely undocumented — do not reshape the item objects into
+// fake "distinct list" output; that would misrepresent unverified data as
+// verified. Whoever picks this up next should re-check both functions
+// against a live instance and update this comment once the real `time`
+// format (or its unnecessity) is confirmed.
 
 async function getArtists(searchTerm) {
   const data = await apiRequest("GET", "/api/v1/items", {
-    query: { artists: "", time: "", ...(searchTerm ? { q: searchTerm } : {}) },
+    query: { artists: "", ...(searchTerm ? { q: searchTerm } : {}) },
   });
-  return Array.isArray(data) ? data : data?.Artists || [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.Artists)) return data.Artists;
+  // TODO: unexpected shape (likely still full item objects) — `time`
+  // format remains unconfirmed, see comment above.
+  return data;
 }
 
 async function getTitles(searchTerm) {
   const data = await apiRequest("GET", "/api/v1/items", {
-    query: { titles: "", time: "", ...(searchTerm ? { q: searchTerm } : {}) },
+    query: { titles: "", ...(searchTerm ? { q: searchTerm } : {}) },
   });
-  return Array.isArray(data) ? data : data?.Titles || [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.Titles)) return data.Titles;
+  // TODO: unexpected shape (likely still full item objects) — `time`
+  // format remains unconfirmed, see comment above.
+  return data;
 }
 
 module.exports = {

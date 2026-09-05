@@ -27,6 +27,14 @@ siehe [`docs/FEATURES.md` – API-basierte Datenquelle](FEATURES.md#-api-basiert
   erforderlich bzw. wird vom Client immer mitgeschickt (`station=1`)
 - **Pfad-Encoding:** Dateinamen in URLs sind URL-encoded (z. B. Leerzeichen
   als `%20`, eckige Klammern als `%5B`/`%5D`)
+- **Concurrency-Limit nötig:** Der mAirListDB Server öffnet die `.mldb`
+  intern selbst über SQLite. Bei ~12 parallelen Requests von unserem
+  Client meldete der Server `database is locked` — dieselbe Fehlerklasse,
+  die `DATA_SOURCE=api` eigentlich vermeiden soll, nur serverseitig
+  ausgelöst statt clientseitig. `apiRepository.js` drosselt deshalb
+  ausgehende Requests auf `API_DB_MAX_CONCURRENT` (Default 3, siehe
+  `server/.env.production.example`) statt sie unbegrenzt parallel
+  abzufeuern.
 
 ## Server-Metadaten
 
@@ -443,6 +451,18 @@ zurückgeschickt.
   das rein informativ ist. Für einen echten Konflikttest müsste man
   zwei überlappende Schreibvorgänge simulieren (z. B. mit veralteter
   Version schreiben und schauen ob ein Fehler kommt).
+
+**Einzelne Slots einfügen/entfernen/umsortieren:** Die API bietet dafür
+keinen eigenen Endpunkt, nur ganze Stunde lesen/schreiben. `apiRepository.js`
+implementiert `reorderPlaylist`/`insertPlaylistItem`/`removePlaylistItem`
+deshalb als Read-Modify-Write: aktuelle Stunde per GET holen, die rohen
+`Items[]`-Einträge unverändert lassen bis auf die eine Mutation, komplett
+per PUT zurückschreiben. Entscheidend dabei: es wird mit den **rohen**
+API-Einträgen gearbeitet (nicht mit einer internen Item-Repräsentation),
+weil `Class:"Dummy"`-Einträge Felder (`Timing`, `State`, `Customized`,
+`FixTimeFrame`, `FixTime`) tragen, die eine interne Repräsentation nicht
+verlustfrei abbilden kann — ein Rekonstruktionsversuch würde diese Felder
+korrumpieren oder verwerfen.
 
 ## Fehlerbehandlung – teilweise VERIFIZIERT
 

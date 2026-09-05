@@ -84,7 +84,29 @@ Benutzerverwaltung (`server/data/webAuthDb.js`, bcrypt) ist von
 `DATA_SOURCE` unabhängig und funktioniert in allen drei Modi identisch.
 
 Verifiziert mit 19 Smoke-Tests gegen die Produktivinstanz
-(`server/scripts/smoke-reads-api.js`, `smoke-writes-api.js`).
+(`server/scripts/smoke-reads-api.js`, `smoke-writes-api.js`). Der
+Kern-Workflow (Ordnerbaum, Items lesen/bearbeiten/speichern,
+Audio-Streaming, Playlist lesen/bearbeiten) ist damit produktiv
+nutzbar und live gegen die echte mAirList-Installation verifiziert —
+inklusive dem strukturellen Wegfall des SQLite-Locking-Konflikts mit
+parallel laufendem mAirList.
+
+**Concurrency-Limit gegen "database is locked":** Bei ~12 parallelen
+Requests meldete der mAirListDB Server selbst `database is locked` (er
+öffnet die `.mldb` intern ebenfalls über SQLite). `apiRepository.js`
+drosselt deshalb ausgehende Requests auf `API_DB_MAX_CONCURRENT`
+(Default 3, siehe `server/.env.production.example`) statt sie
+unbegrenzt parallel abzufeuern.
+
+**Fallstrick — async Stub-Funktion + synchrones `res.json()`:** Route-
+Handler in `server/routes/library.js` rufen manche Repository-Funktionen
+synchron auf (`res.json(repo.getX())`, ohne `await`), passend zu
+`sqlRepository.js`s synchronen Funktionen gleichen Namens. Eine
+`async`-Funktion in `apiRepository.js` an dieser Stelle liefert
+`res.json()` ein unaufgelöstes Promise, das zu `{}` statt zum
+erwarteten Array serialisiert wird (Frontend-Symptom: `[...items]`
+schlägt fehl, weil `{}` nicht iterierbar ist). Die `emptyStub()`-Stubs
+in `apiRepository.js` sind deshalb bewusst synchron.
 
 **Verfügbar:**
 
@@ -102,6 +124,26 @@ Verifiziert mit 19 Smoke-Tests gegen die Produktivinstanz
 | `updateItem` (Items inkl. Cue-Punkte, Gain, Attribute speichern) | ✅ |
 | `getFolderById`, `getFolderChildren` (aus `getFolders()` clientseitig gefiltert) | ✅ |
 | `getItems` (nur mit `folderId`, siehe unten) | ✅ |
+| `reorderPlaylist`, `insertPlaylistItem`, `removePlaylistItem` (Read-Modify-Write auf den rohen `Items[]`, siehe unten) | ✅ |
+| `savePlaylistItemOverrides` | 🟡 nur Cue-Marker (`Markers`), andere Override-Arten werden mangels bekanntem Zielfeld verworfen |
+
+**Playlist-Schreiboperationen — Read-Modify-Write auf rohen Einträgen:**
+Die API kennt nur Lesen/Schreiben der kompletten Stunde (kein
+Endpunkt für Einfügen/Entfernen/Umsortieren einzelner Slots). `reorderPlaylist`,
+`insertPlaylistItem` und `removePlaylistItem` lesen deshalb erst die
+rohen, unveränderten `Items[]`-Einträge der Stunde (`getPlaylistHour`),
+mutieren das Array in-memory und schreiben es komplett zurück
+(`writeHour`). Wichtig: Es wird auf den **rohen** API-Einträgen
+gearbeitet, nicht auf einer internen `{time, item}`-Repräsentation —
+Dummy-Einträge (`Class:"Dummy"`, z. B. "PH Stundenanfang") haben keine
+`DatabaseID`, dafür aber Felder wie `Timing`/`State`/`Customized`/
+`FixTimeFrame`/`FixTime`, die eine interne Item-Repräsentation nicht
+abbilden kann. Nur neu eingefügte Einträge werden frisch aus dem
+internen Item-Objekt gebaut, alles andere läuft unverändert durch.
+`savePlaylistItemOverrides` mergt Cue-Overrides direkt in das
+`Markers`-Feld des rohen Eintrags (das einzige bekannte, sicher
+round-trip-fähige Pro-Slot-Feld); andere Override-Arten haben kein
+bekanntes Zielfeld in der API und werden verworfen statt geraten.
 
 **Einschränkung — Container-Items (Werbeblöcke) in `getPlaylistById`:**
 Playlist-Einträge vom API-Typ `Class: "Container"` (z. B. Werbeblöcke
@@ -148,7 +190,6 @@ Daten zu liefern):
 | Storage-Verwaltung: `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
 | Item-Suche (`searchItems`), `getAttributeDefinitions`, `getCuePoints` | ⬜ |
 | `moveItemToFolder`, `uploadFile`, `resolveAudioPath` | ⬜ |
-| `reorderPlaylist`, `insertPlaylistItem`, `removePlaylistItem`, `savePlaylistItemOverrides` | ⬜ |
 | Dashboard/Logs-Aggregation: `getLogs`, `getDashboardStats`, `getRecentLogs`, `getTodayPlaylist` | ⬜ |
 
 ---

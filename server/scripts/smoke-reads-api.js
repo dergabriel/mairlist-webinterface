@@ -162,6 +162,20 @@ async function main() {
     const playlist = await repo.getPlaylistById(playlistId);
     if (!playlist) throw new Error(`playlist ${playlistId} not found`);
     if (!Array.isArray(playlist.entries)) throw new Error("expected an entries array");
+    if (playlist.entries.length > 0) {
+      const first = playlist.entries[0];
+      if (!first.item) throw new Error("entries[0].item is missing — item was not resolved");
+      if (typeof first.item.title !== "string" || first.item.title === "") {
+        throw new Error(`entries[0].item.title should be a non-empty string, got ${JSON.stringify(first.item.title)}`);
+      }
+      // Raw API items use PascalCase (Title/Artist/Type/Duration) — if any
+      // of those keys are present, the item was never run through
+      // mapApiItemToInternal() and leaked the raw API shape to the frontend.
+      const rawKeys = ["Title", "Artist", "Type", "Duration"].filter((k) => k in first.item);
+      if (rawKeys.length > 0) {
+        throw new Error(`entries[0].item still has raw API keys (not normalized): ${rawKeys.join(", ")}`);
+      }
+    }
     return { id: playlist.id, date: playlist.date, hour: playlist.hour, entries: playlist.entries.length };
   });
 

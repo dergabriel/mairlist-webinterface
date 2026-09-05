@@ -359,31 +359,34 @@ router.get("/playlists/:id", requireScope("library.read"), async (req, res, next
 });
 
 // PUT /api/playlists/:id/reorder -> apply a new entry order. Body: { order: [position, ...] }
-router.put("/playlists/:id/reorder", requireScope("library.write"), (req, res, next) => {
+// repo.reorderPlaylist is async under DATA_SOURCE=api (round-trips through
+// the mAirListDB Server) and sync under sqlite/mock — awaiting either is
+// safe (await on a non-Promise resolves immediately).
+router.put("/playlists/:id/reorder", requireScope("library.write"), async (req, res, next) => {
   try {
     const { order } = req.body;
     if (!Array.isArray(order)) return res.status(400).json({ error: "order (Array) ist erforderlich" });
-    const playlist = repo.reorderPlaylist(req.params.id, order);
+    const playlist = await repo.reorderPlaylist(req.params.id, order);
     if (!playlist) return res.status(400).json({ error: "Playlist oder Reihenfolge ungültig" });
     res.json(playlist);
   } catch (e) { next(e); }
 });
 
 // POST /api/playlists/:id/items -> insert an item. Body: { itemId, afterPosition? }
-router.post("/playlists/:id/items", requireScope("library.write"), (req, res, next) => {
+router.post("/playlists/:id/items", requireScope("library.write"), async (req, res, next) => {
   try {
     const { itemId, afterPosition } = req.body;
     if (!itemId) return res.status(400).json({ error: "itemId ist erforderlich" });
-    const playlist = repo.insertPlaylistItem(req.params.id, { itemId, afterPosition });
+    const playlist = await repo.insertPlaylistItem(req.params.id, { itemId, afterPosition });
     if (!playlist) return res.status(400).json({ error: "Playlist oder Item ungültig" });
     res.status(201).json(playlist);
   } catch (e) { next(e); }
 });
 
 // DELETE /api/playlists/:id/items/:position -> remove the entry at that position
-router.delete("/playlists/:id/items/:position", requireScope("library.write"), (req, res, next) => {
+router.delete("/playlists/:id/items/:position", requireScope("library.write"), async (req, res, next) => {
   try {
-    const playlist = repo.removePlaylistItem(req.params.id, req.params.position);
+    const playlist = await repo.removePlaylistItem(req.params.id, req.params.position);
     if (!playlist) return res.status(404).json({ error: "Playlist oder Eintrag nicht gefunden" });
     res.json(playlist);
   } catch (e) { next(e); }
@@ -391,10 +394,10 @@ router.delete("/playlists/:id/items/:position", requireScope("library.write"), (
 
 // PUT /api/playlists/:id/items/:position/overrides -> set (or clear, with {}) this
 // entry's volatile per-instance overrides. Body: { overrides: { cue?: {...}, attributes?: {...}, ... } }
-router.put("/playlists/:id/items/:position/overrides", requireScope("library.write"), (req, res, next) => {
+router.put("/playlists/:id/items/:position/overrides", requireScope("library.write"), async (req, res, next) => {
   try {
     const { overrides } = req.body;
-    const playlist = repo.savePlaylistItemOverrides(req.params.id, req.params.position, overrides);
+    const playlist = await repo.savePlaylistItemOverrides(req.params.id, req.params.position, overrides);
     if (!playlist) return res.status(404).json({ error: "Playlist oder Eintrag nicht gefunden" });
     res.json(playlist);
   } catch (e) { next(e); }

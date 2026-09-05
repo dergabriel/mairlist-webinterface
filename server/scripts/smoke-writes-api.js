@@ -2,9 +2,14 @@
 // mAirListDB Server instance (port 8840 by default).
 //
 // ⚠️ Only touches an uncritical test item's Markers.FadeOut (nudged and
-// reset back to its original value) and re-writes an empty/unimportant
-// playlist hour unchanged (to check the Version counter goes up) — never
-// point SMOKE_ITEM_ID / SMOKE_DATE at anything currently on air.
+// reset back to its original value) and rewrites a far-future, unused
+// playlist hour (default 2099-01-01, hour 3) — first unchanged (to check
+// the Version counter goes up), then via reorderPlaylist/insertPlaylistItem/
+// removePlaylistItem, verifying no entry (including Class:"Dummy"
+// placeholders like hour-start markers) loses or gets fields overwritten,
+// and always restoring the hour's exact original entries afterwards (even
+// if an assertion above fails, via a finally block). Never point
+// SMOKE_ITEM_ID / SMOKE_DATE at anything currently on air or scheduled.
 //
 // Usage:
 //   API_DB_BASE_URL=http://localhost:8840 API_DB_USER=... API_DB_PASSWORD=... \
@@ -106,17 +111,19 @@ async function main() {
   });
 
   // ---- writeHour: rewrite an unimportant hour unchanged, check Version increments ----
+  //
+  // Items[] entries are the API's real, FLAT shape (Title/Artist/Duration/
+  // Class directly on each entry, no {Class:"Playlist", Time, Item}
+  // wrapper — see docs/MAIRLISTDB-API.md) — writeHour() takes that same
+  // raw shape now, so round-tripping it unchanged is just "write back
+  // exactly what GET returned".
 
   await run("writeHour (unchanged round-trip)", async () => {
     const before = await repo.getPlaylistHour(year, month, day, hour);
     const beforeVersion = Number(before?.VersionInfo?.Version ?? 0);
+    const rawEntries = before?.Items || [];
 
-    const entries = (before?.Items || []).map((entry) => ({
-      time: entry.Time?.Value,
-      item: repo.mapApiItemToInternal(entry.Item),
-    }));
-
-    const newVersion = await repo.writeHour(year, month, day, hour, entries);
+    const newVersion = await repo.writeHour(year, month, day, hour, rawEntries);
     check(
       "writeHour returns incremented Version",
       newVersion !== null && Number(newVersion) > beforeVersion,
@@ -126,9 +133,108 @@ async function main() {
     const after = await repo.getPlaylistHour(year, month, day, hour);
     check(
       "writeHour preserves item count",
-      (after?.Items || []).length === entries.length,
-      `expected ${entries.length}, got ${(after?.Items || []).length}`
+      (after?.Items || []).length === rawEntries.length,
+      `expected ${rawEntries.length}, got ${(after?.Items || []).length}`
     );
+  });
+
+  // ---- playlist write ops: reorder / insert / remove round-trip on a
+  // throwaway test hour, verifying no fields (incl. Dummy placeholders)
+  // are lost, then restoring the original state. ----
+  //
+  // ⚠️ Never point SMOKE_DATE at a real, currently-scheduled hour — this
+  // section fully rewrites the target hour's playlist multiple times.
+
+  await run("playlist write ops (reorder/insert/remove round-trip)", async () => {
+    const playlistId = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}-${String(hour).padStart(2, "0")}`;
+
+    const original = await repo.getPlaylistById(playlistId);
+    if (!original) throw new Error(`playlist ${playlistId} not found`);
+    const originalRaw = (await repo.getPlaylistHour(year, month, day, hour))?.Items || [];
+
+    // Snapshot fingerprints (Title + Class + DatabaseID/FixTime) to check
+    // nothing — including Dummy entries' Title/FixTime/Timing/State/
+    // Customized/FixTimeFrame — gets lost or blanked out by a round-trip.
+    const fingerprint = (raw) =>
+      raw.map((e) => JSON.stringify({
+        Class: e.Class, Title: e.Title, DatabaseID: e.DatabaseID,
+        FixTime: e.FixTime, Timing: e.Timing, State: e.State,
+        Customized: e.Customized, FixTimeFrame: e.FixTimeFrame,
+      }));
+    const originalFingerprint = fingerprint(originalRaw);
+
+    try {
+      if (original.entries.length < 2) {
+        console.log(
+          `        (skipped: hour ${playlistId} has ${original.entries.length} entr${original.entries.length === 1 ? "y" : "ies"}, need >= 2 to test reorder — insert/remove still run)`
+        );
+      } else {
+        // Reorder: swap the first two positions, write, re-read, verify.
+        const positions = original.entries.map((e) => e.position);
+        const swapped = [positions[1], positions[0], ...positions.slice(2)];
+
+        const reordered = await repo.reorderPlaylist(playlistId, swapped);
+        check("reorderPlaylist returns a playlist", !!reordered);
+        if (reordered) {
+          check(
+            "reorderPlaylist actually swapped the first two entries",
+            reordered.entries[0]?.item?.id === original.entries[1]?.item?.id ||
+              reordered.entries[0]?.itemId === original.entries[1]?.itemId,
+            "first entry after reorder does not match expected swap"
+          );
+        }
+
+        const afterReorderRaw = (await repo.getPlaylistHour(year, month, day, hour))?.Items || [];
+        check(
+          "reorderPlaylist preserves entry count",
+          afterReorderRaw.length === originalRaw.length,
+          `expected ${originalRaw.length}, got ${afterReorderRaw.length}`
+        );
+        check(
+          "reorderPlaylist preserves all entry fields (incl. Dummy) as a set",
+          fingerprint(afterReorderRaw).sort().join("|") === [...originalFingerprint].sort().join("|"),
+          "fingerprints differ after reorder — a field was lost or altered"
+        );
+
+        // Restore original order before moving on.
+        await repo.reorderPlaylist(playlistId, positions);
+      }
+
+      // Insert: add the smoke item at the end, verify it appears with
+      // correct fields, then remove it again by position.
+      const beforeInsert = await repo.getPlaylistById(playlistId);
+      const inserted = await repo.insertPlaylistItem(playlistId, { itemId });
+      check("insertPlaylistItem returns a playlist", !!inserted);
+      check(
+        "insertPlaylistItem appends one entry",
+        inserted && inserted.entries.length === beforeInsert.entries.length + 1,
+        `expected ${beforeInsert.entries.length + 1}, got ${inserted && inserted.entries.length}`
+      );
+      const lastEntry = inserted && inserted.entries[inserted.entries.length - 1];
+      check(
+        "inserted entry resolves the correct item",
+        lastEntry?.item?.id === String(itemId),
+        `expected item id ${itemId}, got ${lastEntry?.item?.id}`
+      );
+
+      const removed = await repo.removePlaylistItem(playlistId, inserted.entries.length);
+      check("removePlaylistItem returns a playlist", !!removed);
+      check(
+        "removePlaylistItem restores original entry count",
+        removed && removed.entries.length === beforeInsert.entries.length,
+        `expected ${beforeInsert.entries.length}, got ${removed && removed.entries.length}`
+      );
+    } finally {
+      // Always restore the exact original raw entries, regardless of
+      // which assertions above passed or failed.
+      await repo.writeHour(year, month, day, hour, originalRaw);
+      const restoredRaw = (await repo.getPlaylistHour(year, month, day, hour))?.Items || [];
+      check(
+        "test hour restored to original state",
+        fingerprint(restoredRaw).sort().join("|") === [...originalFingerprint].sort().join("|"),
+        "restore did not reproduce the original fingerprint — MANUAL CHECK NEEDED"
+      );
+    }
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

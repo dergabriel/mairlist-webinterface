@@ -129,7 +129,7 @@ in `apiRepository.js` sind deshalb bewusst synchron.
 | `getConfig` (`/api/v1/config`) | ✅ |
 | `getAttributeKeys` (aus `getConfig()`s `StandardAttributes`-XML, siehe unten) | ✅ |
 | `getDashboardStats`, `getTodayPlaylist` (siehe unten) | 🟡 Dashboard lädt, `totalItems`/`totalStorages` bleiben `null` |
-| `getStorages` (`/api/v1/storages`, siehe unten) | 🟡 ungeprüft — versucht den Endpunkt, fällt bei 404 auf `[]` zurück |
+| `getStorages` (`/api/v1/storages`, siehe unten) | ✅ verifiziert, Endpunkt existiert (live getestet: 2 Storages) |
 
 **Playlist-Schreiboperationen — Read-Modify-Write auf rohen Einträgen:**
 Die API kennt nur Lesen/Schreiben der kompletten Stunde (kein
@@ -160,7 +160,7 @@ Container ohne eigene Sub-Items führt zu keinem Fehler, sondern zeigt
 schlicht keine Sub-Items an.
 
 **Bewusst leer statt Fehler** (`getItemTypes`, `getLogs`,
-`getRecentLogs`, `getStorages` im 404-Fall): Diese Funktionen liefern im
+`getRecentLogs`): Diese Funktionen liefern im
 api-Modus ein leeres Array statt eines Fehlers. Grund: Das Frontend
 (`Playlist.jsx`, `DatabaseManager.jsx`) lädt den Ordnerbaum zusammen mit
 solchen Listen in einem gemeinsamen `Promise.all` — würde auch nur eine
@@ -186,14 +186,14 @@ ist deshalb nur für `Kind="DropDown"`/`"Check"`-Attribute gefüllt
 Parsing nutzt einen gezielten regulären Ausdruck statt eines
 XML-Parsers (keine XML-Dependency im Projekt, Format eng umrissen).
 
-**`getStorages` — Endpunkt versucht, ungeprüft:** `EditStorages` ist
-eine advertised Capability, aber in dieser Entwicklungsumgebung war kein
-mAirListDB Server erreichbar, um `GET /api/v1/storages?station=1`
-tatsächlich zu testen. `getStorages()` versucht den Endpunkt und fällt
-bei 404 auf `[]` zurück; bei Erfolg wird das Response-Format defensiv
-zwischen zwei bekannten API-Konventionen geraten (`{value: [...]}` wie
-bei `/folders`, oder ein rohes Array wie bei `/items`) — muss gegen die
-echte Produktivinstanz verifiziert werden.
+**`getStorages` — verifiziert:** `GET /api/v1/storages?station=1`
+existiert doch, live gegen die Produktivinstanz getestet (2 Storages),
+siehe `docs/MAIRLISTDB-API.md`. Das exakte Response-JSON (Wrapper- vs.
+Array-Shape, genaue Feldnamen) ist noch nicht protokolliert;
+`getStorages()`/`mapApiStorageToInternal()` mappen defensiv auf
+`{ id, name, location }` und decken dabei beide bekannten
+API-Konventionen ab (`{value: [...]}` wie bei `/folders`, oder ein rohes
+Array wie bei `/items`).
 
 **`getDashboardStats`/`getTodayPlaylist`:** `getTodayPlaylist()` ist
 voll funktionsfähig (baut auf den bereits verifizierten

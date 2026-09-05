@@ -342,11 +342,24 @@ tatsächlich persistiert wurde.
 
 | Methode | Pfad | Beschreibung |
 |---|---|---|
+| GET | `/api/v1/storages?station=1` | **VERIFIZIERT:** liefert die konfigurierten Storages (live getestet: 2 Storages) |
 | GET | `/api/v1/storages/<id>/files/<filename>?quality=default` | Audiodatei, Originalqualität |
 | GET | `/api/v1/storages/<id>/files/<filename>?quality=low` | Audiodatei, transkodiert (serverseitiges Transcoding, z. B. für schnelle PFL/Preview-Wiedergabe) |
 
 `<filename>` ist URL-encoded, entspricht dem `Filename`-Feld aus der
 Item-Antwort (ohne führendes `/storages/<id>/files/`).
+
+### Response: `/api/v1/storages?station=1` – VERIFIZIERT
+
+Live gegen die Produktivinstanz getestet (2 Storages), Feldnamen mindestens
+`id`, `name`, `location` (exaktes Response-JSON hier noch nicht
+protokolliert – bei Gelegenheit mit
+`Invoke-RestMethod -Uri "http://localhost:8840/api/v1/storages?station=1" -Credential $cred | ConvertTo-Json -Depth 10`
+nachtragen). `apiRepository.js`s `mapApiStorageToInternal()` mappt defensiv
+auf `{ id, name, location }`, unterstützt dabei sowohl
+`ID`/`Name`/`Path` als auch `Id`/`Name`/`Location`-Schreibweisen als
+Serverantwort – welche der beiden tatsächlich zurückkommt, ist noch nicht
+festgehalten.
 
 ## Playlists
 
@@ -489,7 +502,6 @@ getestet.
 | GET | `/api/v1/templates/music/items?station=1` | Music-Templates |
 | GET | `/api/v1/templates/transitions/items?station=1` | Transition-Templates |
 | GET | `/api/v1/templates/<typ>/assignment/<n>?station=1` | Template-Zuordnung |
-| GET | `/api/v1/storages?station=1` | **Ungeprüft:** `EditStorages` ist eine advertised Capability, ein Storages-Endpunkt selbst wurde bisher nicht im Traffic beobachtet. `apiRepository.js`s `getStorages()` versucht diesen Pfad und fällt bei 404 auf ein leeres Ergebnis zurück (siehe unten, "Offene Punkte") |
 
 ### Attribute-Schema statt eigenem Endpunkt
 
@@ -547,15 +559,10 @@ aus tatsächlich beobachteten Item-Werten.
       blockierend: Artist-/Titel-Suche ist ein Nice-to-have-Feature,
       `getArtists`/`getTitles` in `apiRepository.js` funktionieren
       (liefern nur mehr Daten als nötig)
-- [ ] **`/api/v1/storages`** – kein Storages-Endpunkt im Traffic beobachtet,
-      trotz `EditStorages`-Capability. `getStorages()` versucht
-      `GET /api/v1/storages?station=1` und fällt bei 404 auf ein leeres
-      Array zurück; Response-Shape (falls der Endpunkt doch existiert) ist
-      nicht verifiziert — `mapApiStorageToInternal()` rät defensiv zwischen
-      `{value: [...]}`- (wie `/folders`) und Array-Shape (wie `/items`),
-      geloggt wird eine Warnung bei unbekanntem Format. Muss gegen die
-      echte Produktivinstanz getestet werden, sobald verfügbar (in dieser
-      Entwicklungsumgebung war kein mAirListDB Server erreichbar)
+- [x] **`/api/v1/storages`** – VERIFIZIERT: Endpunkt existiert doch, live
+      getestet (2 Storages), siehe "Storages / Audio-Dateien" oben. Das
+      exakte Response-JSON (Wrapper- vs. Array-Shape, genaue Feldnamen) ist
+      noch nicht protokolliert worden — bei Gelegenheit nachtragen
 - [ ] **Kein `/api/v1/itemtypes`-Endpunkt gefunden** – weder ein eigener
       Endpunkt noch ein Feld in `/api/v1/config`. `sqlRepository.js`s
       `getItemTypes()` braucht ein `DISTINCT type, COUNT(*) GROUP BY type`

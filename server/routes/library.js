@@ -62,31 +62,31 @@ router.get("/tree", requireScope("library.read"), async (req, res, next) => {
 });
 
 // POST /api/folders -> create a new folder. Body: { name, parentId? }
-router.post("/folders", requireScope("library.write"), (req, res, next) => {
+router.post("/folders", requireScope("library.write"), async (req, res, next) => {
   try {
     const { name, parentId } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: "name ist erforderlich" });
-    const folder = repo.createFolder(name.trim(), parentId);
+    const folder = await repo.createFolder(name.trim(), parentId);
     res.status(201).json(folder);
   } catch (e) { next(e); }
 });
 
 // PUT /api/folders/:id -> rename a folder. Body: { name }
-router.put("/folders/:id", requireScope("library.write"), (req, res, next) => {
+router.put("/folders/:id", requireScope("library.write"), async (req, res, next) => {
   try {
     const { name } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: "name ist erforderlich" });
-    const folder = repo.renameFolder(req.params.id, name.trim());
+    const folder = await repo.renameFolder(req.params.id, name.trim());
     if (!folder) return res.status(404).json({ error: "Folder not found" });
     res.json(folder);
   } catch (e) { next(e); }
 });
 
 // PUT /api/folders/:id/move -> move a folder under a new parent. Body: { newParentId }
-router.put("/folders/:id/move", requireScope("library.write"), (req, res, next) => {
+router.put("/folders/:id/move", requireScope("library.write"), async (req, res, next) => {
   try {
     const { newParentId } = req.body;
-    const folder = repo.moveFolder(req.params.id, newParentId);
+    const folder = await repo.moveFolder(req.params.id, newParentId);
     if (folder === null) return res.status(404).json({ error: "Folder not found" });
     if (folder === false) return res.status(400).json({ error: "Ordner kann nicht in sich selbst oder einen Unterordner verschoben werden" });
     res.json(folder);
@@ -94,9 +94,9 @@ router.put("/folders/:id/move", requireScope("library.write"), (req, res, next) 
 });
 
 // DELETE /api/folders/:id -> delete an empty folder
-router.delete("/folders/:id", requireScope("library.write"), (req, res, next) => {
+router.delete("/folders/:id", requireScope("library.write"), async (req, res, next) => {
   try {
-    const result = repo.deleteFolder(req.params.id);
+    const result = await repo.deleteFolder(req.params.id);
     if (result === "not_found") return res.status(404).json({ error: "Folder not found" });
     if (result === "not_empty") return res.status(400).json({ error: "Ordner enthält noch Elemente oder Unterordner" });
     res.status(204).end();

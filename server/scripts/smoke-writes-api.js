@@ -10,6 +10,9 @@
 // and always restoring the hour's exact original entries afterwards (even
 // if an assertion above fails, via a finally block). Never point
 // SMOKE_ITEM_ID / SMOKE_DATE at anything currently on air or scheduled.
+// Also creates/renames/moves/deletes throwaway folders named
+// "ZZZ-SmokeTest-<timestamp>*" to verify folder CRUD — cleaned up in a
+// finally block even if an assertion fails midway.
 //
 // Usage:
 //   API_DB_BASE_URL=http://localhost:8840 API_DB_USER=... API_DB_PASSWORD=... \
@@ -234,6 +237,66 @@ async function main() {
         fingerprint(restoredRaw).sort().join("|") === [...originalFingerprint].sort().join("|"),
         "restore did not reproduce the original fingerprint — MANUAL CHECK NEEDED"
       );
+    }
+  });
+
+  // ---- folder CRUD: create / rename / move / delete round-trip ----
+  //
+  // Creates a throwaway top-level folder, renames it, moves it under a
+  // second throwaway folder, then deletes both — finally block cleans up
+  // whatever got created even if an assertion above fails midway.
+
+  await run("folder CRUD (create/rename/move/delete)", async () => {
+    const suffix = Date.now();
+    const testName = `ZZZ-SmokeTest-${suffix}`;
+    const renamedName = `ZZZ-SmokeTest-${suffix}-renamed`;
+    const parentName = `ZZZ-SmokeTest-${suffix}-parent`;
+
+    let testFolder = null;
+    let parentFolder = null;
+
+    try {
+      testFolder = await repo.createFolder(testName, null);
+      check("createFolder returns a folder with an ID", !!testFolder && testFolder.id != null, JSON.stringify(testFolder));
+      check("createFolder sets the given name", testFolder && testFolder.name === testName, testFolder && testFolder.name);
+
+      const renamed = await repo.renameFolder(testFolder.id, renamedName);
+      check("renameFolder returns the folder", !!renamed);
+      check("renameFolder applies the new name", renamed && renamed.name === renamedName, renamed && renamed.name);
+      const afterRename = await repo.getFolderById(testFolder.id);
+      check(
+        "renameFolder persists (re-fetch confirms new name)",
+        afterRename && afterRename.name === renamedName,
+        afterRename && afterRename.name
+      );
+
+      parentFolder = await repo.createFolder(parentName, null);
+      check("createFolder (second, parent target) returns a folder with an ID", !!parentFolder && parentFolder.id != null);
+
+      const moved = await repo.moveFolder(testFolder.id, parentFolder.id);
+      check("moveFolder returns the folder", !!moved);
+      check(
+        "moveFolder sets the new parent",
+        moved && String(moved.parentId) === String(parentFolder.id),
+        `expected parentId ${parentFolder.id}, got ${moved && moved.parentId}`
+      );
+      const afterMove = await repo.getFolderById(testFolder.id);
+      check(
+        "moveFolder persists (re-fetch confirms new parent)",
+        afterMove && String(afterMove.parentId) === String(parentFolder.id),
+        afterMove && afterMove.parentId
+      );
+    } finally {
+      if (testFolder) {
+        await repo.deleteFolder(testFolder.id);
+        const afterDelete = await repo.getFolderById(testFolder.id);
+        check("deleteFolder removes the test folder", !afterDelete, JSON.stringify(afterDelete));
+      }
+      if (parentFolder) {
+        await repo.deleteFolder(parentFolder.id);
+        const afterDelete = await repo.getFolderById(parentFolder.id);
+        check("deleteFolder removes the parent test folder", !afterDelete, JSON.stringify(afterDelete));
+      }
     }
   });
 

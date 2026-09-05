@@ -929,10 +929,48 @@ async function getFolderById(id) {
   const all = await getFolders();
   return all.find((f) => String(f.id) === String(id)) ?? null;
 }
-const createFolder = notImplemented("createFolder");
-const renameFolder = notImplemented("renameFolder");
-const moveFolder = notImplemented("moveFolder");
-const deleteFolder = notImplemented("deleteFolder");
+// Folder CRUD — VERIFIZIERT live gegen den mAirListDB Server (siehe
+// docs/MAIRLISTDB-API.md):
+//   POST   /api/v1/folders?station=1        Body: { Name, Parent } -> { Parent, ID, Name }
+//   PUT    /api/v1/folders/<id>?station=1   Body: { Name, Parent } -> null (dient sowohl
+//          Umbenennen als auch Verschieben, je nachdem welches Feld sich ändert)
+//   DELETE /api/v1/folders/<id>?station=1   -> null
+// `Parent` ist bei Top-Level-Ordnern der String "root" (siehe rowToFolder),
+// intern wird das als parentId: null repräsentiert — beim Schreiben also
+// zurückkonvertieren.
+function parentIdToApi(parentId) {
+  return parentId == null ? "root" : String(parentId);
+}
+
+async function createFolder(name, parentId) {
+  const data = await apiRequest("POST", "/api/v1/folders", {
+    body: { Name: name, Parent: parentIdToApi(parentId) },
+  });
+  return rowToFolder(data);
+}
+
+async function renameFolder(id, newName) {
+  const current = await getFolderById(id);
+  if (!current) return null;
+  await apiRequest("PUT", `/api/v1/folders/${encodeURIComponent(id)}`, {
+    body: { Name: newName, Parent: parentIdToApi(current.parentId) },
+  });
+  return getFolderById(id);
+}
+
+async function moveFolder(id, newParentId) {
+  const current = await getFolderById(id);
+  if (!current) return null;
+  await apiRequest("PUT", `/api/v1/folders/${encodeURIComponent(id)}`, {
+    body: { Name: current.name, Parent: parentIdToApi(newParentId) },
+  });
+  return getFolderById(id);
+}
+
+async function deleteFolder(id) {
+  await apiRequest("DELETE", `/api/v1/folders/${encodeURIComponent(id)}`);
+  return "ok";
+}
 
 // The functions below are loaded alongside getFolderTree() by the
 // frontend (Playlist.jsx, DatabaseManager.jsx), sometimes inside the same

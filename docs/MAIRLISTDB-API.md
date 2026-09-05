@@ -158,6 +158,9 @@ siehe [`docs/FEATURES.md` – API-basierte Datenquelle](FEATURES.md#-api-basiert
 | GET | `/api/v1/folders?station=1` | **VERIFIZIERT:** liefert den KOMPLETTEN Ordnerbaum auf einmal, nicht nur die Root-Ebene (getestet: 155 Ordner in einer einzigen Antwort) |
 | GET | `/api/v1/folders?parent=<id>&station=1` | Unterordner eines bestimmten Ordners (gefiltert) |
 | GET | `/api/v1/folders/<id>/config?station=1` | Ordner-spezifische Konfiguration |
+| POST | `/api/v1/folders?station=1` | **VERIFIZIERT:** Ordner anlegen |
+| PUT | `/api/v1/folders/<id>?station=1` | **VERIFIZIERT:** Ordner umbenennen und/oder verschieben |
+| DELETE | `/api/v1/folders/<id>?station=1` | **VERIFIZIERT:** Ordner löschen |
 
 ### Response: `/api/v1/folders?station=1` – VERIFIZIERT
 
@@ -196,6 +199,45 @@ Response ist in ein Wrapper-Objekt eingebettet, nicht direkt ein Array:
   Start (kompletter Baum), Lazy-Loading via `parent=<id>` ist optional
   möglich aber angesichts der überschaubaren Größe (155 Ordner bei
   diesem Bestand) nicht zwingend nötig
+
+### POST `/api/v1/folders?station=1` – VERIFIZIERT
+
+Legt einen neuen Ordner an.
+
+**Request-Body:**
+```json
+{ "Name": "Mein Ordner", "Parent": "5" }
+```
+
+**Response bei Erfolg (Status 200):** das neu erzeugte Objekt inkl. `ID`:
+```json
+{ "Parent": "5", "ID": "312", "Name": "Mein Ordner" }
+```
+
+- Top-Level-Ordner: `Parent: "root"` (String, wie bei GET `/folders`)
+- `ID` wird vom Server vergeben und kommt nur über diese Response zurück
+
+### PUT `/api/v1/folders/<id>?station=1` – VERIFIZIERT
+
+Dient sowohl zum Umbenennen (nur `Name` ändert sich) als auch zum
+Verschieben (nur `Parent` ändert sich) — ein Endpunkt für beides, es wird
+immer der komplette Body mit beiden Feldern gesendet.
+
+**Request-Body:**
+```json
+{ "Name": "Neuer Name", "Parent": "5" }
+```
+
+- **Content-Type:** `application/json`
+- **Response bei Erfolg:** `null` (leerer Body, Status 200) — wie bei
+  `PUT /api/v1/items/<id>`, kein Echo des aktualisierten Objekts
+- Top-Level-Ziel: `Parent: "root"`
+
+### DELETE `/api/v1/folders/<id>?station=1` – VERIFIZIERT
+
+- **Response bei Erfolg:** `null` (leerer Body, Status 200)
+- Verhalten bei nicht-leeren Ordnern (Unterordner/Items vorhanden) nicht
+  verifiziert — im Zweifel vor dem Löschen prüfen
 
 ## Items (Library)
 
@@ -572,8 +614,9 @@ aus tatsächlich beobachteten Item-Werten.
       ungeklärt (Ordner mit sehr vielen Items noch nicht getestet)
 - [ ] Item-Erstellung (`POST`? welcher Pfad? `CreateItems`-Capability
       deutet auf einen eigenen Endpunkt hin, noch nicht beobachtet)
-- [ ] Ordner-Erstellung/Löschen (`EditFolders`-Capability, Endpunkt noch
-      nicht beobachtet)
+- [x] Ordner-Erstellung/Umbenennen/Verschieben/Löschen (`EditFolders`-
+      Capability) – VERIFIZIERT: `POST`/`PUT`/`DELETE /api/v1/folders...`,
+      siehe "Folders (Ordnerbaum)" oben
 - [ ] Storage-Verwaltung (`EditStorages`-Capability, Endpunkt noch nicht
       beobachtet)
 - [ ] Pagination bei Items in einzelnen großen Ordnern (limit/offset

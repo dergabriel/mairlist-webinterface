@@ -130,6 +130,7 @@ in `apiRepository.js` sind deshalb bewusst synchron.
 | `getAttributeKeys` (aus `getConfig()`s `StandardAttributes`-XML, siehe unten) | ✅ |
 | `getDashboardStats`, `getTodayPlaylist` (siehe unten) | ✅ alle vier Dashboard-Werte echt (kein `null` mehr) |
 | `getStorages` (`/api/v1/storages`, siehe unten) | ✅ verifiziert, Endpunkt existiert (live getestet: 2 Storages) |
+| Ordner-CRUD: `createFolder`, `renameFolder`, `moveFolder`, `deleteFolder` (siehe unten) | ✅ verifiziert gegen den echten Server |
 
 **Playlist-Schreiboperationen — Read-Modify-Write auf rohen Einträgen:**
 Die API kennt nur Lesen/Schreiben der kompletten Stunde (kein
@@ -195,6 +196,21 @@ mit `ID`/`Name`/`Description`/`DefaultLocation`/`ItemCount`.
 `{ id, name, location }`, analog zu `sqlRepository.js`s Shape
 (`location` kommt aus `DefaultLocation`).
 
+**Ordner-CRUD — verifiziert:** `POST`/`PUT`/`DELETE /api/v1/folders...`
+existieren, live gegen die Produktivinstanz getestet (siehe
+`server/scripts/smoke-writes-api.js`, Abschnitt "folder CRUD"). `PUT`
+dient sowohl zum Umbenennen als auch zum Verschieben — es wird immer der
+komplette Body (`Name` + `Parent`) gesendet, `renameFolder`/`moveFolder`
+holen sich dafür zunächst das jeweils andere, unveränderte Feld über
+`getFolderById()`. Response von `POST` ist das neu erzeugte Objekt inkl.
+`ID`; `PUT`/`DELETE` antworten mit `null`, weshalb `renameFolder`/
+`moveFolder` danach erneut per `getFolderById()` lesen, um das
+aktualisierte Objekt zurückzugeben. Top-Level-Parent ist der String
+`"root"` (wie bei `getFolders()`), intern als `parentId: null`
+repräsentiert — `parentIdToApi()` konvertiert beim Schreiben zurück.
+Verhalten bei nicht-leeren Ordnern (Löschen mit Unterordnern/Items) ist
+nicht verifiziert.
+
 **`getDashboardStats`/`getTodayPlaylist`:** `getTodayPlaylist()` ist
 voll funktionsfähig (baut auf den bereits verifizierten
 `getPlaylistsByDate`/`getPlaylistById` auf). `getDashboardStats()`
@@ -219,7 +235,6 @@ Daten zu liefern):
 | Funktion / Bereich | Status |
 |---|---|
 | `createItem`, `deleteItem` | ⬜ Endpunkt nicht verifiziert |
-| Ordner-CRUD: `createFolder`, `renameFolder`, `moveFolder`, `deleteFolder` | ⬜ |
 | Storage-Verwaltung: `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
 | Item-Suche (`searchItems`), `getAttributeDefinitions`, `getCuePoints` | ⬜ |
 | `moveItemToFolder`, `uploadFile`, `resolveAudioPath` | ⬜ |

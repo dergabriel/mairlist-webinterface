@@ -368,42 +368,36 @@ Playlists/Player, hier bisher nur Index `0` beobachtet).
 muss vermutlich die zuletzt gelesene Version mitgeschickt werden, damit der
 Server nebenläufige Änderungen erkennen kann. Noch zu verifizieren.
 
-### Response: gefüllte Stunde (Struktur, gekürzt)
+### Response: gefüllte Stunde – VERIFIZIERT (korrigiert)
+
+**Wichtig, korrigiert gegenüber einer früheren Version dieser Doku:**
+Jeder Eintrag in `Items[]` ist **KEIN** `{Class:"Playlist", Time:{...},
+Item:{...}}`-Wrapper. Er **IST** das Item selbst, flach — `Title`,
+`Artist`, `Duration`, `Class` etc. liegen direkt auf dem Eintrag, es gibt
+kein verschachteltes `Item`-Feld. Verifiziert gegen eine echte, gefüllte
+Stunde (`GET /api/v1/playlists/2026/09/05/14/0`):
 
 ```json
 {
   "Items": [
     {
-      "Class": "Playlist",
-      "Time": { "Class": "Time", "Value": "18:00:00.000" },
-      "Item": {
-        "Class": "File",
-        "DatabaseID": "...",
-        "Title": "...",
-        "Artist": "...",
-        "Duration": 0,
-        "Markers": { "...": 0 },
-        "Filename": "/storages/1/files/... oder lokaler Windows-Pfad"
-      }
+      "FixTime": "14:00:00",
+      "ID": "{B29BC114-...}",
+      "Title": "PH Stundenanfang",
+      "Timing": "Soft",
+      "State": "Normal",
+      "Class": "Dummy",
+      "Customized": true,
+      "FixTimeFrame": 100
     },
     {
-      "Class": "Playlist",
-      "Time": { "Class": "Time", "Value": "..." },
-      "Item": {
-        "Class": "Container",
-        "DatabaseID": "...",
-        "Title": "...",
-        "Items": [
-          {
-            "Item": { "...": "verschachteltes Item" },
-            "PlaylistItemAttributes": {
-              "AdCampaignID": "...",
-              "AdEntryID": "...",
-              "Advertising": "..."
-            }
-          }
-        ]
-      }
+      "Artist": "OMNIMAR",
+      "Duration": 261.082,
+      "IconData": "...",
+      "DatabaseID": "...",
+      "Title": "...",
+      "Class": "File",
+      "Filename": "/storages/1/files/... oder lokaler Windows-Pfad"
     }
   ],
   "VersionInfo": {
@@ -415,15 +409,18 @@ Server nebenläufige Änderungen erkennen kann. Noch zu verifizieren.
 ```
 
 **Anmerkungen:**
-- Jeder Playlist-Eintrag hat `Class: "Playlist"`, eine `Time` (Startzeit
-  innerhalb der Stunde) und ein verschachteltes `Item`
-- `Item.Class` unterscheidet mind. `"File"` und `"Container"`
-- Container-Items haben eine eigene `Items`-Liste (z. B. Werbeblöcke), jeder
-  Eintrag dort hat wiederum `Item` + `PlaylistItemAttributes`
-- `PlaylistItemAttributes` enthält volatile, playlist-spezifische
-  Overrides (z. B. `AutoCue`, `Advertising`, `AdCampaignID`, `AdEntryID`) –
-  das ist vermutlich der Ort für alles, was NICHT dauerhaft am Library-Item
-  hängt, sondern nur für diesen Playlist-Slot gilt
+- `Class` unterscheidet mind. `"Dummy"`, `"File"` und `"Container"`
+- `"Dummy"`-Einträge sind Platzhalter (z. B. Stundenanfangs-Marker wie
+  `"PH Stundenanfang"`). Sie haben **keine** `DatabaseID` und **keine**
+  `Duration` — nur `Title` und, oft, ein explizites `FixTime`
+  (`"HH:MM:SS"`, ohne Millisekunden)
+- Normale `"File"`-Einträge tragen dagegen i. d. R. **kein** eigenes
+  Zeitfeld — ihre tatsächliche Startzeit ergibt sich kumulativ aus der
+  Stundenstart-Zeit plus der Summe der `Duration` aller vorangehenden
+  Einträge (wie bei `sqlRepository.js`'s `resequenceEntries`)
+- Container-Items (`Class: "Container"`, z. B. Werbeblöcke) haben
+  vermutlich weiterhin eine eigene `Items`-Liste für ihre Unterelemente
+  (noch nicht gegen eine echte Instanz mit Container-Inhalt verifiziert)
 - `Filename` kann sowohl auf `/storages/...` (echte Mediendateien) als auch
   auf lokale Windows-Pfade zeigen (z. B. bei Dummy-/Platzhalter-Elementen)
 

@@ -218,9 +218,14 @@ function mapMarkersToInternal(markers) {
 function mapApiItemToInternal(apiItem, folderId = null) {
   if (!apiItem) return null;
 
+  // Dummy playlist slots (Class: "Dummy", e.g. hour-start placeholders)
+  // carry no DatabaseID — leave id/internalId null instead of the bogus
+  // "undefined"/NaN that String()/Number() would otherwise produce.
+  const hasDatabaseId = apiItem.DatabaseID !== undefined && apiItem.DatabaseID !== null;
+
   return {
-    id: String(apiItem.DatabaseID),
-    internalId: Number(apiItem.DatabaseID),
+    id: hasDatabaseId ? String(apiItem.DatabaseID) : null,
+    internalId: hasDatabaseId ? Number(apiItem.DatabaseID) : null,
     externalId: null,
     type: typeToCode(apiItem.Type),
     containerType: apiItem.Class === "Container" ? apiItem.Class : null,
@@ -532,6 +537,15 @@ function pad2(n) {
   return String(n).padStart(2, "0");
 }
 
+// Seconds-since-midnight -> "HH:MM:SS", wrapping past 24h. Mirrors
+// sqlRepository.js's resequenceEntries() cursor formatting.
+function secondsToClock(totalSeconds) {
+  const h = String(Math.floor(totalSeconds / 3600) % 24).padStart(2, "0");
+  const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+  const s = String(Math.floor(totalSeconds % 60)).padStart(2, "0");
+  return `${h}:${m}:${s}`;
+}
+
 async function getPlaylistHour(year, month, day, hour) {
   const path = `/api/v1/playlists/${year}/${pad2(month)}/${pad2(day)}/${pad2(hour)}/0`;
   const data = await apiRequest("GET", path);
@@ -580,11 +594,23 @@ function parsePlaylistId(id) {
 // only appears on Container sub-items, not top-level slots — see
 // docs/MAIRLISTDB-API.md) and stays undefined here.
 //
+// Contrary to what an earlier reading of the docs assumed, each entry in
+// Items[] is NOT a { Class: "Playlist", Time: {...}, Item: {...} }
+// wrapper — it IS the item itself, flat (Title/Artist/Duration/Class
+// etc. directly on the entry), confirmed against a live server response.
+// entry.Item ?? entry stays defensive in case some contexts do wrap it.
+//
 // Container items (Class: "Container", e.g. ad blocks) are mapped as a
 // single playlist entry via mapApiItemToInternal (which already sets
 // containerType from Class) — their nested Items list isn't flattened
 // into separate entries. See docs/FEATURES.md: nested Container
 // sub-items aren't editable/expandable yet in api-mode.
+//
+// Entries carry no per-slot start time as a rule — only some (e.g.
+// Class: "Dummy" hour-start placeholders) have an explicit FixTime.
+// scheduledStart is therefore computed cumulatively from the hour's
+// start plus prior entries' durations (mirrors sqlRepository.js's
+// resequenceEntries), using FixTime only where the API sets it.
 async function getPlaylistById(id) {
   const parsed = parsePlaylistId(id);
   if (!parsed) return null;
@@ -594,12 +620,18 @@ async function getPlaylistById(id) {
   const data = await getPlaylistHour(year, month, day, hour);
   const apiItems = Array.isArray(data?.Items) ? data.Items : [];
 
+  let cursorSeconds = hour * 3600;
   const entries = apiItems.map((entry, index) => {
-    const item = mapApiItemToInternal(entry.Item, null);
+    const apiItem = entry.Item ?? entry;
+    const item = mapApiItemToInternal(apiItem, null);
+
+    const scheduledStart = entry.FixTime || secondsToClock(cursorSeconds);
+    cursorSeconds += item ? item.duration : 0;
+
     return {
       position: index + 1,
       itemId: item ? item.id : null,
-      scheduledStart: entry.Time?.Value ?? "",
+      scheduledStart,
       overrides: undefined,
       item,
     };

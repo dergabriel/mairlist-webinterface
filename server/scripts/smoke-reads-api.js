@@ -67,6 +67,12 @@ async function main() {
   await run("getStorages", async () => {
     const storages = await repo.getStorages();
     if (!Array.isArray(storages)) throw new Error("expected an array");
+    if (storages.length > 0) {
+      const s = storages[0];
+      if (typeof s.id !== "string" && typeof s.id !== "number") throw new Error("expected storage.id");
+      if (typeof s.name !== "string" || !s.name) throw new Error("expected non-empty storage.name");
+      if (typeof s.location !== "string" || !s.location) throw new Error("expected non-empty storage.location");
+    }
     return { count: storages.length, sample: storages[0] };
   });
 
@@ -80,6 +86,8 @@ async function main() {
     const stats = await repo.getDashboardStats();
     if (typeof stats.totalFolders !== "number") throw new Error("expected totalFolders to be a number");
     if (typeof stats.totalUsers !== "number") throw new Error("expected totalUsers to be a number");
+    if (typeof stats.totalItems !== "number") throw new Error("expected totalItems to be a number, got null/undefined");
+    if (typeof stats.totalStorages !== "number") throw new Error("expected totalStorages to be a number, got null/undefined");
     return stats;
   });
 

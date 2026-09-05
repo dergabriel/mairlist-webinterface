@@ -128,7 +128,7 @@ in `apiRepository.js` sind deshalb bewusst synchron.
 | `savePlaylistItemOverrides` | 🟡 nur Cue-Marker (`Markers`), andere Override-Arten werden mangels bekanntem Zielfeld verworfen |
 | `getConfig` (`/api/v1/config`) | ✅ |
 | `getAttributeKeys` (aus `getConfig()`s `StandardAttributes`-XML, siehe unten) | ✅ |
-| `getDashboardStats`, `getTodayPlaylist` (siehe unten) | 🟡 Dashboard lädt, `totalItems`/`totalStorages` bleiben `null` |
+| `getDashboardStats`, `getTodayPlaylist` (siehe unten) | ✅ alle vier Dashboard-Werte echt (kein `null` mehr) |
 | `getStorages` (`/api/v1/storages`, siehe unten) | ✅ verifiziert, Endpunkt existiert (live getestet: 2 Storages) |
 
 **Playlist-Schreiboperationen — Read-Modify-Write auf rohen Einträgen:**
@@ -188,21 +188,21 @@ XML-Parsers (keine XML-Dependency im Projekt, Format eng umrissen).
 
 **`getStorages` — verifiziert:** `GET /api/v1/storages?station=1`
 existiert doch, live gegen die Produktivinstanz getestet (2 Storages),
-siehe `docs/MAIRLISTDB-API.md`. Das exakte Response-JSON (Wrapper- vs.
-Array-Shape, genaue Feldnamen) ist noch nicht protokolliert;
-`getStorages()`/`mapApiStorageToInternal()` mappen defensiv auf
-`{ id, name, location }` und decken dabei beide bekannten
-API-Konventionen ab (`{value: [...]}` wie bei `/folders`, oder ein rohes
-Array wie bei `/items`).
+Response vollständig dokumentiert in `docs/MAIRLISTDB-API.md`: ein
+`{value, Count}`-Wrapper wie bei `/folders` (kein rohes Array), Einträge
+mit `ID`/`Name`/`Description`/`DefaultLocation`/`ItemCount`.
+`getStorages()`/`mapApiStorageToInternal()` mappen das auf
+`{ id, name, location }`, analog zu `sqlRepository.js`s Shape
+(`location` kommt aus `DefaultLocation`).
 
 **`getDashboardStats`/`getTodayPlaylist`:** `getTodayPlaylist()` ist
 voll funktionsfähig (baut auf den bereits verifizierten
 `getPlaylistsByDate`/`getPlaylistById` auf). `getDashboardStats()`
-liefert echte Werte für `totalFolders` (aus `getFolders().length`) und
-`totalUsers` (aus der von `DATA_SOURCE` unabhängigen `webAuthDb`);
-`totalItems`/`totalStorages` bleiben `null`, da die API keinen
-Gesamtzähler ohne Scan aller ~155 Ordner liefert — das Dashboard sollte
-für `null`-Werte "-" anzeigen statt zu crashen.
+liefert jetzt echte Werte für alle vier Felder: `totalFolders` (aus
+`getFolders().length`), `totalUsers` (aus der von `DATA_SOURCE`
+unabhängigen `webAuthDb`), `totalStorages` (Länge der
+`/api/v1/storages`-Liste) und `totalItems` (Summe aller `ItemCount`-Werte
+derselben Liste — kein Scan aller ~155 Ordner nötig).
 
 **`getItems(filters)` — nur mit `folderId`:** Die API hat keinen
 Endpunkt für eine ungefilterte Item-Liste über die gesamte Bibliothek

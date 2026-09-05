@@ -987,29 +987,23 @@ async function getFolderChildren(id) {
 // server, without ever guessing at a response shape that turns out wrong.
 // Response shape is unverified: tries both the `{ value: [...] }` wrapper
 // (like /api/v1/folders) and a bare array (like /api/v1/items), mapping
-// ID/Name/Path-ish fields defensively; an unrecognized shape logs a
-// warning with the raw payload once, so it's diagnosable from the server
-// log rather than silently wrong. If it 404s, storage IDs remain visible
-// only as the "/storages/<id>/files/..." prefix inside item Filename paths
-// (see resolveStorageFile above) — too thin to build a real storages list
-// from (no names/locations, no way to enumerate IDs holding no items).
+// Verified live response shape (see docs/MAIRLISTDB-API.md): a `/folders`-
+// style { value: [...], Count } wrapper, entries shaped like
+// { ID, Name, Description, DefaultLocation, ItemCount }. Mapped down to
+// { id, name, location } to match sqlRepository.js's getStorages() shape —
+// Description/ItemCount aren't part of that shape and aren't used by any
+// caller (ItemCount is summed separately in getDashboardStats() below).
 function mapApiStorageToInternal(apiStorage) {
   if (!apiStorage) return null;
   return {
     id: apiStorage.ID ?? apiStorage.Id ?? apiStorage.id,
     name: apiStorage.Name ?? apiStorage.name ?? "",
-    location: apiStorage.Path ?? apiStorage.Location ?? apiStorage.location ?? "",
+    location: apiStorage.DefaultLocation ?? apiStorage.Path ?? apiStorage.Location ?? apiStorage.location ?? "",
   };
 }
 
 async function getStorages() {
-  let data;
-  try {
-    data = await apiRequest("GET", "/api/v1/storages");
-  } catch (err) {
-    if (err instanceof ApiNotFoundError) return emptyStub("getStorages", [])();
-    throw err;
-  }
+  const data = await apiRequest("GET", "/api/v1/storages");
   const list = Array.isArray(data) ? data : data?.value || data?.Storages;
   if (!Array.isArray(list)) {
     warnOnceUnexpectedShape("getStorages");
@@ -1053,21 +1047,19 @@ const getLogs = emptyStub("getLogs", []);
 const getRecentLogs = emptyStub("getRecentLogs", []);
 
 // getDashboardStats() -> { totalItems, totalStorages, totalFolders,
-// totalUsers }, mirroring sqlRepository.js's shape. Only totalFolders is
-// cheaply knowable via the API (getFolders() already fetches the whole
-// 155-folder tree in one request); totalUsers comes from the webinterface's
-// own auth store, independent of DATA_SOURCE (see webAuthDb.js — same
-// source sqlRepository.js's getDashboardStats() re-exports). totalItems and
-// totalStorages have no whole-library counter in the API (items only via
-// per-folder/per-id queries; storages endpoint unverified, see getStorages
-// above) and would require walking all folders to derive — deliberately
-// left null rather than computed expensively, so the frontend should
-// render "-" for a null stat rather than crash.
+// totalUsers }, mirroring sqlRepository.js's shape. totalFolders comes from
+// getFolders() (already fetches the whole 155-folder tree in one request);
+// totalUsers comes from the webinterface's own auth store, independent of
+// DATA_SOURCE (see webAuthDb.js). totalItems has no whole-library counter of
+// its own, but /api/v1/storages's ItemCount field (verified live, see
+// docs/MAIRLISTDB-API.md) gives an exact sum without walking folders;
+// totalStorages is just that same list's length.
 async function getDashboardStats() {
-  const folders = await getFolders();
+  const [folders, storagesData] = await Promise.all([getFolders(), apiRequest("GET", "/api/v1/storages")]);
+  const storagesList = Array.isArray(storagesData) ? storagesData : storagesData?.value || storagesData?.Storages || [];
   return {
-    totalItems: null,
-    totalStorages: null,
+    totalItems: storagesList.reduce((sum, s) => sum + (Number(s.ItemCount) || 0), 0),
+    totalStorages: storagesList.length,
     totalFolders: folders.length,
     totalUsers: webAuthDb.getUsers().length,
   };

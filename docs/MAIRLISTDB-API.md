@@ -351,15 +351,44 @@ Item-Antwort (ohne führendes `/storages/<id>/files/`).
 
 ### Response: `/api/v1/storages?station=1` – VERIFIZIERT
 
-Live gegen die Produktivinstanz getestet (2 Storages), Feldnamen mindestens
-`id`, `name`, `location` (exaktes Response-JSON hier noch nicht
-protokolliert – bei Gelegenheit mit
-`Invoke-RestMethod -Uri "http://localhost:8840/api/v1/storages?station=1" -Credential $cred | ConvertTo-Json -Depth 10`
-nachtragen). `apiRepository.js`s `mapApiStorageToInternal()` mappt defensiv
-auf `{ id, name, location }`, unterstützt dabei sowohl
-`ID`/`Name`/`Path` als auch `Id`/`Name`/`Location`-Schreibweisen als
-Serverantwort – welche der beiden tatsächlich zurückkommt, ist noch nicht
-festgehalten.
+Live gegen die Produktivinstanz getestet:
+
+```json
+{
+  "value": [
+    {
+      "DefaultLocation": "C:\\Users\\Administrator\\Music",
+      "Description": "",
+      "ID": "1",
+      "Name": "Datenbank",
+      "ItemCount": 2230
+    },
+    {
+      "DefaultLocation": "C:\\Users\\Digital X Radio\\Documents\\AUTOMAT",
+      "Description": "",
+      "ID": "2",
+      "Name": "VT Schienen",
+      "ItemCount": 1
+    }
+  ],
+  "Count": 2
+}
+```
+
+**Anmerkungen:**
+- Wrapper-Format `{value, Count}` wie bei `/api/v1/folders`, **kein**
+  rohes Array
+- Felder: `ID`, `Name`, `Description`, `DefaultLocation`, `ItemCount`
+- `ItemCount` ist die Anzahl Items in diesem Storage — Summe über alle
+  Storages ergibt die Gesamtzahl aller Items (hier: 2230 + 1 = 2231),
+  nutzbar als `totalItems` für `getDashboardStats()` ohne alle Ordner
+  einzeln abzufragen
+- `apiRepository.js`s `mapApiStorageToInternal()` mappt auf
+  `{ id, name, location }` (analog zu `sqlRepository.js`s
+  `getStorages()`-Shape): `location` kommt aus `DefaultLocation`.
+  `Description` und `ItemCount` fließen nicht in die gemappten
+  Storage-Objekte ein, `ItemCount` wird aber separat für
+  `getDashboardStats()` aufsummiert (siehe unten)
 
 ## Playlists
 
@@ -560,9 +589,8 @@ aus tatsächlich beobachteten Item-Werten.
       `getArtists`/`getTitles` in `apiRepository.js` funktionieren
       (liefern nur mehr Daten als nötig)
 - [x] **`/api/v1/storages`** – VERIFIZIERT: Endpunkt existiert doch, live
-      getestet (2 Storages), siehe "Storages / Audio-Dateien" oben. Das
-      exakte Response-JSON (Wrapper- vs. Array-Shape, genaue Feldnamen) ist
-      noch nicht protokolliert worden — bei Gelegenheit nachtragen
+      getestet (2 Storages), Response-Format vollständig dokumentiert,
+      siehe "Storages / Audio-Dateien" oben
 - [ ] **Kein `/api/v1/itemtypes`-Endpunkt gefunden** – weder ein eigener
       Endpunkt noch ein Feld in `/api/v1/config`. `sqlRepository.js`s
       `getItemTypes()` braucht ein `DISTINCT type, COUNT(*) GROUP BY type`
@@ -579,10 +607,11 @@ aus tatsächlich beobachteten Item-Werten.
 - [x] **`getDashboardStats`/`getTodayPlaylist` über die API** –
       `getTodayPlaylist()` ist voll implementiert (baut auf
       `getPlaylistsByDate`/`getPlaylistById` auf). `getDashboardStats()`
-      liefert `totalFolders` (aus `getFolders().length`) und `totalUsers`
-      (aus der DATA_SOURCE-unabhängigen `webAuthDb`); `totalItems` und
-      `totalStorages` bleiben `null`, da die API keinen
-      Gesamtzähler-Endpunkt hat und ein Scan aller Ordner zu teuer wäre.
+      liefert `totalFolders` (aus `getFolders().length`), `totalUsers`
+      (aus der DATA_SOURCE-unabhängigen `webAuthDb`), `totalStorages`
+      (Länge der `/api/v1/storages`-Liste) und `totalItems` (Summe aller
+      `ItemCount`-Werte aus derselben Liste, siehe "Storages /
+      Audio-Dateien" oben) – kein Scan aller Ordner nötig.
 - [ ] Rate-Limiting oder Verbindungslimits
 - [ ] **Alternative Authentifizierung per Token:** Der offizielle
       mAirList-Client bietet in seiner "Internet Client"-Konfiguration

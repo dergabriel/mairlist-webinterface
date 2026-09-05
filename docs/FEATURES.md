@@ -211,6 +211,19 @@ repräsentiert — `parentIdToApi()` konvertiert beim Schreiben zurück.
 Verhalten bei nicht-leeren Ordnern (Löschen mit Unterordnern/Items) ist
 nicht verifiziert.
 
+**`createItem`/`deleteItem` — verifiziert:** `POST`/`DELETE
+/api/v1/items...` existieren, live gegen die Produktivinstanz getestet
+(siehe `server/scripts/smoke-writes-api.js`). `POST` verlangt `Class`
+und `Filename` als Pflichtfelder (fehlt eines, liefert der Server einen
+konkreten Fehlertext) und antwortet mit einem nackten JSON-String (der
+neuen Item-ID), nicht mit einem Objekt — `createItem()` lädt das neue
+Item deshalb im Anschluss per `getItemById()` nach, analog zu
+`updateItem()`. `DELETE` antwortet mit `null`. Eine mitgegebene
+`folderId` wird beim Anlegen aktuell **nicht** umgesetzt — die dafür im
+Client-Traffic beobachtete Ordner-Zuordnung
+(`POST /api/v1/folders/<id>/items`) hat ein unverifiziertes Body-Format,
+siehe `docs/MAIRLISTDB-API.md` "Offene Punkte".
+
 **`getDashboardStats`/`getTodayPlaylist`:** `getTodayPlaylist()` ist
 voll funktionsfähig (baut auf den bereits verifizierten
 `getPlaylistsByDate`/`getPlaylistById` auf). `getDashboardStats()`
@@ -234,7 +247,6 @@ Daten zu liefern):
 
 | Funktion / Bereich | Status |
 |---|---|
-| `createItem`, `deleteItem` | ⬜ Endpunkt nicht verifiziert |
 | Storage-Verwaltung: `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
 | Item-Suche (`searchItems`), `getAttributeDefinitions`, `getCuePoints` | ⬜ |
 | `moveItemToFolder`, `uploadFile`, `resolveAudioPath` | ⬜ |

@@ -11,8 +11,10 @@
 // if an assertion above fails, via a finally block). Never point
 // SMOKE_ITEM_ID / SMOKE_DATE at anything currently on air or scheduled.
 // Also creates/renames/moves/deletes throwaway folders named
-// "ZZZ-SmokeTest-<timestamp>*" to verify folder CRUD — cleaned up in a
-// finally block even if an assertion fails midway.
+// "ZZZ-SmokeTest-<timestamp>*" to verify folder CRUD, and creates/deletes
+// a throwaway item titled "ZZZ-SmokeTest" (reusing SMOKE_ITEM_ID's own
+// Filename) to verify createItem/deleteItem — cleaned up in a finally
+// block even if an assertion fails midway.
 //
 // Usage:
 //   API_DB_BASE_URL=http://localhost:8840 API_DB_USER=... API_DB_PASSWORD=... \
@@ -91,26 +93,41 @@ async function main() {
     );
   });
 
-  // ---- createItem / deleteItem: confirm they're stubs, not silently broken ----
+  // ---- createItem / deleteItem: create a throwaway item, verify it's
+  // findable, delete it, verify it's gone. Reuses the smoke item's own
+  // Filename so the test doesn't need a separate hardcoded audio path. ----
 
-  await run("createItem (unimplemented stub)", async () => {
-    let threw = false;
-    try {
-      await repo.createItem({});
-    } catch (e) {
-      threw = true;
+  await run("createItem / deleteItem (create, find, delete, confirm gone)", async () => {
+    const template = await repo.getItemById(itemId);
+    if (!template || !template.relativePath) {
+      throw new Error(`item ${itemId} not found or has no relativePath — pick a different SMOKE_ITEM_ID`);
     }
-    check("createItem throws", threw);
-  });
 
-  await run("deleteItem (unimplemented stub)", async () => {
-    let threw = false;
+    let created = null;
     try {
-      await repo.deleteItem(itemId);
-    } catch (e) {
-      threw = true;
+      created = await repo.createItem({
+        title: "ZZZ-SmokeTest",
+        type: "music",
+        relativePath: template.relativePath,
+      });
+      check("createItem returns an item with an ID", !!created && created.id != null, JSON.stringify(created));
+      check(
+        "createItem sets the given title",
+        created && created.title === "ZZZ-SmokeTest",
+        created && created.title
+      );
+
+      const found = await repo.getItemById(created.id);
+      check("created item is findable via getItemById", !!found && found.id === created.id);
+    } finally {
+      if (created) {
+        const deleted = await repo.deleteItem(created.id);
+        check("deleteItem returns true", deleted === true, deleted);
+
+        const afterDelete = await repo.getItemById(created.id);
+        check("deleted item is gone (getItemById returns null)", afterDelete === null, JSON.stringify(afterDelete));
+      }
     }
-    check("deleteItem throws", threw);
   });
 
   // ---- writeHour: rewrite an unimportant hour unchanged, check Version increments ----

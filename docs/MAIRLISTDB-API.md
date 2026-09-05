@@ -254,6 +254,8 @@ immer der komplette Body mit beiden Feldern gesendet.
 | GET | `/api/v1/items/<id>/restrictions?station=1` | Restriktionen (Campaigns/Sperren) eines Items |
 | GET | `/api/v1/items/<id>/history?station=1` | Abspielhistorie eines Items |
 | PUT | `/api/v1/items/<id>` | Item aktualisieren (Body-Format: Annahme, siehe unten) |
+| POST | `/api/v1/items?station=1` | **VERIFIZIERT:** neues Item anlegen |
+| DELETE | `/api/v1/items/<id>?station=1` | **VERIFIZIERT:** Item löschen |
 
 ### Response: `/api/v1/items/<id>?station=1`
 
@@ -379,6 +381,44 @@ tatsächlich persistiert wurde.
 - Es reicht, das komplette vom GET erhaltene Objekt zu nehmen, einzelne
   Felder zu ändern und unverändert zurückzuschicken – keine Teil-Updates
   nötig, kein separates "Diff"-Format
+
+### POST `/api/v1/items?station=1` – VERIFIZIERT
+
+Live gegen den Server getestet (schrittweises Ermitteln der Pflichtfelder
+durch gezieltes Weglassen):
+
+```json
+{
+  "Title": "...",
+  "Type": "Music",
+  "Class": "File",
+  "Filename": "/storages/1/files/dateiname.mp3"
+}
+```
+
+- **Pflichtfelder:** `Class` (ohne → Fehler `"Invalid playlist item
+  class"`) und `Filename` (ohne → Fehler `"Invalid location type"`).
+  `Title` und `Type` wurden ohne Weiteres akzeptiert.
+- Weitere Felder aus dem PUT-Format (`Markers`, `Attributes`,
+  `Amplification` etc.) sind vermutlich optional mitgebbar, analog zu
+  PUT — nicht einzeln durchgetestet.
+- **Response bei Erfolg:** ein **nackter JSON-String** mit der neuen
+  Item-ID, z. B. `"2634"` — **kein** Objekt wie bei GET/PUT.
+- Um das vollständige Item zurückzugeben, muss im Anschluss ein
+  `GET /api/v1/items/<neue-id>` erfolgen (macht `apiRepository.js`s
+  `createItem()` bereits, analog zu `updateItem()`).
+
+**Offener Punkt (nicht verifiziert):** Im Client-Traffic wurde zusätzlich
+`POST /api/v1/folders/<folderId>/items` beobachtet — der Client ruft das
+nach dem `POST /items` auf, vermutlich um das neue Item einem Ordner
+zuzuordnen. Das Body-Format ist unbekannt (vermutlich die Item-ID, aber
+nicht getestet). `apiRepository.js`s `createItem()` ordnet neu angelegte
+Items daher noch keinem Ordner zu, auch wenn `folderId` im Request
+mitgegeben wird.
+
+### DELETE `/api/v1/items/<id>?station=1` – VERIFIZIERT
+
+- **Response bei Erfolg:** `null`, Status 200.
 
 ## Storages / Audio-Dateien
 
@@ -612,8 +652,10 @@ aus tatsächlich beobachteten Item-Werten.
 - [x] Pagination bei Ordnern – kein Hinweis auf Pagination bei 155
       Ordnern in einer Antwort. Für Items in großen Ordnern weiterhin
       ungeklärt (Ordner mit sehr vielen Items noch nicht getestet)
-- [ ] Item-Erstellung (`POST`? welcher Pfad? `CreateItems`-Capability
-      deutet auf einen eigenen Endpunkt hin, noch nicht beobachtet)
+- [x] Item-Erstellung/-Löschung (`CreateItems`-Capability) – VERIFIZIERT:
+      `POST`/`DELETE /api/v1/items...`, siehe "Items" oben. Offen bleibt
+      nur die Ordner-Zuordnung neuer Items (`POST
+      /api/v1/folders/<id>/items`, Body-Format nicht verifiziert)
 - [x] Ordner-Erstellung/Umbenennen/Verschieben/Löschen (`EditFolders`-
       Capability) – VERIFIZIERT: `POST`/`PUT`/`DELETE /api/v1/folders...`,
       siehe "Folders (Ordnerbaum)" oben

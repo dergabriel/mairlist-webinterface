@@ -439,21 +439,48 @@ async function updateItem(id, changes) {
   return getItemById(id);
 }
 
-// Endpoint not verified against the live server (CreateItems capability
-// is advertised, but no creation request has been observed in traffic —
-// see docs/MAIRLISTDB-API.md "Offene Punkte"). Deliberately not guessing
-// a path.
-async function createItem() {
-  throw new Error(
-    "createItem über API noch nicht implementiert — Endpunkt nicht verifiziert, siehe docs/MAIRLISTDB-API.md offene Punkte"
-  );
+// POST /api/v1/items?station=1 — VERIFIZIERT live gegen den mAirListDB
+// Server (siehe docs/MAIRLISTDB-API.md): Pflichtfelder sind Class (ohne
+// -> "Invalid playlist item class") und Filename (ohne -> "Invalid
+// location type"); die Response ist ein nackter JSON-String mit der
+// neuen Item-ID (z. B. "2634"), kein Objekt.
+//
+// mapInternalItemToApi() liefert bereits Class ("File"/"Container" via
+// containerType) und Filename (aus relativePath), also reicht es, das
+// interne Item durch dieselbe Mapping-Funktion wie updateItem/
+// insertPlaylistItem zu schicken. DatabaseID wird dabei mitgeschickt
+// (String(undefined) = "undefined"), ist beim Anlegen aber irrelevant —
+// der Server vergibt ohnehin eine neue ID und ignoriert das Feld
+// offenbar (bestätigt durch den Live-Test).
+//
+// Ordner-Zuordnung (POST /api/v1/folders/<id>/items, im Client-Traffic
+// beobachtet) ist NICHT verifiziert — Body-Format unbekannt. Eine
+// mitgegebene folderId wird hier bewusst ignoriert statt geraten
+// umgesetzt; siehe docs/MAIRLISTDB-API.md "Offene Punkte".
+async function createItem(data = {}) {
+  const apiItem = mapInternalItemToApi({
+    ...data,
+    containerType: data.containerType ?? null,
+  });
+  if (!apiItem.Filename) {
+    throw new Error("createItem: relativePath (Filename) ist erforderlich");
+  }
+
+  const newId = await apiRequest("POST", "/api/v1/items", { body: apiItem });
+  return getItemById(String(newId));
 }
 
-// No delete endpoint observed in traffic — see docs/MAIRLISTDB-API.md.
-async function deleteItem() {
-  throw new Error(
-    "deleteItem über API noch nicht implementiert — Endpunkt nicht verifiziert, siehe docs/MAIRLISTDB-API.md offene Punkte"
-  );
+// DELETE /api/v1/items/<id>?station=1 — VERIFIZIERT live gegen den
+// mAirListDB Server (siehe docs/MAIRLISTDB-API.md): Response ist `null`
+// bei Status 200.
+async function deleteItem(id) {
+  try {
+    await apiRequest("DELETE", `/api/v1/items/${encodeURIComponent(id)}`);
+    return true;
+  } catch (err) {
+    if (err instanceof ApiNotFoundError) return false;
+    throw err;
+  }
 }
 
 async function getItemRestrictions(itemId) {

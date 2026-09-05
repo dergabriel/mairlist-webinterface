@@ -126,6 +126,10 @@ in `apiRepository.js` sind deshalb bewusst synchron.
 | `getItems` (nur mit `folderId`, siehe unten) | ✅ |
 | `reorderPlaylist`, `insertPlaylistItem`, `removePlaylistItem` (Read-Modify-Write auf den rohen `Items[]`, siehe unten) | ✅ |
 | `savePlaylistItemOverrides` | 🟡 nur Cue-Marker (`Markers`), andere Override-Arten werden mangels bekanntem Zielfeld verworfen |
+| `getConfig` (`/api/v1/config`) | ✅ |
+| `getAttributeKeys` (aus `getConfig()`s `StandardAttributes`-XML, siehe unten) | ✅ |
+| `getDashboardStats`, `getTodayPlaylist` (siehe unten) | 🟡 Dashboard lädt, `totalItems`/`totalStorages` bleiben `null` |
+| `getStorages` (`/api/v1/storages`, siehe unten) | 🟡 ungeprüft — versucht den Endpunkt, fällt bei 404 auf `[]` zurück |
 
 **Playlist-Schreiboperationen — Read-Modify-Write auf rohen Einträgen:**
 Die API kennt nur Lesen/Schreiben der kompletten Stunde (kein
@@ -155,21 +159,50 @@ Container-Eintrag, aber nicht einzeln aufklapp- oder bearbeitbar. Ein
 Container ohne eigene Sub-Items führt zu keinem Fehler, sondern zeigt
 schlicht keine Sub-Items an.
 
-**Bewusst leer statt Fehler** (`getStorages`, `getItemTypes`,
-`getAttributeKeys`): Diese Funktionen liefern im api-Modus ein leeres
-Array statt eines Fehlers. Grund: Das Frontend (`Playlist.jsx`,
-`DatabaseManager.jsx`) lädt den Ordnerbaum zusammen mit solchen Listen
-in einem gemeinsamen `Promise.all` — würde auch nur eine davon werfen,
-schlägt der gesamte Batch fehl und die Sidebar zeigt "Baum nicht
-verfügbar", obwohl `/api/tree` selbst erfolgreich war. Ein leeres Array
-lässt die UI laden; es gibt für diese Funktionen aber (noch) keinen
-entsprechenden Single-Shot-Endpunkt in der mAirListDB Server API (siehe
-`docs/MAIRLISTDB-API.md`). `getItems` liefert ebenfalls `[]`, allerdings
-nur wenn keine `folderId` übergeben wird (siehe unten) — mit `folderId`
-liefert es echte Daten. Jede dieser Funktionen loggt beim ersten Aufruf
-seit Serverstart einmalig eine `console.warn`-Zeile, damit der leere
-Zustand im Server-Log sichtbar bleibt, ohne bei jedem Request zu
-spammen.
+**Bewusst leer statt Fehler** (`getItemTypes`, `getLogs`,
+`getRecentLogs`, `getStorages` im 404-Fall): Diese Funktionen liefern im
+api-Modus ein leeres Array statt eines Fehlers. Grund: Das Frontend
+(`Playlist.jsx`, `DatabaseManager.jsx`) lädt den Ordnerbaum zusammen mit
+solchen Listen in einem gemeinsamen `Promise.all` — würde auch nur eine
+davon werfen, schlägt der gesamte Batch fehl und die Sidebar zeigt "Baum
+nicht verfügbar", obwohl `/api/tree` selbst erfolgreich war. Ein leeres
+Array lässt die UI laden; es gibt für `getItemTypes`/`getLogs`/
+`getRecentLogs` (noch) keinen entsprechenden Single-Shot-Endpunkt in der
+mAirListDB Server API (siehe `docs/MAIRLISTDB-API.md`). `getItems`
+liefert ebenfalls `[]`, allerdings nur wenn keine `folderId` übergeben
+wird (siehe unten) — mit `folderId` liefert es echte Daten. Jede dieser
+Funktionen loggt beim ersten Aufruf seit Serverstart einmalig eine
+`console.warn`-Zeile, damit der leere Zustand im Server-Log sichtbar
+bleibt, ohne bei jedem Request zu spammen.
+
+**`getAttributeKeys` — aus dem Config-Schema, nicht aus Item-Daten:**
+Anders als `sqlRepository.js` (das die tatsächlich beobachteten
+Attribut-Werte aus den Items aggregiert) liest `apiRepository.js`s
+`getAttributeKeys()` das Attribut-**Schema** aus `/api/v1/config`s
+`StandardAttributes`-XML-Feld (siehe `docs/MAIRLISTDB-API.md`). `values`
+ist deshalb nur für `Kind="DropDown"`/`"Check"`-Attribute gefüllt
+(deren erlaubte Werte im Schema stehen); Freitext-Attribute liefern
+`values: []`, auch wenn im Bestand bereits Werte dafür existieren. Das
+Parsing nutzt einen gezielten regulären Ausdruck statt eines
+XML-Parsers (keine XML-Dependency im Projekt, Format eng umrissen).
+
+**`getStorages` — Endpunkt versucht, ungeprüft:** `EditStorages` ist
+eine advertised Capability, aber in dieser Entwicklungsumgebung war kein
+mAirListDB Server erreichbar, um `GET /api/v1/storages?station=1`
+tatsächlich zu testen. `getStorages()` versucht den Endpunkt und fällt
+bei 404 auf `[]` zurück; bei Erfolg wird das Response-Format defensiv
+zwischen zwei bekannten API-Konventionen geraten (`{value: [...]}` wie
+bei `/folders`, oder ein rohes Array wie bei `/items`) — muss gegen die
+echte Produktivinstanz verifiziert werden.
+
+**`getDashboardStats`/`getTodayPlaylist`:** `getTodayPlaylist()` ist
+voll funktionsfähig (baut auf den bereits verifizierten
+`getPlaylistsByDate`/`getPlaylistById` auf). `getDashboardStats()`
+liefert echte Werte für `totalFolders` (aus `getFolders().length`) und
+`totalUsers` (aus der von `DATA_SOURCE` unabhängigen `webAuthDb`);
+`totalItems`/`totalStorages` bleiben `null`, da die API keinen
+Gesamtzähler ohne Scan aller ~155 Ordner liefert — das Dashboard sollte
+für `null`-Werte "-" anzeigen statt zu crashen.
 
 **`getItems(filters)` — nur mit `folderId`:** Die API hat keinen
 Endpunkt für eine ungefilterte Item-Liste über die gesamte Bibliothek
@@ -190,7 +223,8 @@ Daten zu liefern):
 | Storage-Verwaltung: `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
 | Item-Suche (`searchItems`), `getAttributeDefinitions`, `getCuePoints` | ⬜ |
 | `moveItemToFolder`, `uploadFile`, `resolveAudioPath` | ⬜ |
-| Dashboard/Logs-Aggregation: `getLogs`, `getDashboardStats`, `getRecentLogs`, `getTodayPlaylist` | ⬜ |
+| `getItemTypes` | ⬜ kein Endpunkt gefunden, bleibt leerer Stub (siehe oben) |
+| `getLogs`, `getRecentLogs` | ⬜ kein Logs-Endpunkt gefunden, liefern `[]` statt Fehler (siehe oben) |
 
 ---
 

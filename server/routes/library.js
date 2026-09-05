@@ -113,8 +113,8 @@ router.get("/folders/:id/children", requireScope("library.read"), async (req, re
 });
 
 // GET /api/storages
-router.get("/storages", requireScope("library.read"), (req, res, next) => {
-  try { res.json(repo.getStorages()); } catch (e) { next(e); }
+router.get("/storages", requireScope("library.read"), async (req, res, next) => {
+  try { res.json(await repo.getStorages()); } catch (e) { next(e); }
 });
 
 // POST /api/storages -> create a new storage. Body: { name, path }
@@ -404,13 +404,13 @@ router.put("/playlists/:id/items/:position/overrides", requireScope("library.wri
 });
 
 // GET /api/logs?date=YYYY-MM-DD&limit=200&offset=0 -> playout log entries, newest first
-router.get("/logs", requireScope("library.read"), (req, res, next) => {
+router.get("/logs", requireScope("library.read"), async (req, res, next) => {
   try {
     const { date, limit, offset } = req.query;
     if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ error: "date muss im Format YYYY-MM-DD sein" });
     }
-    res.json(repo.getLogs({
+    res.json(await repo.getLogs({
       date,
       limit: limit ? Number(limit) : 200,
       offset: offset ? Number(offset) : 0,
@@ -419,12 +419,12 @@ router.get("/logs", requireScope("library.read"), (req, res, next) => {
 });
 
 // GET /api/dashboard -> stats, recent logs, today's playlist and system info for the overview page
-router.get("/dashboard", requireScope("library.read"), (req, res, next) => {
+router.get("/dashboard", requireScope("library.read"), async (req, res, next) => {
   try {
     res.json({
-      stats: repo.getDashboardStats(),
-      recentLogs: repo.getRecentLogs(10),
-      todayPlaylist: repo.getTodayPlaylist(),
+      stats: await repo.getDashboardStats(),
+      recentLogs: await repo.getRecentLogs(10),
+      todayPlaylist: await repo.getTodayPlaylist(),
       system: {
         dataSource: process.env.DATA_SOURCE || "mock",
         dbPath: process.env.DATA_SOURCE === "sqlite" ? (process.env.DB_PATH || "server/mairlist.mldb") : null,

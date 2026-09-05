@@ -16,6 +16,11 @@
 // rather than sqlRepository.js's getFolderTree()/getItems(filters) — the
 // two repositories are not yet interface-identical.
 
+// Webinterface's own user store (bcrypt, separate SQLite file) — independent
+// of DATA_SOURCE (see docs/FEATURES.md), used only for getDashboardStats()'s
+// totalUsers below.
+const webAuthDb = require("./webAuthDb");
+
 const BASE_URL = process.env.API_DB_BASE_URL || "http://localhost:8840";
 const API_USER = process.env.API_DB_USER;
 const API_PASSWORD = process.env.API_DB_PASSWORD;
@@ -782,6 +787,57 @@ async function getCapabilities() {
   return apiRequest("GET", "/api/v1/capabilities", { withStation: false });
 }
 
+async function getConfig() {
+  return apiRequest("GET", "/api/v1/config");
+}
+
+// ---- attribute keys (from /api/v1/config's StandardAttributes XML) ----
+//
+// The API has no dedicated attribute-schema endpoint, but /api/v1/config's
+// StandardAttributes field carries exactly this information as an XML
+// string (see docs/MAIRLISTDB-API.md): one <StandardAttribute Name="..."
+// Kind="DropDown|Check"?> per attribute, each optionally with a nested
+// <Values><Value>...</Value></Values> list.
+//
+// Deliberately regex-based rather than a real XML parser: the project has
+// no XML dependency yet (grepped package.json — none present), and this
+// format is narrow and stable (attribute-defining tags only, no nesting
+// beyond one Values level, no namespaces/CDATA/entities to worry about).
+// Pulling in a parser dependency for one field wasn't worth it without
+// checking with the user first; a small targeted extraction is safer than
+// guessing at a library choice.
+const STANDARD_ATTRIBUTE_RE = /<StandardAttribute\s+Name="([^"]*)"[^>]*?(\/>|>([\s\S]*?)<\/StandardAttribute>)/g;
+const VALUE_RE = /<Value>([^<]*)<\/Value>/g;
+
+function parseStandardAttributesXml(xml) {
+  if (!xml) return [];
+  const result = [];
+  let match;
+  STANDARD_ATTRIBUTE_RE.lastIndex = 0;
+  while ((match = STANDARD_ATTRIBUTE_RE.exec(xml))) {
+    const name = match[1];
+    const inner = match[3] || "";
+    const values = [];
+    let valueMatch;
+    VALUE_RE.lastIndex = 0;
+    while ((valueMatch = VALUE_RE.exec(inner))) {
+      values.push(valueMatch[1]);
+    }
+    if (name) result.push({ key: name, values });
+  }
+  return result;
+}
+
+// Mirrors sqlRepository.js's getAttributeKeys() -> [{ key, values }]. Unlike
+// the SQL version (which derives `values` from actually-observed item
+// attribute values), `values` here comes from the config schema's
+// Kind="DropDown"/"Check" <Values> list where present — free-text
+// attributes (no Kind) have no enumerable values and get values: [].
+async function getAttributeKeys() {
+  const config = await getConfig();
+  return parseStandardAttributesXml(config?.StandardAttributes);
+}
+
 // ---- artists / titles (distinct-value search) ----
 //
 // docs/MAIRLISTDB-API.md documents these as `?artists&time=...&station=1` /
@@ -921,22 +977,119 @@ async function getFolderChildren(id) {
   const items = await getItemsByFolder(id);
   return { folders, items };
 }
-const getStorages = emptyStub("getStorages", []);
+// No /api/v1/storages endpoint has been observed in traffic (unlike
+// /api/v1/folders, /items, /playlists — see docs/MAIRLISTDB-API.md), and
+// there is no live server available in this environment to probe it
+// against. EditStorages is an advertised capability though, so this tries
+// the endpoint (mirroring /api/v1/folders' station-scoped GET convention)
+// and falls back to the same honest empty-array stub as before on a 404 —
+// self-verifying the first time this actually runs against the live
+// server, without ever guessing at a response shape that turns out wrong.
+// Response shape is unverified: tries both the `{ value: [...] }` wrapper
+// (like /api/v1/folders) and a bare array (like /api/v1/items), mapping
+// ID/Name/Path-ish fields defensively; an unrecognized shape logs a
+// warning with the raw payload once, so it's diagnosable from the server
+// log rather than silently wrong. If it 404s, storage IDs remain visible
+// only as the "/storages/<id>/files/..." prefix inside item Filename paths
+// (see resolveStorageFile above) — too thin to build a real storages list
+// from (no names/locations, no way to enumerate IDs holding no items).
+function mapApiStorageToInternal(apiStorage) {
+  if (!apiStorage) return null;
+  return {
+    id: apiStorage.ID ?? apiStorage.Id ?? apiStorage.id,
+    name: apiStorage.Name ?? apiStorage.name ?? "",
+    location: apiStorage.Path ?? apiStorage.Location ?? apiStorage.location ?? "",
+  };
+}
+
+async function getStorages() {
+  let data;
+  try {
+    data = await apiRequest("GET", "/api/v1/storages");
+  } catch (err) {
+    if (err instanceof ApiNotFoundError) return emptyStub("getStorages", [])();
+    throw err;
+  }
+  const list = Array.isArray(data) ? data : data?.value || data?.Storages;
+  if (!Array.isArray(list)) {
+    warnOnceUnexpectedShape("getStorages");
+    return [];
+  }
+  return list.map(mapApiStorageToInternal);
+}
 const createStorage = notImplemented("createStorage");
 const updateStorage = notImplemented("updateStorage");
 const deleteStorage = notImplemented("deleteStorage");
+
+// No /api/v1/itemtypes (or similar) endpoint documented or observed, and
+// /api/v1/config has no item-type field either (only StandardAttributes,
+// used by getAttributeKeys above). sqlRepository.js's getItemTypes() derives
+// its list from `SELECT DISTINCT type, COUNT(*) ... GROUP BY type` over the
+// full items table — the API has no equivalent whole-library scan (GET
+// /api/v1/items always requires folder=<id> or ids=<id,...>, see docs), so
+// getting real counts would mean walking all ~155 folders. A hardcoded
+// list (Music/Jingle/Sweeper/Drop/Container/Dummy, from types seen in
+// traffic) was considered, but every list field sqlRepository.js provides
+// (hasItems, note) would then be a guess rather than derived data — worse
+// than an honest empty result. Stays an empty stub; see "Offene Punkte" in
+// docs/MAIRLISTDB-API.md.
 const getItemTypes = emptyStub("getItemTypes", []);
-const getAttributeKeys = emptyStub("getAttributeKeys", []);
+
 const searchItems = notImplemented("searchItems");
 const getCuePoints = notImplemented("getCuePoints");
 const getAttributeDefinitions = notImplemented("getAttributeDefinitions");
 const moveItemToFolder = notImplemented("moveItemToFolder");
 const uploadFile = notImplemented("uploadFile");
 const resolveAudioPath = notImplemented("resolveAudioPath");
-const getLogs = notImplemented("getLogs");
-const getDashboardStats = notImplemented("getDashboardStats");
-const getRecentLogs = notImplemented("getRecentLogs");
-const getTodayPlaylist = notImplemented("getTodayPlaylist");
+
+// No /api/v1/log(s) endpoint documented or observed — the only playout-
+// history endpoint is per item (GET /api/v1/items/<id>/history, already
+// used by getItemHistory), which doesn't scale to a library-wide log view
+// (would mean one request per item). Switched from a throwing stub to an
+// empty result (mirrors the getStorages/getItemTypes/getAttributeKeys
+// pattern) so the Logs page renders empty instead of erroring; warns once
+// so the gap stays visible in the server log.
+const getLogs = emptyStub("getLogs", []);
+const getRecentLogs = emptyStub("getRecentLogs", []);
+
+// getDashboardStats() -> { totalItems, totalStorages, totalFolders,
+// totalUsers }, mirroring sqlRepository.js's shape. Only totalFolders is
+// cheaply knowable via the API (getFolders() already fetches the whole
+// 155-folder tree in one request); totalUsers comes from the webinterface's
+// own auth store, independent of DATA_SOURCE (see webAuthDb.js — same
+// source sqlRepository.js's getDashboardStats() re-exports). totalItems and
+// totalStorages have no whole-library counter in the API (items only via
+// per-folder/per-id queries; storages endpoint unverified, see getStorages
+// above) and would require walking all folders to derive — deliberately
+// left null rather than computed expensively, so the frontend should
+// render "-" for a null stat rather than crash.
+async function getDashboardStats() {
+  const folders = await getFolders();
+  return {
+    totalItems: null,
+    totalStorages: null,
+    totalFolders: folders.length,
+    totalUsers: webAuthDb.getUsers().length,
+  };
+}
+
+// getTodayPlaylist() -> today's playlist entries across all hours with
+// entries, resolved against items. Unlike the other stubs on this page,
+// this one is fully implementable: getPlaylistsByDate/getPlaylistById are
+// both already working API-backed functions (see above), so this just
+// composes them the same way sqlRepository.js's getTodayPlaylist() does.
+async function getTodayPlaylist() {
+  const today = new Date().toISOString().slice(0, 10);
+  const days = await getPlaylistsByDate(today);
+  const hoursWithEntries = days.filter((h) => h.hasEntries);
+
+  const entries = [];
+  for (const hour of hoursWithEntries) {
+    const playlist = await getPlaylistById(hour.id);
+    for (const entry of playlist.entries) entries.push(entry);
+  }
+  return entries;
+}
 
 module.exports = {
   ApiNotFoundError,
@@ -960,6 +1113,7 @@ module.exports = {
   writeHour,
   getPermissions,
   getCapabilities,
+  getConfig,
   getArtists,
   getTitles,
   getFolderTree,

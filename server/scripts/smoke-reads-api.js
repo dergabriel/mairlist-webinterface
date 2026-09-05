@@ -47,6 +47,47 @@ async function main() {
 
   await run("getCapabilities", () => repo.getCapabilities());
   await run("getPermissions", () => repo.getPermissions());
+  await run("getConfig", () => repo.getConfig());
+
+  await run("getAttributeKeys", async () => {
+    const keys = await repo.getAttributeKeys();
+    if (!Array.isArray(keys)) throw new Error("expected an array");
+    if (keys.some((k) => typeof k.key !== "string" || !Array.isArray(k.values))) {
+      throw new Error("expected [{ key, values: [] }, ...]");
+    }
+    return { count: keys.length, sample: keys[0] };
+  });
+
+  await run("getItemTypes", async () => {
+    const types = await repo.getItemTypes();
+    if (!Array.isArray(types)) throw new Error("expected an array");
+    return { count: types.length };
+  });
+
+  await run("getStorages", async () => {
+    const storages = await repo.getStorages();
+    if (!Array.isArray(storages)) throw new Error("expected an array");
+    return { count: storages.length, sample: storages[0] };
+  });
+
+  await run("getLogs", async () => {
+    const logs = await repo.getLogs({ limit: 10 });
+    if (!Array.isArray(logs)) throw new Error("expected an array");
+    return { count: logs.length };
+  });
+
+  await run("getDashboardStats", async () => {
+    const stats = await repo.getDashboardStats();
+    if (typeof stats.totalFolders !== "number") throw new Error("expected totalFolders to be a number");
+    if (typeof stats.totalUsers !== "number") throw new Error("expected totalUsers to be a number");
+    return stats;
+  });
+
+  await run("getTodayPlaylist", async () => {
+    const entries = await repo.getTodayPlaylist();
+    if (!Array.isArray(entries)) throw new Error("expected an array");
+    return { count: entries.length };
+  });
 
   const folders = await run("getFolders (top-level)", () => repo.getFolders(folderId));
 

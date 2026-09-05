@@ -489,6 +489,21 @@ getestet.
 | GET | `/api/v1/templates/music/items?station=1` | Music-Templates |
 | GET | `/api/v1/templates/transitions/items?station=1` | Transition-Templates |
 | GET | `/api/v1/templates/<typ>/assignment/<n>?station=1` | Template-Zuordnung |
+| GET | `/api/v1/storages?station=1` | **Ungeprüft:** `EditStorages` ist eine advertised Capability, ein Storages-Endpunkt selbst wurde bisher nicht im Traffic beobachtet. `apiRepository.js`s `getStorages()` versucht diesen Pfad und fällt bei 404 auf ein leeres Ergebnis zurück (siehe unten, "Offene Punkte") |
+
+### Attribute-Schema statt eigenem Endpunkt
+
+Es gibt **keinen** dedizierten `/api/v1/attributekeys`-o.ä.-Endpunkt. Das
+Attribut-Schema (welche Attribut-Namen existieren, Freitext vs. Dropdown vs.
+Checkbox, gültige Dropdown-Werte) steckt stattdessen im bereits
+dokumentierten `/api/v1/config`-Feld `StandardAttributes` (XML-String, siehe
+oben). `apiRepository.js`s `getAttributeKeys()` ruft `getConfig()` auf und
+extrahiert die `Name`/`Values`-Angaben daraus per regulärem Ausdruck (kein
+XML-Parser im Projekt vorhanden, das Format ist eng genug umrissen um ohne
+auszukommen) — Rückgabeformat `[{ key, values: [] }]`, analog zu
+`sqlRepository.js`s `getAttributeKeys()`, nur dass `values` hier aus dem
+Schema stammt (nur für `Kind="DropDown"`/`"Check"`-Attribute gefüllt) statt
+aus tatsächlich beobachteten Item-Werten.
 
 ## Offene Punkte / noch zu verifizieren
 
@@ -532,6 +547,35 @@ getestet.
       blockierend: Artist-/Titel-Suche ist ein Nice-to-have-Feature,
       `getArtists`/`getTitles` in `apiRepository.js` funktionieren
       (liefern nur mehr Daten als nötig)
+- [ ] **`/api/v1/storages`** – kein Storages-Endpunkt im Traffic beobachtet,
+      trotz `EditStorages`-Capability. `getStorages()` versucht
+      `GET /api/v1/storages?station=1` und fällt bei 404 auf ein leeres
+      Array zurück; Response-Shape (falls der Endpunkt doch existiert) ist
+      nicht verifiziert — `mapApiStorageToInternal()` rät defensiv zwischen
+      `{value: [...]}`- (wie `/folders`) und Array-Shape (wie `/items`),
+      geloggt wird eine Warnung bei unbekanntem Format. Muss gegen die
+      echte Produktivinstanz getestet werden, sobald verfügbar (in dieser
+      Entwicklungsumgebung war kein mAirListDB Server erreichbar)
+- [ ] **Kein `/api/v1/itemtypes`-Endpunkt gefunden** – weder ein eigener
+      Endpunkt noch ein Feld in `/api/v1/config`. `sqlRepository.js`s
+      `getItemTypes()` braucht ein `DISTINCT type, COUNT(*) GROUP BY type`
+      über die gesamte Items-Tabelle; die API hat dafür keine Entsprechung
+      ohne alle ~155 Ordner einzeln abzufragen. Eine hartcodierte Liste
+      (Music/Jingle/Sweeper/Drop/Container/Dummy, aus beobachteten
+      `Type`-Werten) wurde erwogen, aber verworfen: `hasItems`/`note` wären
+      dann geraten statt aus echten Daten abgeleitet.
+      `apiRepository.js`s `getItemTypes()` bleibt deshalb der leere Stub.
+- [ ] **Kein Logs-/Sendeprotokoll-Endpunkt gefunden** – nur
+      `/api/v1/items/<id>/history` (pro Item) existiert, das skaliert nicht
+      für eine Gesamtübersicht. `getLogs()`/`getRecentLogs()` liefern
+      deshalb ein leeres Ergebnis statt eines Fehlers.
+- [x] **`getDashboardStats`/`getTodayPlaylist` über die API** –
+      `getTodayPlaylist()` ist voll implementiert (baut auf
+      `getPlaylistsByDate`/`getPlaylistById` auf). `getDashboardStats()`
+      liefert `totalFolders` (aus `getFolders().length`) und `totalUsers`
+      (aus der DATA_SOURCE-unabhängigen `webAuthDb`); `totalItems` und
+      `totalStorages` bleiben `null`, da die API keinen
+      Gesamtzähler-Endpunkt hat und ein Scan aller Ordner zu teuer wäre.
 - [ ] Rate-Limiting oder Verbindungslimits
 - [ ] **Alternative Authentifizierung per Token:** Der offizielle
       mAirList-Client bietet in seiner "Internet Client"-Konfiguration

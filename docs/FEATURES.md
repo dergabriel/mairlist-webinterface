@@ -131,6 +131,7 @@ in `apiRepository.js` sind deshalb bewusst synchron.
 | `getDashboardStats`, `getTodayPlaylist` (siehe unten) | ✅ alle vier Dashboard-Werte echt (kein `null` mehr) |
 | `getStorages` (`/api/v1/storages`, siehe unten) | ✅ verifiziert, Endpunkt existiert (live getestet: 2 Storages) |
 | Ordner-CRUD: `createFolder`, `renameFolder`, `moveFolder`, `deleteFolder` (siehe unten) | ✅ verifiziert gegen den echten Server |
+| `createItem`, `deleteItem` (siehe unten) | ✅ verifiziert; Ordner-Zuordnung per `folderId` jetzt möglich (Body-Format geklärt), im Code noch nicht umgesetzt |
 
 **Playlist-Schreiboperationen — Read-Modify-Write auf rohen Einträgen:**
 Die API kennt nur Lesen/Schreiben der kompletten Stunde (kein
@@ -218,11 +219,19 @@ und `Filename` als Pflichtfelder (fehlt eines, liefert der Server einen
 konkreten Fehlertext) und antwortet mit einem nackten JSON-String (der
 neuen Item-ID), nicht mit einem Objekt — `createItem()` lädt das neue
 Item deshalb im Anschluss per `getItemById()` nach, analog zu
-`updateItem()`. `DELETE` antwortet mit `null`. Eine mitgegebene
-`folderId` wird beim Anlegen aktuell **nicht** umgesetzt — die dafür im
-Client-Traffic beobachtete Ordner-Zuordnung
-(`POST /api/v1/folders/<id>/items`) hat ein unverifiziertes Body-Format,
-siehe `docs/MAIRLISTDB-API.md` "Offene Punkte".
+`updateItem()`. `DELETE` antwortet mit `null`.
+
+**Ordner-Zuordnung beim Anlegen — jetzt möglich:** Das Body-Format von
+`POST /api/v1/folders/<id>/items` ist per Wireshark-Mitschnitt des echten
+Clients entschlüsselt und damit nicht länger ein offener Punkt: der
+Endpunkt erwartet `application/x-www-form-urlencoded` mit nacktem
+`add`-Flag und dem JSON-Array der Item-IDs im `$doc`-Parameter
+(`add&station=1&$doc=["<id>"]`) — nicht `application/json`, was die
+bisherige Fehlermeldung `Invalid operation` erklärt. Damit ist eine beim
+`createItem()` mitgegebene `folderId` technisch umsetzbar (Details:
+`docs/MAIRLISTDB-API.md`, Abschnitt "POST-Endpunkte (form-urlencoded)");
+in `apiRepository.js` ist der zweite Aufruf noch nicht implementiert, die
+`folderId` wird dort also **derzeit noch** ignoriert.
 
 **`getDashboardStats`/`getTodayPlaylist`:** `getTodayPlaylist()` ist
 voll funktionsfähig (baut auf den bereits verifizierten

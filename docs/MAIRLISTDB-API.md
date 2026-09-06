@@ -21,6 +21,17 @@ siehe [`docs/FEATURES.md` – API-basierte Datenquelle](FEATURES.md#-api-basiert
 - **Base URL:** `http://<server>:8840`
 - **Auth:** HTTP Basic Authentication, Zugangsdaten identisch mit den
   mAirList-Benutzerkonten (`auth_users` in der jeweiligen Instanz-`auth.db`)
+- **Auth (Alternative):** Der offizielle Client nutzt stattdessen
+  `Authorization: Bearer <token>` mit dem Token aus seiner "Internet
+  Client"-Konfiguration. Unsere Anbindung bleibt bei Basic Auth, was
+  nachweislich für alle Endpunkte funktioniert.
+- ⚠️ **Sicherheitshinweis – unverschlüsseltes HTTP:** Der DBServer läuft
+  im dokumentierten Setup über Klartext-HTTP (Port 8840). Zugangsdaten
+  gehen damit bei *jeder* Anfrage im Klartext übers Netz — Basic Auth
+  (Base64 ist keine Verschlüsselung) genau wie ein Bearer-Token. Für
+  einen Betrieb außerhalb des lokalen Netzes ist TLS zwingend: der
+  DBServer unterstützt laut `dbserver.ini` `SSLPort=9840` mit
+  `SSLCertificateFile`/`SSLKeyFile`.
 - **Format:** JSON, PascalCase-Feldnamen (spiegelt die Delphi/Pascal-Herkunft
   von mAirList wider)
 - **Query-Parameter `station`:** scheint bei den meisten Endpunkten
@@ -408,13 +419,12 @@ durch gezieltes Weglassen):
   `GET /api/v1/items/<neue-id>` erfolgen (macht `apiRepository.js`s
   `createItem()` bereits, analog zu `updateItem()`).
 
-**Offener Punkt (nicht verifiziert):** Im Client-Traffic wurde zusätzlich
-`POST /api/v1/folders/<folderId>/items` beobachtet — der Client ruft das
-nach dem `POST /items` auf, vermutlich um das neue Item einem Ordner
-zuzuordnen. Das Body-Format ist unbekannt (vermutlich die Item-ID, aber
-nicht getestet). `apiRepository.js`s `createItem()` ordnet neu angelegte
-Items daher noch keinem Ordner zu, auch wenn `folderId` im Request
-mitgegeben wird.
+**Ordner-Zuordnung – VERIFIZIERT:** Der im Client-Traffic zusätzlich
+beobachtete Aufruf `POST /api/v1/folders/<folderId>/items` (direkt nach
+dem `POST /items`) ordnet das neue Item einem Ordner zu. Das Body-Format
+ist inzwischen per Wireshark-Mitschnitt entschlüsselt: form-urlencoded
+mit `add`-Flag und `$doc`-Array, siehe "POST-Endpunkte
+(form-urlencoded)" unten.
 
 ### DELETE `/api/v1/items/<id>?station=1` – VERIFIZIERT
 
@@ -588,6 +598,77 @@ weil `Class:"Dummy"`-Einträge Felder (`Timing`, `State`, `Customized`,
 verlustfrei abbilden kann — ein Rekonstruktionsversuch würde diese Felder
 korrumpieren oder verwerfen.
 
+## POST-Endpunkte (form-urlencoded) – VERIFIZIERT
+
+Per Wireshark-Mitschnitt des echten mAirList-Clients (6.3.24.4498) wurden
+die POST-Request-Bodies vollständig entschlüsselt. Das erklärt die vorher
+unlösbare Fehlermeldung `Invalid operation` bei
+`POST /api/v1/folders/<id>/items`.
+
+**Zentrale Erkenntnis:** Alle POST-Endpunkte des mAirListDB Servers nutzen
+HTTP/1.0 und `Content-Type: application/x-www-form-urlencoded` — **nicht**
+`application/json` wie die GET/PUT/DELETE-Endpunkte. Das eigentliche JSON
+steckt URL-kodiert im Parameter `$doc`:
+
+```
+[<operation>&]station=<id>&$doc=<urlencoded JSON>
+```
+
+Das führende Operations-Flag ist ein **nackter Parameter ohne Wert**
+(z. B. `add`). Fehlt es dort, wo der Server es erwartet, antwortet er mit
+`Invalid operation`.
+
+### POST `/api/v1/items` – Item anlegen
+
+- **Content-Type:** `application/x-www-form-urlencoded`
+- **Body (dekodiert):**
+  ```
+  station=1&$doc={"Title":"Platzhalter","Type":"Dummy","Class":"Dummy"}
+  ```
+- **Kein** Operations-Flag.
+- **Response:** die neue Item-ID als nackter JSON-String, z. B. `"2638"`
+- **Pflichtfelder im `$doc`:** `Class` (sonst `Invalid playlist item
+  class`), zusätzlich `Filename` bei `Class:"File"` (sonst `Invalid
+  location type`) — siehe "Items (Library)" oben.
+
+**Hinweis:** Dieser Endpunkt akzeptiert offenbar *auch*
+`application/json` (per PowerShell erfolgreich getestet, gab ebenfalls
+eine ID zurück). Der offizielle Client nutzt aber form-urlencoded.
+
+### POST `/api/v1/folders/<folderId>/items` – Item einem Ordner zuordnen
+
+- **Content-Type:** `application/x-www-form-urlencoded`
+- **Body (dekodiert):**
+  ```
+  add&station=1&$doc=["2638"]
+  ```
+- **Operations-Flag `add`: zwingend.**
+- `$doc` ist ein JSON-**Array** von Item-IDs als Strings — es können also
+  mehrere Items auf einmal zugeordnet werden.
+- **Response:** `null` (Status 200)
+
+Dieser Endpunkt akzeptiert **kein** `application/json`: sieben
+JSON-Varianten wurden erfolglos getestet, alle mit `Invalid operation`,
+weil das `add`-Flag fehlte.
+
+### POST `/api/v1/storages/<storageId>/files` – Datei hochladen
+
+- **Content-Type:** `multipart/form-data; boundary=--------<zeitstempel>`
+- Ein Part:
+  ```
+  Content-Disposition: form-data; name="file"; filename="Nebula (Robot Koch Remix).mp3"
+  Content-Type: audio/x-mpg
+  Content-Transfer-Encoding: binary
+  ```
+- Feldname ist `file`, der Dateiname steht im `filename`-Attribut.
+
+### Ablauf beim Item-Anlegen im offiziellen Client
+
+1. `POST /api/v1/storages/<id>/files` – Datei hochladen (multipart)
+2. `POST /api/v1/items` – Datensatz anlegen, gibt die neue ID zurück
+3. `POST /api/v1/folders/<id>/items` mit `add&station=1&$doc=["<neueId>"]`
+   – Item dem Ordner zuordnen
+
 ## Fehlerbehandlung – teilweise VERIFIZIERT
 
 Getestet mit einer nicht existierenden Item-ID
@@ -653,9 +734,14 @@ aus tatsächlich beobachteten Item-Werten.
       Ordnern in einer Antwort. Für Items in großen Ordnern weiterhin
       ungeklärt (Ordner mit sehr vielen Items noch nicht getestet)
 - [x] Item-Erstellung/-Löschung (`CreateItems`-Capability) – VERIFIZIERT:
-      `POST`/`DELETE /api/v1/items...`, siehe "Items" oben. Offen bleibt
-      nur die Ordner-Zuordnung neuer Items (`POST
-      /api/v1/folders/<id>/items`, Body-Format nicht verifiziert)
+      `POST`/`DELETE /api/v1/items...`, siehe "Items" oben
+- [x] **Ordner-Zuordnung neuer Items** (`POST /api/v1/folders/<id>/items`)
+      – VERIFIZIERT per Wireshark-Mitschnitt: form-urlencoded,
+      `add&station=1&$doc=["<id>",...]`, siehe "POST-Endpunkte
+      (form-urlencoded)" oben
+- [x] **Body-Format aller POST-Endpunkte** – VERIFIZIERT: nicht JSON,
+      sondern `application/x-www-form-urlencoded` mit `$doc`-Parameter
+      (Datei-Upload: `multipart/form-data`), siehe eigener Abschnitt
 - [x] Ordner-Erstellung/Umbenennen/Verschieben/Löschen (`EditFolders`-
       Capability) – VERIFIZIERT: `POST`/`PUT`/`DELETE /api/v1/folders...`,
       siehe "Folders (Ordnerbaum)" oben
@@ -698,14 +784,17 @@ aus tatsächlich beobachteten Item-Werten.
       `ItemCount`-Werte aus derselben Liste, siehe "Storages /
       Audio-Dateien" oben) – kein Scan aller Ordner nötig.
 - [ ] Rate-Limiting oder Verbindungslimits
-- [ ] **Alternative Authentifizierung per Token:** Der offizielle
-      mAirList-Client bietet in seiner "Internet Client"-Konfiguration
-      neben Benutzername/Passwort auch ein separates "Token"-Feld an
-      (beobachtet in der Connection-Config-UI). Wie dieser Token erzeugt
-      wird und in welcher Form er beim Request übertragen wird (Header?
-      Query-Parameter?) ist nicht verifiziert – unsere eigene Anbindung
-      nutzt bisher ausschließlich HTTP Basic Auth mit
-      Benutzername/Passwort, was nachweislich funktioniert
+- [x] **Alternative Authentifizierung per Token:** Der Client überträgt
+      den Token aus seiner "Internet Client"-Konfiguration als
+      `Authorization: Bearer <token>`-Header (Wireshark-Mitschnitt).
+      Wie der Token serverseitig erzeugt/verwaltet wird, ist weiterhin
+      offen. Unsere Anbindung nutzt weiter HTTP Basic Auth mit
+      Benutzername/Passwort, was nachweislich für alle Endpunkte
+      funktioniert
+- [ ] **Betrieb über TLS (`SSLPort=9840`)** – laut `dbserver.ini`
+      unterstützt, aber nicht getestet. Solange über Klartext-HTTP
+      gearbeitet wird, gehen Zugangsdaten bei jeder Anfrage unverschlüsselt
+      übers Netz (siehe Sicherheitshinweis unter "Grundlagen")
 
 ## Quelle
 
@@ -714,4 +803,6 @@ Verbinden eines echten mAirList-6.3.24-Clients, sowie manuelle GET- und
 PUT-Requests über Browser und PowerShell (`Invoke-RestMethod`) gegen die
 laufende Produktivinstanz. Alle dokumentierten PUT-Bodies wurden aktiv
 gegen die echte Datenbank getestet und per anschließendem GET verifiziert
-(Testwerte danach zurückgesetzt). Stand: 04.09.2026.
+(Testwerte danach zurückgesetzt). Die POST-Bodies stammen aus einem
+Wireshark-Mitschnitt des echten Clients (siehe "POST-Endpunkte
+(form-urlencoded)"). Stand: 06.09.2026.

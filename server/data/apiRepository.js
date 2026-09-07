@@ -526,6 +526,87 @@ async function assignItemsToFolder(folderId, itemIds) {
   });
 }
 
+// POST /api/v1/folders/<folderId>/items mit `delete`-Flag — VERIFIZIERT
+// per Wireshark-Mitschnitt des offiziellen Clients:
+//
+//   delete&station=1&$doc=["2639"]
+//
+// Gegenstück zu assignItemsToFolder(): entfernt die Items *aus diesem
+// einen Ordner*, ohne sie zu löschen — die Zuordnung zu anderen Ordnern
+// bleibt bestehen. `delete` ist wie `add` ein NACKTES Flag ohne Wert.
+// Response: `null` bei Status 200.
+async function removeItemFromFolder(folderId, itemIds) {
+  const ids = (Array.isArray(itemIds) ? itemIds : [itemIds])
+    .filter((id) => id != null && id !== "")
+    .map((id) => String(id));
+  if (ids.length === 0) return null;
+
+  // Handgebauter Body wie in assignItemsToFolder(): das nackte
+  // `delete`-Flag lässt sich mit URLSearchParams nicht ausdrücken.
+  const formBody = `delete&station=${encodeURIComponent(STATION)}&$doc=${encodeURIComponent(JSON.stringify(ids))}`;
+
+  return apiRequest("POST", `/api/v1/folders/${encodeURIComponent(folderId)}/items`, {
+    formBody,
+    withStation: false,
+  });
+}
+
+// PUT /api/v1/items/<itemId>/folders — VERIFIZIERT per
+// Wireshark-Mitschnitt des offiziellen Clients:
+//
+//   station=1&$doc=["5","189","7"]
+//
+// Setzt die KOMPLETTE Ordner-Zugehörigkeit eines Items in einem Request
+// und ersetzt die bisherige Zuordnung vollständig. Kein Operations-Flag
+// (anders als bei POST /folders/<id>/items) — der Endpunkt kennt nur
+// "ersetzen". Ein leeres Array entfernt das Item aus allen Ordnern.
+//
+// Das ist die sauberste Operation für Ordner-Zugehörigkeit: idempotent
+// und ohne Zwischenzustand, in dem das Item in zu vielen oder zu wenigen
+// Ordnern liegt.
+async function setItemFolders(itemId, folderIds) {
+  const ids = (Array.isArray(folderIds) ? folderIds : [folderIds])
+    .filter((id) => id != null && id !== "")
+    .map((id) => String(id));
+
+  const formBody = `station=${encodeURIComponent(STATION)}&$doc=${encodeURIComponent(JSON.stringify(ids))}`;
+
+  return apiRequest("PUT", `/api/v1/items/${encodeURIComponent(itemId)}/folders`, {
+    formBody,
+    withStation: false,
+  });
+}
+
+// Spiegelt sqlRepository.js's moveItemToFolder(id, folderId): dort löscht
+// writeFolder() *alle* item_folders-Zeilen des Items und legt genau eine
+// neue an (bzw. keine, wenn folderId null ist). Die Signatur hat bewusst
+// keine sourceFolderId — auch der Aufruf aus routes/library.js und dem
+// Frontend (Drag & Drop auf einen Ordner) kennt nur das Ziel.
+//
+// Deshalb wird hier PUT /api/v1/items/<id>/folders (setItemFolders)
+// verwendet und NICHT das ebenfalls verifizierte `movefrom`-Flag von
+// POST /folders/<id>/items:
+//
+//   - `movefrom=<quelle>` verschiebt nur aus EINEM Quellordner. Liegt das
+//     Item in mehreren Ordnern, bliebe es in den übrigen liegen — das
+//     widerspricht der Semantik des SQL-Pendants, das die Zuordnung
+//     komplett ersetzt. Ein Nachbauen über getItemFolders() + je einen
+//     Request pro Quellordner wäre zudem nicht atomar: bricht es in der
+//     Mitte ab, liegt das Item in einer beliebigen Teilmenge der Ordner.
+//   - PUT /items/<id>/folders setzt die Zugehörigkeit in einem einzigen,
+//     idempotenten Request — kein Zwischenzustand, kein Vorab-Lesen.
+//
+// folderId == null entfernt das Item aus allen Ordnern (leeres $doc),
+// analog zu writeFolder(wdb, id, null).
+async function moveItemToFolder(id, folderId) {
+  const item = await getItemById(id);
+  if (!item) return null;
+
+  await setItemFolders(id, folderId == null || folderId === "" ? [] : [folderId]);
+
+  return getItemById(id);
+}
+
 // DELETE /api/v1/items/<id>?station=1 — VERIFIZIERT live gegen den
 // mAirListDB Server (siehe docs/MAIRLISTDB-API.md): Response ist `null`
 // bei Status 200.
@@ -1153,16 +1234,6 @@ const getItemTypes = emptyStub("getItemTypes", []);
 const searchItems = notImplemented("searchItems");
 const getCuePoints = notImplemented("getCuePoints");
 const getAttributeDefinitions = notImplemented("getAttributeDefinitions");
-// Bleibt bewusst ein Stub: verifiziert ist nur das `add`-Flag von
-// POST /api/v1/folders/<id>/items (siehe assignItemsToFolder). Ein
-// *Verschieben* bräuchte zusätzlich das Entfernen aus dem Quellordner,
-// wofür vermutlich ein anderes Operations-Flag (`remove`? `delete`?)
-// nötig ist — das ist nicht mitgeschnitten und wird hier nicht geraten:
-// ein falsches Flag ergibt im besten Fall "Invalid operation", im
-// schlimmsten eine ungewollte Änderung. Mit `add` allein wäre das Item
-// danach in beiden Ordnern, also gerade kein Verschieben. Siehe
-// docs/MAIRLISTDB-API.md, "Offene Punkte".
-const moveItemToFolder = notImplemented("moveItemToFolder");
 const uploadFile = notImplemented("uploadFile");
 const resolveAudioPath = notImplemented("resolveAudioPath");
 
@@ -1231,6 +1302,8 @@ module.exports = {
   createItem,
   deleteItem,
   assignItemsToFolder,
+  removeItemFromFolder,
+  setItemFolders,
   getPlaylistHour,
   getPlaylistAttributes,
   writeHour,

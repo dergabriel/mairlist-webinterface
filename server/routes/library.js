@@ -312,10 +312,10 @@ router.put("/items/:id", requireScope("library.write"), async (req, res, next) =
 });
 
 // PUT /api/items/:id/folder -> move an item into a (virtual) folder. Body: { folderId }
-router.put("/items/:id/folder", requireScope("library.write"), (req, res, next) => {
+router.put("/items/:id/folder", requireScope("library.write"), async (req, res, next) => {
   try {
     const { folderId } = req.body;
-    const item = repo.moveItemToFolder(req.params.id, folderId);
+    const item = await repo.moveItemToFolder(req.params.id, folderId);
     if (!item) return res.status(404).json({ error: "Item not found" });
     res.json(item);
   } catch (e) { next(e); }

@@ -255,6 +255,7 @@ immer der komplette Body mit beiden Feldern gesendet.
 | Methode | Pfad | Beschreibung |
 |---|---|---|
 | GET | `/api/v1/items?folder=<id>&station=1` | Items in einem Ordner |
+| GET | `/api/v1/items?search=<begriff>&fields=All&limit=50&station=1` | **VERIFIZIERT:** Volltextsuche über die Bibliothek (siehe unten) |
 | GET | `/api/v1/items/<id>?station=1` | Einzelnes Item, vollständig |
 | GET | `/api/v1/items?ids=<id>[,<id>...]&icons=true&station=1` | Mehrere Items gezielt per ID, inkl. Icons |
 | GET | `/api/v1/items?artists&time=...&station=1` | Distinct-Liste der Artists (Such-/Filter-Funktion) |
@@ -264,7 +265,8 @@ immer der komplette Body mit beiden Feldern gesendet.
 | GET | `/api/v1/items/<id>/folders?station=1` | Ordner-Zuordnungen eines Items |
 | GET | `/api/v1/items/<id>/restrictions?station=1` | Restriktionen (Campaigns/Sperren) eines Items |
 | GET | `/api/v1/items/<id>/history?station=1` | Abspielhistorie eines Items |
-| PUT | `/api/v1/items/<id>` | Item aktualisieren (Body-Format: Annahme, siehe unten) |
+| PUT | `/api/v1/items/<id>` | **VERIFIZIERT:** Item aktualisieren (siehe unten) |
+| PUT | `/api/v1/items/<id>/restrictions` | **VERIFIZIERT:** Restriktionen schreiben (siehe unten) |
 | POST | `/api/v1/items?station=1` | **VERIFIZIERT:** neues Item anlegen |
 | DELETE | `/api/v1/items/<id>?station=1` | **VERIFIZIERT:** Item löschen |
 
@@ -378,6 +380,30 @@ schlankeren Datensatz ohne `Folders`/`NextUse`/`LastUse`/`LastPlayed`/
   technische Metadaten (`"Konto"`, `"Datum"` – vermutlich automatisch
   von der Aufnahme-/Schnittsoftware gesetzt, hier "Adobe Audition 13.0")
 
+### GET `/api/v1/items?search=<begriff>&fields=All&limit=50&station=1` – VERIFIZIERT
+
+Volltextsuche über die Bibliothek, per Wireshark-Mitschnitt des echten
+Clients (6.3.24.4498) beobachtet. Damit gibt es doch einen Endpunkt für
+eine ordnerübergreifende Item-Abfrage — bis dahin die Annahme, dass
+`GET /api/v1/items` immer `folder=` oder `ids=` verlangt.
+
+| Parameter | Beobachteter Wert | Bedeutung |
+|---|---|---|
+| `search` | Suchbegriff, Leerzeichen als `+` kodiert | der eigentliche Suchtext |
+| `fields` | `All` | einzuschließende Felder; weitere gültige Werte unbekannt (vermutlich Feldnamen wie `Artist`/`Title`) |
+| `limit` | `50` | maximale Trefferzahl; der Client fragt immer 50 an |
+| `station` | `1` | wie überall |
+
+- **Response:** Array von Item-Objekten im **gleichen erweiterten Format
+  wie `/api/v1/items?folder=<id>`** — inklusive `Folders`, `NextUse`,
+  `LastUse`, `LastPlayed`, `EffectiveDuration`.
+- **Noch offen:** ob `offset`/`page` für Pagination existieren, welche
+  Werte `fields` sonst akzeptiert, und ob die Suche Wortanfang oder
+  Teilstring matcht.
+
+Damit ist `searchItems()` in `apiRepository.js` umsetzbar — bisher ein
+bewusst leerer Stub, weil kein Such-Endpunkt bekannt war.
+
 ### PUT `/api/v1/items/<id>` – VERIFIZIERT
 
 Der Body ist **exakt symmetrisch zum GET-Format**: das komplette
@@ -387,7 +413,11 @@ Item gelesen, `Markers.FadeOut` geändert, unverändertes JSON per PUT
 gesendet, anschließend per GET bestätigt dass der neue Wert
 tatsächlich persistiert wurde.
 
-- **Content-Type:** `application/json`
+- **Content-Type:** `application/json` (funktioniert nachweislich). Der
+  **offizielle Client nutzt hier allerdings ebenfalls
+  `application/x-www-form-urlencoded` mit `$doc`** (Wireshark-Mitschnitt,
+  siehe "POST-Endpunkte (form-urlencoded)"). Der Server akzeptiert also
+  beides; `apiRepository.js`s `updateItem()` bleibt bei JSON.
 - **Response bei Erfolg:** `null` (leerer Body, Status 200)
 - Es reicht, das komplette vom GET erhaltene Objekt zu nehmen, einzelne
   Felder zu ändern und unverändert zurückzuschicken – keine Teil-Updates
@@ -610,17 +640,26 @@ unlösbare Fehlermeldung `Invalid operation` bei
 `POST /api/v1/folders/<id>/items`.
 
 **Zentrale Erkenntnis:** Alle POST-Endpunkte des mAirListDB Servers nutzen
-HTTP/1.0 und `Content-Type: application/x-www-form-urlencoded` — **nicht**
-`application/json` wie die GET/PUT/DELETE-Endpunkte. Das eigentliche JSON
-steckt URL-kodiert im Parameter `$doc`:
+HTTP/1.0 und `Content-Type: application/x-www-form-urlencoded` — nicht
+`application/json`. Das eigentliche JSON steckt URL-kodiert im Parameter
+`$doc`:
 
 ```
 [<operation>&]station=<id>&$doc=<urlencoded JSON>
 ```
 
-Das führende Operations-Flag ist ein **nackter Parameter ohne Wert**
-(z. B. `add`). Fehlt es dort, wo der Server es erwartet, antwortet er mit
-`Invalid operation`.
+Das führende Operations-Flag ist in der Regel ein **nackter Parameter
+ohne Wert** (z. B. `add`, `delete`); `movefrom=<quellId>` ist die
+Ausnahme mit Wert. Fehlt das Flag dort, wo der Server es erwartet,
+antwortet er mit `Invalid operation`.
+
+**Das gilt nicht nur für POST:** Auch die PUT-Endpunkte nutzen beim
+offiziellen Client form-urlencoded mit `$doc` — mitgeschnitten für
+`PUT /api/v1/items/<id>` (Item aktualisieren) und
+`PUT /api/v1/items/<id>/folders` (siehe unten). Bei
+`PUT /api/v1/items/<id>` akzeptiert der Server **zusätzlich**
+`application/json`; die JSON-Variante in `apiRepository.js`s
+`updateItem()` funktioniert nachweislich und bleibt deshalb unverändert.
 
 ### POST `/api/v1/items` – Item anlegen
 
@@ -646,22 +685,56 @@ eine ID zurück). Der offizielle Client nutzt aber form-urlencoded.
   ```
   add&station=1&$doc=["2638"]
   ```
-- **Operations-Flag `add`: zwingend.**
+- **Ein Operations-Flag ist zwingend** (fehlt es → `Invalid operation`).
 - `$doc` ist ein JSON-**Array** von Item-IDs als Strings — es können also
-  mehrere Items auf einmal zugeordnet werden.
+  mehrere Items auf einmal verarbeitet werden.
 - **Response:** `null` (Status 200)
 
 Dieser Endpunkt akzeptiert **kein** `application/json`: sieben
 JSON-Varianten wurden erfolglos getestet, alle mit `Invalid operation`,
-weil das `add`-Flag fehlte.
+weil das Operations-Flag fehlte.
 
-**Nur `add` ist verifiziert.** Ob es ein Gegenstück zum *Entfernen* eines
-Items aus einem Ordner gibt (`remove`? `delete`? ein eigener
-DELETE-Endpunkt?), ist nicht mitgeschnitten und wird bewusst nicht
-geraten — deshalb bleibt `moveItemToFolder()` in `apiRepository.js` ein
-Stub: mit `add` allein läge das Item danach in beiden Ordnern, das wäre
-kein Verschieben. Implementiert ist nur `assignItemsToFolder()` (siehe
-"Offene Punkte").
+#### Die drei Operations-Flags – ALLE VERIFIZIERT
+
+Per Wireshark-Mitschnitt des offiziellen Clients (6.3.24):
+
+| Flag | Body (dekodiert) | Bedeutung |
+|---|---|---|
+| `add` | `add&station=1&$doc=["2639"]` | Item(s) diesem Ordner **hinzufügen** |
+| `movefrom=<quellId>` | `movefrom=8&station=1&$doc=["2639"]` | Item(s) aus dem Quellordner **in diesen Ordner verschieben** |
+| `delete` | `delete&station=1&$doc=["2639"]` | Item(s) aus diesem Ordner **entfernen** (löscht die Items nicht) |
+
+`add` und `delete` sind **nackte Flags ohne Wert**; `movefrom` ist ein
+Flag **mit Wert** (der Quellordner-ID).
+
+Umgesetzt in `apiRepository.js` als `assignItemsToFolder(folderId,
+itemIds)` (`add`) und `removeItemFromFolder(folderId, itemIds)`
+(`delete`). `movefrom` wird bewusst **nicht** verwendet — siehe
+`moveItemToFolder()` unten.
+
+### PUT `/api/v1/items/<itemId>/folders` – VERIFIZIERT
+
+- **Content-Type:** `application/x-www-form-urlencoded`
+- **Body (dekodiert):**
+  ```
+  station=1&$doc=["5","189","7"]
+  ```
+- **Kein** Operations-Flag — der Endpunkt kennt nur "ersetzen".
+- Setzt die **komplette** Ordner-Zugehörigkeit eines Items in einem
+  Request und ersetzt die bisherige Zuordnung vollständig. Idempotent;
+  ein leeres Array entfernt das Item aus allen Ordnern.
+
+Umgesetzt als `setItemFolders(itemId, folderIds)`.
+
+**`moveItemToFolder(id, folderId)` nutzt diesen Endpunkt**, nicht
+`movefrom`: Das SQL-Pendant in `sqlRepository.js` löscht via
+`writeFolder()` *alle* `item_folders`-Zeilen des Items und legt genau
+eine neue an — die Zuordnung wird also komplett ersetzt. `movefrom`
+verschiebt dagegen nur aus *einem* Quellordner; läge das Item in
+mehreren, bliebe es in den übrigen liegen. Ein Nachbauen über
+`getItemFolders()` + je ein Request pro Quellordner wäre zudem nicht
+atomar. `PUT /items/<id>/folders` erledigt dasselbe in einem einzigen,
+idempotenten Request.
 
 ### POST `/api/v1/storages/<storageId>/files` – Datei hochladen
 
@@ -752,12 +825,14 @@ aus tatsächlich beobachteten Item-Werten.
       `add&station=1&$doc=["<id>",...]`, siehe "POST-Endpunkte
       (form-urlencoded)" oben. Umgesetzt als `assignItemsToFolder()`,
       von `createItem()` bei gesetzter `folderId` aufgerufen
-- [ ] **Operations-Flag zum Entfernen eines Items aus einem Ordner** –
-      nur `add` ist mitgeschnitten/verifiziert. Ein Gegenstück
-      (`remove`/`delete`, oder ein eigener DELETE-Endpunkt auf
-      `/api/v1/folders/<id>/items`) ist unbekannt und wird nicht
-      geraten. Solange das offen ist, bleibt `moveItemToFolder()` ein
-      Stub (siehe `apiRepository.js`)
+- [x] **Operations-Flag zum Entfernen eines Items aus einem Ordner** –
+      VERIFIZIERT per Wireshark: `delete&station=1&$doc=[...]` auf
+      `POST /api/v1/folders/<id>/items`, dazu `movefrom=<quellId>` zum
+      Verschieben. Ebenfalls verifiziert:
+      `PUT /api/v1/items/<id>/folders` setzt die komplette
+      Ordner-Zugehörigkeit auf einmal. Umgesetzt als
+      `removeItemFromFolder()`, `setItemFolders()` und
+      `moveItemToFolder()` — der Stub ist entfallen
 - [x] **Body-Format aller POST-Endpunkte** – VERIFIZIERT: nicht JSON,
       sondern `application/x-www-form-urlencoded` mit `$doc`-Parameter
       (Datei-Upload: `multipart/form-data`), siehe eigener Abschnitt

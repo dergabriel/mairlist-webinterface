@@ -17,6 +17,10 @@
 // block even if an assertion fails midway. A second throwaway item is
 // created *with* a folderId (into its own throwaway folder) to verify the
 // form-urlencoded folder assignment, then both are removed again.
+// Schliesslich wird mit zwei Ordnern A/B und einem weiteren Wegwerf-Item
+// der komplette Zyklus der Ordner-Zugehoerigkeit geprueft
+// (moveItemToFolder / setItemFolders / removeItemFromFolder), ebenfalls
+// mit Aufraeumen im finally-Block.
 //
 // Usage:
 //   API_DB_BASE_URL=http://localhost:8840 API_DB_USER=... API_DB_PASSWORD=... \
@@ -364,6 +368,109 @@ async function main() {
         await repo.deleteFolder(parentFolder.id);
         const afterDelete = await repo.getFolderById(parentFolder.id);
         check("deleteFolder removes the parent test folder", !afterDelete, JSON.stringify(afterDelete));
+      }
+    }
+  });
+
+  // ---- moveItemToFolder / setItemFolders / removeItemFromFolder ----
+  //
+  // Legt zwei Testordner A und B sowie ein Testitem in A an und prüft
+  // den kompletten Zyklus der Ordner-Zugehörigkeit:
+  //   move A -> B, dann setItemFolders([A, B]), dann remove aus A.
+  // Der finally-Block räumt Item und beide Ordner in jedem Fall auf.
+
+  await run("folder membership (move / set / remove)", async () => {
+    const template = await repo.getItemById(itemId);
+    if (!template || !template.relativePath) {
+      throw new Error(`item ${itemId} not found or has no relativePath — pick a different SMOKE_ITEM_ID`);
+    }
+
+    const suffix = Date.now();
+    let folderA = null;
+    let folderB = null;
+    let created = null;
+
+    // Ordner-IDs eines Items als Set von Strings — getItemFolders()
+    // liefert aufgelöste Ordner-Objekte, verglichen wird über die ID.
+    const folderIdsOf = async (id) =>
+      new Set((await repo.getItemFolders(id)).map((f) => String(f.id)));
+
+    try {
+      folderA = await repo.createFolder(`ZZZ-SmokeTest-${suffix}-A`, null);
+      folderB = await repo.createFolder(`ZZZ-SmokeTest-${suffix}-B`, null);
+      check(
+        "membership test folders A and B created",
+        !!folderA && folderA.id != null && !!folderB && folderB.id != null,
+        `A=${folderA && folderA.id} B=${folderB && folderB.id}`
+      );
+
+      created = await repo.createItem({
+        title: "ZZZ-SmokeTest-Membership",
+        type: "music",
+        relativePath: template.relativePath,
+        folderId: folderA.id,
+      });
+      check("membership test item created", !!created && created.id != null, JSON.stringify(created));
+
+      const initial = await folderIdsOf(created.id);
+      check(
+        "new item starts in folder A only",
+        initial.has(String(folderA.id)) && initial.size === 1,
+        `folders: [${[...initial].join(", ")}]`
+      );
+
+      // --- moveItemToFolder: A -> B, danach nur noch in B ---
+      const moved = await repo.moveItemToFolder(created.id, folderB.id);
+      check("moveItemToFolder returns the item", !!moved && String(moved.id) === String(created.id));
+
+      const afterMove = await folderIdsOf(created.id);
+      check(
+        "moveItemToFolder puts the item in B",
+        afterMove.has(String(folderB.id)),
+        `folders: [${[...afterMove].join(", ")}]`
+      );
+      check(
+        "moveItemToFolder removes the item from A",
+        !afterMove.has(String(folderA.id)),
+        `folders: [${[...afterMove].join(", ")}]`
+      );
+
+      // --- setItemFolders: [A, B], danach in beiden ---
+      await repo.setItemFolders(created.id, [folderA.id, folderB.id]);
+      const afterSet = await folderIdsOf(created.id);
+      check(
+        "setItemFolders puts the item in both A and B",
+        afterSet.has(String(folderA.id)) && afterSet.has(String(folderB.id)) && afterSet.size === 2,
+        `folders: [${[...afterSet].join(", ")}]`
+      );
+
+      // --- removeItemFromFolder: raus aus A, B bleibt ---
+      await repo.removeItemFromFolder(folderA.id, [created.id]);
+      const afterRemove = await folderIdsOf(created.id);
+      check(
+        "removeItemFromFolder drops A but keeps B",
+        !afterRemove.has(String(folderA.id)) && afterRemove.has(String(folderB.id)),
+        `folders: [${[...afterRemove].join(", ")}]`
+      );
+
+      // Gegenprobe über den Ordner-Listing-Pfad statt über getItemFolders.
+      const inA = await repo.getItemsByFolder(folderA.id);
+      check(
+        "folder A no longer lists the item",
+        Array.isArray(inA) && !inA.some((i) => String(i.id) === String(created.id)),
+        `A contains ids [${(inA || []).map((i) => i.id).join(", ")}]`
+      );
+    } finally {
+      if (created) {
+        await repo.deleteItem(created.id);
+        const gone = await repo.getItemById(created.id);
+        check("membership test item deleted again", gone === null, JSON.stringify(gone));
+      }
+      for (const [label, folder] of [["A", folderA], ["B", folderB]]) {
+        if (!folder) continue;
+        await repo.deleteFolder(folder.id);
+        const gone = await repo.getFolderById(folder.id);
+        check(`membership test folder ${label} deleted again`, !gone, JSON.stringify(gone));
       }
     }
   });

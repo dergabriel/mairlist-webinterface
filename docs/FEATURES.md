@@ -132,6 +132,7 @@ in `apiRepository.js` sind deshalb bewusst synchron.
 | `getStorages` (`/api/v1/storages`, siehe unten) | ✅ verifiziert, Endpunkt existiert (live getestet: 2 Storages) |
 | Ordner-CRUD: `createFolder`, `renameFolder`, `moveFolder`, `deleteFolder` (siehe unten) | ✅ verifiziert gegen den echten Server |
 | `createItem`, `deleteItem` (siehe unten) | ✅ verifiziert; Ordner-Zuordnung per `folderId` umgesetzt (`assignItemsToFolder`) |
+| `moveItemToFolder`, `setItemFolders`, `removeItemFromFolder` (siehe unten) | ✅ Body-Format per Wireshark verifiziert (`movefrom`/`delete`-Flag, `PUT /items/<id>/folders`) |
 
 **Playlist-Schreiboperationen — Read-Modify-Write auf rohen Einträgen:**
 Die API kennt nur Lesen/Schreiben der kompletten Stunde (kein
@@ -238,10 +239,21 @@ bereits angelegte Item trotzdem zurückgegeben und der Fehler geloggt
 (sonst bekäme der Aufrufer das Item nie zu sehen und es bliebe verwaist
 zurück).
 
-Nicht umgesetzt bleibt `moveItemToFolder()`: verifiziert ist nur das
-`add`-Flag. Das *Entfernen* aus dem Quellordner bräuchte ein weiteres,
-nicht mitgeschnittenes Operations-Flag, das hier bewusst nicht geraten
-wird — mit `add` allein läge das Item danach in beiden Ordnern.
+Inzwischen sind auch die beiden übrigen Operations-Flags mitgeschnitten
+und damit verifiziert: `movefrom=<quellId>` (verschiebt aus einem
+Quellordner in diesen) und `delete` (entfernt aus diesem Ordner, ohne die
+Items zu löschen). Dazu kommt `PUT /api/v1/items/<id>/folders` mit
+`station=1&$doc=["5","189","7"]`, das die **komplette**
+Ordner-Zugehörigkeit eines Items auf einmal setzt.
+
+Umgesetzt als `removeItemFromFolder(folderId, itemIds)` (`delete`),
+`setItemFolders(itemId, folderIds)` (der PUT-Endpunkt) und
+`moveItemToFolder(id, folderId)`. Letzteres nutzt bewusst
+`setItemFolders()` statt `movefrom`: Das SQL-Pendant ersetzt die
+Zuordnung komplett (`writeFolder()` löscht alle `item_folders`-Zeilen des
+Items), und `movefrom` verschiebt nur aus *einem* Quellordner — läge das
+Item in mehreren, bliebe es in den übrigen liegen. Der PUT-Endpunkt
+erledigt das in einem einzigen, idempotenten Request, ohne Zwischenzustand.
 
 **`getDashboardStats`/`getTodayPlaylist`:** `getTodayPlaylist()` ist
 voll funktionsfähig (baut auf den bereits verifizierten
@@ -268,7 +280,6 @@ Daten zu liefern):
 |---|---|
 | Storage-Verwaltung: `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
 | Item-Suche (`searchItems`), `getAttributeDefinitions`, `getCuePoints` | ⬜ |
-| `moveItemToFolder` | ⬜ nur `add` verifiziert, Flag zum Entfernen unbekannt (siehe oben) |
 | `uploadFile`, `resolveAudioPath` | ⬜ |
 | `getItemTypes` | ⬜ kein Endpunkt gefunden, bleibt leerer Stub (siehe oben) |
 | `getLogs`, `getRecentLogs` | ⬜ kein Logs-Endpunkt gefunden, liefern `[]` statt Fehler (siehe oben) |

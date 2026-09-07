@@ -2,14 +2,14 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
   Database, Folder, FolderOpen, ChevronDown,
   RefreshCw, Plus, Search, Pencil, Trash2, ArrowUpDown,
-  AlertTriangle, X, Upload, HardDrive, Library, Settings2,
+  AlertTriangle, X, Upload, HardDrive, Settings2,
   FolderPlus, FolderInput, Users, Tag,
 } from "lucide-react";
 import {
   getTree, getItems, getStorages, createItem, deleteItem, uploadFile,
   getArtists, getItemTypes, getAttributeKeys, moveItemToFolder,
   createFolder, renameFolder, moveFolder, deleteFolder, getFolderChildren,
-  createStorage, updateStorage, deleteStorage,
+  createStorage, updateStorage, deleteStorage, getDashboard,
 } from "../lib/api";
 import { useAppData } from "../lib/AppDataContext";
 import { useAuth } from "../lib/AuthContext";
@@ -231,39 +231,42 @@ function FolderNode({
           onCancel={onInlineCancel}
         />
       ) : (
-        <TreeRow
-          id={folder.id} label={folder.name} level={level}
-          icon={Folder} openIcon={folder.special ? undefined : FolderOpen}
-          hasChildren={hasChildren} isOpen={isOpen} isActive={isActive}
-          onClick={() => { onSelect(folder.id); if (hasChildren) onToggle(folder.id); }}
-          onToggle={hasChildren}
-          isDropTarget={isDropTarget}
-          isDragOver={dragOverFolderId === folder.id}
-          dropHandlers={{
-            // dragenter is what reliably marks "over this target" — dragover
-            // fires continuously but dragenter/dragleave pairs can outrun it
-            // while the pointer crosses child elements (icon, label).
-            onDragEnter: (e) => { e.preventDefault(); onDragOverFolder(folder.id); },
-            onDragOver: (e) => e.preventDefault(),
-            // Only clear when actually leaving the row, not when moving
-            // between its children.
-            onDragLeave: (e) => {
-              if (!e.currentTarget.contains(e.relatedTarget)) onDragLeaveFolder(folder.id);
-            },
-            onDrop: (e) => { e.preventDefault(); onDropOnFolder(folder.id); },
-            ...(isDropTarget
-              ? {
-                  draggable: true,
-                  onDragStart: (e) => {
-                    e.dataTransfer.effectAllowed = "move";
-                    onFolderDragStart(folder.id);
-                  },
-                  onDragEnd: onFolderDragEnd,
-                }
-              : {}),
-            ...(isDropTarget ? { onContextMenu: (e) => onContextMenu(e, folder.id) } : {}),
-          }}
-        />
+        <div title={folder.disabledHint}>
+          <TreeRow
+            id={folder.id} label={folder.name} level={level}
+            icon={Folder} openIcon={folder.special ? undefined : FolderOpen}
+            hasChildren={hasChildren} isOpen={isOpen} isActive={isActive}
+            muted={!!folder.disabledHint}
+            onClick={() => { onSelect(folder.id); if (hasChildren) onToggle(folder.id); }}
+            onToggle={hasChildren}
+            isDropTarget={isDropTarget}
+            isDragOver={dragOverFolderId === folder.id}
+            dropHandlers={{
+              // dragenter is what reliably marks "over this target" — dragover
+              // fires continuously but dragenter/dragleave pairs can outrun it
+              // while the pointer crosses child elements (icon, label).
+              onDragEnter: (e) => { e.preventDefault(); onDragOverFolder(folder.id); },
+              onDragOver: (e) => e.preventDefault(),
+              // Only clear when actually leaving the row, not when moving
+              // between its children.
+              onDragLeave: (e) => {
+                if (!e.currentTarget.contains(e.relatedTarget)) onDragLeaveFolder(folder.id);
+              },
+              onDrop: (e) => { e.preventDefault(); onDropOnFolder(folder.id); },
+              ...(isDropTarget
+                ? {
+                    draggable: true,
+                    onDragStart: (e) => {
+                      e.dataTransfer.effectAllowed = "move";
+                      onFolderDragStart(folder.id);
+                    },
+                    onDragEnd: onFolderDragEnd,
+                  }
+                : {}),
+              ...(isDropTarget ? { onContextMenu: (e) => onContextMenu(e, folder.id) } : {}),
+            }}
+          />
+        </div>
       )}
       {isAddingChild && (
         <InlineFolderInput
@@ -809,6 +812,10 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const [attributeKeys, setAttributeKeys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // api-Modus hat keinen Endpunkt für eine ungefilterte Gesamtliste (siehe
+  // apiRepository.js getItems), deshalb wird "Alle Elemente" dort statt
+  // einer leeren Liste als deaktiviert mit Hinweis angezeigt.
+  const [isApiMode, setIsApiMode] = useState(false);
 
   const [expanded, setExpanded] = useState(new Set([20, 30]));
   const [filterState, setFilterState] = useState(ALL_FILTER);
@@ -878,6 +885,12 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    getCached("dashboard", getDashboard)
+      .then((data) => setIsApiMode(data?.system?.dataSource === "api"))
+      .catch(() => {});
+  }, [getCached]);
 
   // Lazily load the selected folder's direct items on demand instead of
   // relying on the fully preloaded `items` array, fetched once per folder
@@ -1036,7 +1049,12 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     }
   };
 
-  const rootFolder = { id: "all", name: "Alle Elemente", special: true, children: [] };
+  const rootFolder = {
+    id: "all", name: "Alle Elemente", special: true, children: [],
+    disabledHint: isApiMode
+      ? "Im api-Modus gibt es keinen Endpunkt für eine ungefilterte Gesamtliste."
+      : undefined,
+  };
 
   const toggle = (id) =>
     setExpanded((prev) => {
@@ -1045,14 +1063,19 @@ export default function MairListDB({ onEditItem, onNavigate }) {
       return next;
     });
 
-  const selectFolder = (folderId) =>
-    setFilterState(folderId === "all" ? ALL_FILTER : { kind: "folder", folderId });
+  const selectFolder = (folderId) => {
+    if (folderId === "all") {
+      if (isApiMode) return; // keine ungefilterte Gesamtliste im api-Modus verfügbar
+      setFilterState(ALL_FILTER);
+      return;
+    }
+    setFilterState({ kind: "folder", folderId });
+  };
   const selectArtist = (artist) => setFilterState({ kind: "artist", artist });
   const selectType = (type) => setFilterState({ kind: "type", type });
   const selectStorage = (storageId) => setFilterState({ kind: "storage", storageId });
   const selectAttribute = (attributeKey, attributeValue) =>
     setFilterState({ kind: "attribute", attributeKey, attributeValue });
-  const selectEverything = () => setFilterState({ kind: "everything" });
 
   const activeFolderName =
     filterState.kind === "folder"
@@ -1061,7 +1084,6 @@ export default function MairListDB({ onEditItem, onNavigate }) {
       : filterState.kind === "type" ? capitalize(filterState.type)
       : filterState.kind === "storage" ? storages.find((s) => s.id === filterState.storageId)?.name || "Storage"
       : filterState.kind === "attribute" ? `${filterState.attributeKey}: ${filterState.attributeValue}`
-      : filterState.kind === "everything" ? "Everything"
       : "Alle Elemente";
 
   const filteredByTree = useMemo(() => {
@@ -1082,7 +1104,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
         (i) => String(i.attributes?.[filterState.attributeKey] ?? "") === filterState.attributeValue
       );
     }
-    // "all" and "everything" both mean unfiltered.
+    // "all" means unfiltered.
 
     return list;
   }, [items, tree, filterState, folderItems]);
@@ -1280,13 +1302,6 @@ export default function MairListDB({ onEditItem, onNavigate }) {
                 </div>
               )}
             </div>
-
-            <TreeRow
-              id="everything" label="Everything" level={0} icon={Library}
-              hasChildren={false} isOpen={false}
-              isActive={filterState.kind === "everything"}
-              onClick={selectEverything}
-            />
           </>
         )}
       </aside>

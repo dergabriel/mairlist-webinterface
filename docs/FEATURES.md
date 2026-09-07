@@ -131,7 +131,7 @@ in `apiRepository.js` sind deshalb bewusst synchron.
 | `getDashboardStats`, `getTodayPlaylist` (siehe unten) | ✅ alle vier Dashboard-Werte echt (kein `null` mehr) |
 | `getStorages` (`/api/v1/storages`, siehe unten) | ✅ verifiziert, Endpunkt existiert (live getestet: 2 Storages) |
 | Ordner-CRUD: `createFolder`, `renameFolder`, `moveFolder`, `deleteFolder` (siehe unten) | ✅ verifiziert gegen den echten Server |
-| `createItem`, `deleteItem` (siehe unten) | ✅ verifiziert; Ordner-Zuordnung per `folderId` jetzt möglich (Body-Format geklärt), im Code noch nicht umgesetzt |
+| `createItem`, `deleteItem` (siehe unten) | ✅ verifiziert; Ordner-Zuordnung per `folderId` umgesetzt (`assignItemsToFolder`) |
 
 **Playlist-Schreiboperationen — Read-Modify-Write auf rohen Einträgen:**
 Die API kennt nur Lesen/Schreiben der kompletten Stunde (kein
@@ -221,17 +221,27 @@ neuen Item-ID), nicht mit einem Objekt — `createItem()` lädt das neue
 Item deshalb im Anschluss per `getItemById()` nach, analog zu
 `updateItem()`. `DELETE` antwortet mit `null`.
 
-**Ordner-Zuordnung beim Anlegen — jetzt möglich:** Das Body-Format von
+**Ordner-Zuordnung beim Anlegen — umgesetzt:** Das Body-Format von
 `POST /api/v1/folders/<id>/items` ist per Wireshark-Mitschnitt des echten
 Clients entschlüsselt und damit nicht länger ein offener Punkt: der
 Endpunkt erwartet `application/x-www-form-urlencoded` mit nacktem
 `add`-Flag und dem JSON-Array der Item-IDs im `$doc`-Parameter
 (`add&station=1&$doc=["<id>"]`) — nicht `application/json`, was die
-bisherige Fehlermeldung `Invalid operation` erklärt. Damit ist eine beim
-`createItem()` mitgegebene `folderId` technisch umsetzbar (Details:
-`docs/MAIRLISTDB-API.md`, Abschnitt "POST-Endpunkte (form-urlencoded)");
-in `apiRepository.js` ist der zweite Aufruf noch nicht implementiert, die
-`folderId` wird dort also **derzeit noch** ignoriert.
+bisherige Fehlermeldung `Invalid operation` erklärt (Details:
+`docs/MAIRLISTDB-API.md`, Abschnitt "POST-Endpunkte (form-urlencoded)").
+`apiRepository.js` setzt das als `assignItemsToFolder(folderId, itemIds)`
+um — dieselbe `apiRequest()`-Route wie alle anderen Aufrufe, nur mit
+form-urlencodiertem Body, damit Concurrency-Limit und Retry-Logik auch
+hier greifen. `createItem()` ruft das nach dem `POST /items` auf, sobald
+eine `folderId` mitgegeben wurde; scheitert nur die Zuordnung, wird das
+bereits angelegte Item trotzdem zurückgegeben und der Fehler geloggt
+(sonst bekäme der Aufrufer das Item nie zu sehen und es bliebe verwaist
+zurück).
+
+Nicht umgesetzt bleibt `moveItemToFolder()`: verifiziert ist nur das
+`add`-Flag. Das *Entfernen* aus dem Quellordner bräuchte ein weiteres,
+nicht mitgeschnittenes Operations-Flag, das hier bewusst nicht geraten
+wird — mit `add` allein läge das Item danach in beiden Ordnern.
 
 **`getDashboardStats`/`getTodayPlaylist`:** `getTodayPlaylist()` ist
 voll funktionsfähig (baut auf den bereits verifizierten
@@ -258,7 +268,8 @@ Daten zu liefern):
 |---|---|
 | Storage-Verwaltung: `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
 | Item-Suche (`searchItems`), `getAttributeDefinitions`, `getCuePoints` | ⬜ |
-| `moveItemToFolder`, `uploadFile`, `resolveAudioPath` | ⬜ |
+| `moveItemToFolder` | ⬜ nur `add` verifiziert, Flag zum Entfernen unbekannt (siehe oben) |
+| `uploadFile`, `resolveAudioPath` | ⬜ |
 | `getItemTypes` | ⬜ kein Endpunkt gefunden, bleibt leerer Stub (siehe oben) |
 | `getLogs`, `getRecentLogs` | ⬜ kein Logs-Endpunkt gefunden, liefern `[]` statt Fehler (siehe oben) |
 

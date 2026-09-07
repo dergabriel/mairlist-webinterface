@@ -14,7 +14,9 @@
 // "ZZZ-SmokeTest-<timestamp>*" to verify folder CRUD, and creates/deletes
 // a throwaway item titled "ZZZ-SmokeTest" (reusing SMOKE_ITEM_ID's own
 // Filename) to verify createItem/deleteItem — cleaned up in a finally
-// block even if an assertion fails midway.
+// block even if an assertion fails midway. A second throwaway item is
+// created *with* a folderId (into its own throwaway folder) to verify the
+// form-urlencoded folder assignment, then both are removed again.
 //
 // Usage:
 //   API_DB_BASE_URL=http://localhost:8840 API_DB_USER=... API_DB_PASSWORD=... \
@@ -126,6 +128,55 @@ async function main() {
 
         const afterDelete = await repo.getItemById(created.id);
         check("deleted item is gone (getItemById returns null)", afterDelete === null, JSON.stringify(afterDelete));
+      }
+    }
+  });
+
+  // ---- createItem with folderId: create a throwaway folder, create an
+  // item assigned to it, verify getItemsByFolder finds it, clean both up. ----
+
+  await run("createItem with folderId (assigns item to folder)", async () => {
+    const template = await repo.getItemById(itemId);
+    if (!template || !template.relativePath) {
+      throw new Error(`item ${itemId} not found or has no relativePath — pick a different SMOKE_ITEM_ID`);
+    }
+
+    const folderName = `ZZZ-SmokeTest-${Date.now()}-folder`;
+    let folder = null;
+    let created = null;
+
+    try {
+      folder = await repo.createFolder(folderName, null);
+      check("createFolder (item-assignment target) returns a folder with an ID", !!folder && folder.id != null);
+
+      created = await repo.createItem({
+        title: "ZZZ-SmokeTest-InFolder",
+        type: "music",
+        relativePath: template.relativePath,
+        folderId: folder.id,
+      });
+      check(
+        "createItem (with folderId) returns an item with an ID",
+        !!created && created.id != null,
+        JSON.stringify(created)
+      );
+
+      const inFolder = await repo.getItemsByFolder(folder.id);
+      check(
+        "created item is findable via getItemsByFolder",
+        Array.isArray(inFolder) && inFolder.some((i) => String(i.id) === String(created && created.id)),
+        `folder ${folder && folder.id} contains ids [${(inFolder || []).map((i) => i.id).join(", ")}]`
+      );
+    } finally {
+      if (created) {
+        await repo.deleteItem(created.id);
+        const afterDelete = await repo.getItemById(created.id);
+        check("folder-assigned item deleted again", afterDelete === null, JSON.stringify(afterDelete));
+      }
+      if (folder) {
+        await repo.deleteFolder(folder.id);
+        const afterDelete = await repo.getFolderById(folder.id);
+        check("deleteFolder removes the item-assignment test folder", !afterDelete, JSON.stringify(afterDelete));
       }
     }
   });

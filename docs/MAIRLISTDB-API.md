@@ -424,7 +424,11 @@ beobachtete Aufruf `POST /api/v1/folders/<folderId>/items` (direkt nach
 dem `POST /items`) ordnet das neue Item einem Ordner zu. Das Body-Format
 ist inzwischen per Wireshark-Mitschnitt entschlüsselt: form-urlencoded
 mit `add`-Flag und `$doc`-Array, siehe "POST-Endpunkte
-(form-urlencoded)" unten.
+(form-urlencoded)" unten. `apiRepository.js` setzt das in
+`assignItemsToFolder(folderId, itemIds)` um; `createItem()` ruft das nach
+dem `POST /items` auf, wenn eine `folderId` mitgegeben wurde. Schlägt nur
+die Zuordnung fehl, wird das (bereits angelegte) Item trotzdem
+zurückgegeben und der Fehler geloggt.
 
 ### DELETE `/api/v1/items/<id>?station=1` – VERIFIZIERT
 
@@ -651,6 +655,14 @@ Dieser Endpunkt akzeptiert **kein** `application/json`: sieben
 JSON-Varianten wurden erfolglos getestet, alle mit `Invalid operation`,
 weil das `add`-Flag fehlte.
 
+**Nur `add` ist verifiziert.** Ob es ein Gegenstück zum *Entfernen* eines
+Items aus einem Ordner gibt (`remove`? `delete`? ein eigener
+DELETE-Endpunkt?), ist nicht mitgeschnitten und wird bewusst nicht
+geraten — deshalb bleibt `moveItemToFolder()` in `apiRepository.js` ein
+Stub: mit `add` allein läge das Item danach in beiden Ordnern, das wäre
+kein Verschieben. Implementiert ist nur `assignItemsToFolder()` (siehe
+"Offene Punkte").
+
 ### POST `/api/v1/storages/<storageId>/files` – Datei hochladen
 
 - **Content-Type:** `multipart/form-data; boundary=--------<zeitstempel>`
@@ -738,7 +750,14 @@ aus tatsächlich beobachteten Item-Werten.
 - [x] **Ordner-Zuordnung neuer Items** (`POST /api/v1/folders/<id>/items`)
       – VERIFIZIERT per Wireshark-Mitschnitt: form-urlencoded,
       `add&station=1&$doc=["<id>",...]`, siehe "POST-Endpunkte
-      (form-urlencoded)" oben
+      (form-urlencoded)" oben. Umgesetzt als `assignItemsToFolder()`,
+      von `createItem()` bei gesetzter `folderId` aufgerufen
+- [ ] **Operations-Flag zum Entfernen eines Items aus einem Ordner** –
+      nur `add` ist mitgeschnitten/verifiziert. Ein Gegenstück
+      (`remove`/`delete`, oder ein eigener DELETE-Endpunkt auf
+      `/api/v1/folders/<id>/items`) ist unbekannt und wird nicht
+      geraten. Solange das offen ist, bleibt `moveItemToFolder()` ein
+      Stub (siehe `apiRepository.js`)
 - [x] **Body-Format aller POST-Endpunkte** – VERIFIZIERT: nicht JSON,
       sondern `application/x-www-form-urlencoded` mit `$doc`-Parameter
       (Datei-Upload: `multipart/form-data`), siehe eigener Abschnitt

@@ -131,13 +131,19 @@ function authHeader() {
 // `?artists&...` / `?titles&...` distinct-list flags) — URLSearchParams
 // can't express a valueless flag (it always serializes `set(k, "")` as
 // `k=`), so these are appended to the built query string directly.
-async function apiRequest(method, path, { query = {}, rawFlags = [], body, withStation = true } = {}) {
+//
+// `body` is sent as JSON. Some POST endpoints require
+// application/x-www-form-urlencoded instead (see docs/MAIRLISTDB-API.md,
+// "POST-Endpunkte (form-urlencoded)"); those pass `formBody` — an already
+// encoded body string — instead of `body`. Both go through the same
+// concurrency limiter and retry logic here; nothing bypasses apiRequest().
+async function apiRequest(method, path, { query = {}, rawFlags = [], body, formBody, withStation = true } = {}) {
   return withConcurrencyLimit(() =>
-    withRetry(() => doApiRequest(method, path, { query, rawFlags, body, withStation }))
+    withRetry(() => doApiRequest(method, path, { query, rawFlags, body, formBody, withStation }))
   );
 }
 
-async function doApiRequest(method, path, { query = {}, rawFlags = [], body, withStation = true } = {}) {
+async function doApiRequest(method, path, { query = {}, rawFlags = [], body, formBody, withStation = true } = {}) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined || value === null) continue;
@@ -157,9 +163,13 @@ async function doApiRequest(method, path, { query = {}, rawFlags = [], body, wit
       method,
       headers: {
         Authorization: authHeader(),
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(formBody !== undefined
+          ? { "Content-Type": "application/x-www-form-urlencoded" }
+          : body !== undefined
+            ? { "Content-Type": "application/json" }
+            : {}),
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: formBody !== undefined ? formBody : body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
   } catch (err) {
@@ -453,10 +463,8 @@ async function updateItem(id, changes) {
 // der Server vergibt ohnehin eine neue ID und ignoriert das Feld
 // offenbar (bestätigt durch den Live-Test).
 //
-// Ordner-Zuordnung (POST /api/v1/folders/<id>/items, im Client-Traffic
-// beobachtet) ist NICHT verifiziert — Body-Format unbekannt. Eine
-// mitgegebene folderId wird hier bewusst ignoriert statt geraten
-// umgesetzt; siehe docs/MAIRLISTDB-API.md "Offene Punkte".
+// Eine mitgegebene folderId wird nach dem Anlegen per
+// assignItemsToFolder() nachgezogen (separater POST, siehe dort).
 async function createItem(data = {}) {
   const apiItem = mapInternalItemToApi({
     ...data,
@@ -467,7 +475,55 @@ async function createItem(data = {}) {
   }
 
   const newId = await apiRequest("POST", "/api/v1/items", { body: apiItem });
+
+  // Das Item existiert an dieser Stelle bereits — schlägt nur die
+  // Ordner-Zuordnung fehl, wäre es falsch, den ganzen Aufruf scheitern zu
+  // lassen (der Aufrufer würde das angelegte Item sonst nie zu sehen
+  // bekommen und es bliebe verwaist zurück). Also loggen und mit dem
+  // ordnerlosen Item weitermachen.
+  if (data.folderId != null && data.folderId !== "") {
+    try {
+      await assignItemsToFolder(data.folderId, [newId]);
+    } catch (err) {
+      console.error(
+        `createItem: Item ${newId} wurde angelegt, die Zuordnung zu Ordner ${data.folderId} ist aber fehlgeschlagen: ${err.message}`
+      );
+    }
+  }
+
   return getItemById(String(newId));
+}
+
+// POST /api/v1/folders/<folderId>/items — VERIFIZIERT per
+// Wireshark-Mitschnitt des offiziellen Clients (siehe
+// docs/MAIRLISTDB-API.md, "POST-Endpunkte (form-urlencoded)"):
+//
+//   Content-Type: application/x-www-form-urlencoded
+//   Body:         add&station=1&$doc=<urlencodiertes JSON-Array von IDs>
+//
+// `add` ist ein NACKTES Flag ohne Wert und zwingend erforderlich (fehlt
+// es, antwortet der Server mit "Invalid operation"). `$doc` ist ein
+// JSON-Array von ID-Strings, nicht eine einzelne ID — mehrere Items
+// lassen sich also in einem Request zuordnen. application/json wird von
+// diesem Endpunkt abgelehnt. Response: `null` bei Status 200.
+async function assignItemsToFolder(folderId, itemIds) {
+  const ids = (Array.isArray(itemIds) ? itemIds : [itemIds])
+    .filter((id) => id != null && id !== "")
+    .map((id) => String(id));
+  if (ids.length === 0) return null;
+
+  // Der Body wird von Hand gebaut statt per URLSearchParams: das nackte
+  // `add`-Flag lässt sich damit nicht ausdrücken (set(k, "") wird immer
+  // als `k=` serialisiert).
+  const formBody = `add&station=${encodeURIComponent(STATION)}&$doc=${encodeURIComponent(JSON.stringify(ids))}`;
+
+  // station steckt bereits im Body (so macht es auch der offizielle
+  // Client), deshalb withStation: false — sonst stünde es doppelt im
+  // Request.
+  return apiRequest("POST", `/api/v1/folders/${encodeURIComponent(folderId)}/items`, {
+    formBody,
+    withStation: false,
+  });
 }
 
 // DELETE /api/v1/items/<id>?station=1 — VERIFIZIERT live gegen den
@@ -1097,6 +1153,15 @@ const getItemTypes = emptyStub("getItemTypes", []);
 const searchItems = notImplemented("searchItems");
 const getCuePoints = notImplemented("getCuePoints");
 const getAttributeDefinitions = notImplemented("getAttributeDefinitions");
+// Bleibt bewusst ein Stub: verifiziert ist nur das `add`-Flag von
+// POST /api/v1/folders/<id>/items (siehe assignItemsToFolder). Ein
+// *Verschieben* bräuchte zusätzlich das Entfernen aus dem Quellordner,
+// wofür vermutlich ein anderes Operations-Flag (`remove`? `delete`?)
+// nötig ist — das ist nicht mitgeschnitten und wird hier nicht geraten:
+// ein falsches Flag ergibt im besten Fall "Invalid operation", im
+// schlimmsten eine ungewollte Änderung. Mit `add` allein wäre das Item
+// danach in beiden Ordnern, also gerade kein Verschieben. Siehe
+// docs/MAIRLISTDB-API.md, "Offene Punkte".
 const moveItemToFolder = notImplemented("moveItemToFolder");
 const uploadFile = notImplemented("uploadFile");
 const resolveAudioPath = notImplemented("resolveAudioPath");
@@ -1165,6 +1230,7 @@ module.exports = {
   updateItem,
   createItem,
   deleteItem,
+  assignItemsToFolder,
   getPlaylistHour,
   getPlaylistAttributes,
   writeHour,

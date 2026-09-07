@@ -7,8 +7,9 @@ mAirList-Clients (Version 6.3.24.4498) gegen den `mAirListDB Server` (Port 8840,
 `ServerMode=HTTP`, laut `dbserver.ini`). Sie ist **nicht offiziell** und
 unvollständig – es sind nur die Endpunkte dokumentiert, die im Traffic
 tatsächlich beobachtet wurden. Response-Formate sind anhand echter Antworten
-protokolliert, PUT-Bodies wurden (Stand dieser Dokumentation) noch nicht
-verifiziert und sind als Annahme markiert.
+protokolliert. Die POST- und PUT-Bodies sind inzwischen über zwei
+Wireshark-Mitschnitte des echten Clients verifiziert und als solche
+markiert.
 
 **Implementiert in:** [`server/data/apiRepository.js`](../server/data/apiRepository.js)
 (`DATA_SOURCE=api`) — die Repository-Funktionen setzen exakt die hier
@@ -930,7 +931,26 @@ aus tatsächlich beobachteten Item-Werten.
 ## Offene Punkte / noch zu verifizieren
 
 - [x] **PUT-Body für `/api/v1/items/<id>`** – verifiziert, siehe oben
-- [x] **PUT-Body für `/api/v1/playlists/...`** – verifiziert, siehe oben
+- [x] **Such-Endpunkt für Items** – VERIFIZIERT per Wireshark:
+      `GET /api/v1/items?search=<begriff>&fields=All&limit=50&station=1`,
+      Response im gleichen erweiterten Format wie `?folder=`.
+      `searchItems()` in `apiRepository.js` ist damit **umsetzbar**
+      (bisher leerer Stub), aber noch nicht implementiert
+- [x] **Cover im api-Modus** – GEKLÄRT: das Feld heißt `IconData`
+      (base64-JPEG). Lesbar über `?icons=true` bzw. im
+      `?folder=`-Format, **schreibbar** über den normalen
+      `PUT /api/v1/items/<id>`. Noch nicht im Frontend angebunden
+- [x] **Restrictions schreiben** – VERIFIZIERT:
+      `PUT /api/v1/items/<id>/restrictions`, form-urlencoded mit
+      `$doc={"NotBefore":…,"NotAfter":…,"Hours":"<168 Bit>"}`.
+      Offen bleibt nur die **Bit-Reihenfolge** im `Hours`-String
+      (vermutlich Mo 0 Uhr → So 23 Uhr, gegen die Client-Anzeige zu prüfen)
+- [x] **Voice Tracking** – GEKLÄRT: kein eigener Endpunkt, ein Voice
+      Track ist ein Item mit `Type:"Voice"` plus Storage-Upload, siehe
+      Abschnitt "Voice Tracking"
+- [x] **PUT-Body für `/api/v1/playlists/...`** – verifiziert, siehe oben.
+      Der offizielle Client schickt `BaseTime` und **kein** `VersionInfo`
+      (siehe dort) — `VersionInfo` ist beim Schreiben offenbar optional
 - [x] Fehlerformat bei nicht existierender Ressource – verifiziert
       (404, Klartext-Body)
 - [ ] Vollständige Liste möglicher `Markers`-Schlüssel – bei ~20
@@ -974,6 +994,13 @@ aus tatsächlich beobachteten Item-Werten.
       siehe "Folders (Ordnerbaum)" oben
 - [ ] Storage-Verwaltung (`EditStorages`-Capability, Endpunkt noch nicht
       beobachtet)
+- [ ] **Response-Format von `GET /api/v1/stations/<id>/config`** (ohne
+      Key) und die vollständige Schlüsselliste — bisher nur
+      `VoiceTrackImportFolder` beobachtet
+- [ ] **Spezial-Folder-ID `unsorted`** – nur
+      `/api/v1/folders/unsorted/config` beobachtet (Antwort `{}`); ob
+      `GET /api/v1/items?folder=unsorted` die nicht einsortierten Items
+      liefert, ist ungetestet
 - [ ] Pagination bei Items in einzelnen großen Ordnern (limit/offset
       o. ä.?) – bei Folders selbst nicht beobachtet, bei Items noch
       nicht spezifisch getestet
@@ -1032,4 +1059,13 @@ laufende Produktivinstanz. Alle dokumentierten PUT-Bodies wurden aktiv
 gegen die echte Datenbank getestet und per anschließendem GET verifiziert
 (Testwerte danach zurückgesetzt). Die POST-Bodies stammen aus einem
 Wireshark-Mitschnitt des echten Clients (siehe "POST-Endpunkte
-(form-urlencoded)"). Stand: 06.09.2026.
+(form-urlencoded)").
+
+Ein **zweiter Wireshark-Mitschnitt (07.09.2026)** ergänzte den
+Such-Endpunkt (`?search=`), das Body-Format von
+`PUT /items/<id>/restrictions` inkl. `Hours`-Bitraster, die zusätzlich
+schreibbaren Item-Felder (`IconData`/`Attributes`/`CueData`/`Type`), den
+`BaseTime`-Befund beim Playlist-PUT, den Voice-Tracking-Ablauf sowie die
+Stations-Config-Endpunkte und die Spezial-Folder-ID `unsorted`.
+
+Stand: 07.09.2026.

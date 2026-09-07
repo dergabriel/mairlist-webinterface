@@ -257,7 +257,7 @@ immer der komplette Body mit beiden Feldern gesendet.
 | GET | `/api/v1/items?folder=<id>&station=1` | Items in einem Ordner |
 | GET | `/api/v1/items?search=<begriff>&fields=All&limit=50&station=1` | **VERIFIZIERT:** Volltextsuche über die Bibliothek (siehe unten) |
 | GET | `/api/v1/items/<id>?station=1` | Einzelnes Item, vollständig |
-| GET | `/api/v1/items?ids=<id>[,<id>...]&icons=true&station=1` | Mehrere Items gezielt per ID, inkl. Icons |
+| GET | `/api/v1/items?ids=<id>[,<id>...]&icons=true&station=1` | Mehrere Items gezielt per ID; `icons=true` liefert `IconData` (das Cover) mit |
 | GET | `/api/v1/items?artists&time=...&station=1` | Distinct-Liste der Artists (Such-/Filter-Funktion) |
 | GET | `/api/v1/items?titles&time=...&station=1` | Distinct-Liste der Titel |
 | GET | `/api/v1/items?folder=<id>&time=...&station=1` | Items mit Sendezeit-Kontext (z. B. für Scheduling-Anzeige) |
@@ -422,6 +422,63 @@ tatsächlich persistiert wurde.
 - Es reicht, das komplette vom GET erhaltene Objekt zu nehmen, einzelne
   Felder zu ändern und unverändert zurückzuschicken – keine Teil-Updates
   nötig, kein separates "Diff"-Format
+
+**Body-Variante des offiziellen Clients (Wireshark, form-urlencoded):**
+
+```
+station=1&$doc={...vollständiges Item-JSON...}
+```
+
+Beide Wege funktionieren nachweislich: `application/json` (unsere
+Variante, seit Wochen im Einsatz) und `application/x-www-form-urlencoded`
+mit `$doc` (die Client-Variante). Kein Handlungsbedarf in
+`apiRepository.js`.
+
+#### Schreibbare Felder im PUT-Body – VERIFIZIERT
+
+Der mitgeschnittene Client-Body enthält deutlich mehr Felder als das
+minimale GET-Beispiel oben. Alle davon gehen beim normalen Item-PUT mit,
+es braucht dafür **keine eigenen Endpunkte**:
+
+| Feld | Beispiel / Format | Bedeutung |
+|---|---|---|
+| `Attributes` | `{"Stimmung":"high"}` | Item-Attribute — kein separater Attribut-Endpunkt nötig |
+| `IconData` | base64-kodiertes JPEG | **Das Cover.** Lesbar auch über `?icons=true` (siehe unten) |
+| `CueData` | `{"Items":[{"Artist":"…","ItemType":"Music","Title":"…","Class":"Track"}]}` | verschachtelte Track-Infos: was im Element enthalten ist (z. B. bei Mitschnitten/Containern) |
+| `Type` | `"Voice"` beobachtet | Item-Typ; `Voice` = Voice Track (siehe "Voice Tracking" unten) |
+| `Database` | `"mAirListDB:{GUID}"` | Datenbankkennung |
+
+`IconData` löst den offenen Punkt "Cover ist im api-Modus nicht
+verfügbar": Cover sind sowohl **lesbar** (`?icons=true` bzw. im
+`?folder=`-Format) als auch **schreibbar** (dieses Feld im PUT-Body).
+
+### PUT `/api/v1/items/<id>/restrictions` – VERIFIZIERT
+
+Schreibt die Sendebeschränkungen eines Items (Gegenstück zum bereits
+dokumentierten `GET /api/v1/items/<id>/restrictions`).
+
+- **Content-Type:** `application/x-www-form-urlencoded`
+- **Body (dekodiert):**
+  ```
+  station=1&$doc={"NotBefore":null,"NotAfter":null,"Hours":"1111...0111"}
+  ```
+
+| Feld | Format | Bedeutung |
+|---|---|---|
+| `NotBefore` | ISO-Datum oder `null` | frühestes Sendedatum; `null` = keine Untergrenze |
+| `NotAfter` | ISO-Datum oder `null` | spätestes Sendedatum; `null` = keine Obergrenze |
+| `Hours` | Bit-String mit **exakt 168 Zeichen** | Stundenraster, 7 Tage × 24 Stunden |
+
+**Das `Hours`-Bitraster:** `"1"` = Sendung in dieser Stunde erlaubt,
+`"0"` = gesperrt. 168 = 7 × 24 passt eindeutig auf ein Wochenraster.
+
+⚠️ **Reihenfolge nicht zweifelsfrei belegt:** vermutlich Montag 0 Uhr bis
+Sonntag 23 Uhr (also Tag-für-Tag, innerhalb eines Tages stundenweise).
+Beim Implementieren gegen die Client-Anzeige gegenprüfen — ein einzelnes
+gesetztes Bit an bekannter Position schreiben und im offiziellen Client
+nachsehen, welche Zelle markiert ist. Ein Off-by-one im Wochentag oder
+eine spalten- statt zeilenweise Anordnung wären aus dem Mitschnitt allein
+nicht unterscheidbar.
 
 ### POST `/api/v1/items?station=1` – VERIFIZIERT
 
@@ -620,6 +677,30 @@ zurückgeschickt.
   zwei überlappende Schreibvorgänge simulieren (z. B. mit veralteter
   Version schreiben und schauen ob ein Fehler kommt).
 
+**Body-Variante des offiziellen Clients (Wireshark) – `BaseTime`, kein
+`VersionInfo`:**
+
+```
+station=1&$doc={"BaseTime":"2026-07-30T16:00:00","Items":[...]}
+```
+
+- **`BaseTime`** ist der ISO-Zeitstempel des Stundenbeginns — also
+  redundant zum Datum/Stunde im Pfad. Der Client schickt es trotzdem
+  mit; ob der Server es auswertet oder ignoriert, ist nicht geprüft.
+- **`VersionInfo` fehlt im Client-Body komplett.** Unsere Implementierung
+  schickt `{Items, VersionInfo}` als JSON und funktioniert nachweislich
+  (der Server zählt die Version hoch und gibt sie zurück). `VersionInfo`
+  ist beim Schreiben also **offenbar optional** — der Server leitet die
+  neue Version selbst ab, statt die mitgeschickte zu prüfen.
+- Das ist ein **Indiz**, aber kein Beweis dafür, dass es kein
+  optimistisches Locking gibt: möglich bleibt, dass der Server eine
+  *mitgeschickte* Version prüft und eine fehlende schlicht durchwinkt.
+  Der offene Punkt "Verhalten bei echtem Versionskonflikt" bleibt
+  deshalb bestehen.
+- **Kein Handlungsbedarf:** Unsere JSON-Variante mit `VersionInfo` läuft
+  produktiv; `BaseTime` wird nicht gesendet und offensichtlich auch nicht
+  gebraucht.
+
 **Einzelne Slots einfügen/entfernen/umsortieren:** Die API bietet dafür
 keinen eigenen Endpunkt, nur ganze Stunde lesen/schreiben. `apiRepository.js`
 implementiert `reorderPlaylist`/`insertPlaylistItem`/`removePlaylistItem`
@@ -753,6 +834,58 @@ idempotenten Request.
 2. `POST /api/v1/items` – Datensatz anlegen, gibt die neue ID zurück
 3. `POST /api/v1/folders/<id>/items` mit `add&station=1&$doc=["<neueId>"]`
    – Item dem Ordner zuordnen
+
+## Voice Tracking – kein eigener Endpunkt
+
+Im Wireshark-Mitschnitt wurde der komplette Voice-Tracking-Ablauf des
+offiziellen Clients beobachtet. Zentrale Erkenntnis: **es gibt keine
+dedizierte Voice-Tracking-API.** Ein Voice Track ist technisch ein
+ganz normales Item vom `Type: "Voice"`, dessen Audiodatei über den
+Storage-Upload hochgeladen wurde.
+
+Beobachteter Ablauf:
+
+1. `GET /api/v1/stations/<id>/config/VoiceTrackImportFolder`
+   – Zielordner für importierte Voice Tracks. Bei dieser Installation
+   **leer**, also nicht konfiguriert.
+2. `GET /api/v1/folders/unsorted/config`
+   – `unsorted` ist eine **Spezial-Folder-ID** für nicht einsortierte
+   Elemente (offenbar der Fallback, wenn kein Import-Ordner gesetzt ist).
+   Antwort hier: `{}`.
+3. `POST /api/v1/storages/<id>/files` – Audiodatei hochladen (multipart,
+   siehe oben).
+4. Item mit `Type: "Voice"` anlegen (`POST /api/v1/items`), Rest wie bei
+   jedem anderen Item.
+
+**Für die geplante Phase E (Voice Tracking) heißt das:** die API-seitigen
+Bausteine existieren in `apiRepository.js` bereits alle — Upload,
+`createItem()`, `insertPlaylistItem()`. Es braucht keinen neuen
+Endpunkt-Reverse-Engineering-Schritt mehr, nur noch die Aufnahme- und
+Mix-Logik im Frontend.
+
+**Noch offen:** Welche Felder ein Voice-Track-Item über `Type: "Voice"`
+hinaus braucht (Overlaps/Ramp-Marker zum vorherigen und nächsten
+Element), und ob `VoiceTrackImportFolder` bei gesetztem Wert eine
+Ordner-ID oder einen Pfad enthält — die Installation im Mitschnitt hatte
+den Wert leer.
+
+## Stations-Konfiguration und Spezial-IDs
+
+| Methode | Pfad | Beschreibung |
+|---|---|---|
+| GET | `/api/v1/stations/<id>/config` | komplette Stations-Konfiguration |
+| GET | `/api/v1/stations/<id>/config/<key>` | einzelner Konfigurationsschlüssel |
+| GET | `/api/v1/folders/unsorted/config` | Config des Spezial-Ordners `unsorted` |
+
+- Beobachteter Konfigurationsschlüssel: **`VoiceTrackImportFolder`**
+  (bei dieser Installation leer). Weitere Schlüssel sind nicht
+  mitgeschnitten — `GET /api/v1/stations/<id>/config` ohne Key sollte
+  die vollständige Liste liefern, das Response-Format ist aber noch
+  nicht protokolliert.
+- **`unsorted` ist eine Spezial-Folder-ID**, kein numerischer Ordner:
+  sie steht für nicht einsortierte Elemente. Ob sie auch bei
+  `GET /api/v1/items?folder=unsorted` funktioniert, ist nicht getestet.
+  `/api/v1/folders/unsorted/config` antwortete hier mit `{}`.
 
 ## Fehlerbehandlung – teilweise VERIFIZIERT
 

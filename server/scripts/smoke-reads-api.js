@@ -7,7 +7,8 @@
 //
 // Optional: SMOKE_ITEM_ID (default 2605), SMOKE_FOLDER_ID (default omitted
 // -> top-level), SMOKE_DATE (default today) to point the playlist checks at
-// a specific hour.
+// a specific hour. SMOKE_SEARCH_TERM (default "DXR") to point the search
+// check at a term guaranteed to have hits in your library.
 
 if (!process.env.API_DB_USER || !process.env.API_DB_PASSWORD) {
   console.error("API_DB_USER / API_DB_PASSWORD not set — refusing to guess credentials.");
@@ -260,6 +261,34 @@ async function main() {
 
   await run("getArtists", () => repo.getArtists());
   await run("getTitles", () => repo.getTitles());
+
+  const searchTerm = process.env.SMOKE_SEARCH_TERM || "DXR";
+  await run(`searchItems ("${searchTerm}")`, async () => {
+    const results = await repo.searchItems(searchTerm);
+    if (!Array.isArray(results)) throw new Error("expected an array");
+    if (results.length === 0) {
+      throw new Error(`expected at least one hit for "${searchTerm}" — set SMOKE_SEARCH_TERM to a term with known hits`);
+    }
+    const first = results[0];
+    if (typeof first.title !== "string" || typeof first.artist !== "string") {
+      throw new Error("expected internal item shape with title/artist as camelCase strings");
+    }
+    // Raw API items use PascalCase (Title/Artist/Type/Duration) — if any
+    // of those keys are present, the item leaked the raw API shape instead
+    // of going through mapApiItemToInternal().
+    const rawKeys = ["Title", "Artist", "Type", "Duration"].filter((k) => k in first);
+    if (rawKeys.length > 0) {
+      throw new Error(`result still has raw API keys (not normalized): ${rawKeys.join(", ")}`);
+    }
+    return { count: results.length, sample: { title: first.title, artist: first.artist } };
+  });
+
+  await run("searchItems (nonsense term -> empty array)", async () => {
+    const results = await repo.searchItems("xyzzyqqqnonexistent12345");
+    if (!Array.isArray(results)) throw new Error("expected an array");
+    if (results.length !== 0) throw new Error(`expected an empty array, got ${results.length} results`);
+    return { count: 0 };
+  });
 
   // Simulates the browser's dashboard page load, which fires ~12 requests
   // in parallel. Without the concurrency limiter in apiRepository.js this

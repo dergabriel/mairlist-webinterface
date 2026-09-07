@@ -276,11 +276,11 @@ router.get("/items/:id/audio", requireScope("library.read"), async (req, res, ne
 });
 
 // GET /api/search?q=&fields=title,artist
-router.get("/search", requireScope("library.read"), (req, res, next) => {
+router.get("/search", requireScope("library.read"), async (req, res, next) => {
   try {
     const { q, fields } = req.query;
     const opts = fields ? { fields: fields.split(",") } : {};
-    res.json(repo.searchItems(q, opts));
+    res.json(await repo.searchItems(q, opts));
   } catch (e) { next(e); }
 });
 

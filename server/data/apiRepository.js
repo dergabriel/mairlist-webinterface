@@ -397,6 +397,43 @@ async function getItemsByIds(ids) {
   return list.map((apiItem) => mapApiItemToInternal(apiItem));
 }
 
+// GET /api/v1/items?search=<term>&fields=All&limit=<n>&station=<n> —
+// verified via Wireshark (see docs/MAIRLISTDB-API.md). Response is the
+// same extended item shape as ?folder=<id> (Folders/NextUse/LastUse/
+// LastPlayed/EffectiveDuration included), so it's mapped the same way.
+// No folder field is echoed back (the search spans the whole library),
+// so folderId stays null here — same as getItemById/getItemsByIds.
+//
+// sqlRepository.js's searchItems(query, opts) accepts opts.fields to
+// restrict the match to a subset of ["title", "artist", "comment"]; the
+// API's `fields` parameter isn't documented to support that (only "All"
+// has been observed), so a requested field restriction is reproduced
+// client-side on top of the server's full-text results. `comment` is
+// never populated by mapApiItemToInternal() (the API doesn't expose it),
+// so restricting to just "comment" always yields an empty result here —
+// consistent with there being no comment data to match against.
+async function searchItems(query, opts = {}) {
+  if (!query || query.trim() === "") return [];
+
+  const limit = opts.limit || 50;
+  const data = await apiRequest("GET", "/api/v1/items", {
+    query: { search: query, fields: "All", limit },
+  });
+  const list = Array.isArray(data) ? data : data?.Items || [];
+  let result = list.map((apiItem) => mapApiItemToInternal(apiItem, null));
+
+  if (opts.fields) {
+    const validFields = opts.fields.filter((f) => ["title", "artist", "comment"].includes(f));
+    if (validFields.length === 0) return [];
+    const q = query.toLowerCase();
+    result = result.filter((item) =>
+      validFields.some((f) => String(item[f] || "").toLowerCase().includes(q))
+    );
+  }
+
+  return result;
+}
+
 // Response is a bare array of folder ID strings, e.g. ["8"] — not folder
 // objects (unlike the `Folders` array embedded in
 // /api/v1/items?folder=<id> responses). Resolve each ID against the full
@@ -1231,7 +1268,6 @@ const deleteStorage = notImplemented("deleteStorage");
 // docs/MAIRLISTDB-API.md.
 const getItemTypes = emptyStub("getItemTypes", []);
 
-const searchItems = notImplemented("searchItems");
 const getCuePoints = notImplemented("getCuePoints");
 const getAttributeDefinitions = notImplemented("getAttributeDefinitions");
 const uploadFile = notImplemented("uploadFile");

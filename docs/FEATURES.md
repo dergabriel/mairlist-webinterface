@@ -272,6 +272,41 @@ deshalb nur mit `folderId` echte Daten (baut auf `getItemsByFolder` auf,
 `type`/`artist`/`storageId`/`attributeKey`+`attributeValue` werden
 clientseitig nachgefiltert); ohne `folderId` liefert es `[]`.
 
+**Neu erschlossen durch den zweiten Wireshark-Mitschnitt (07.09.2026)** —
+alles drei ist verifiziert und damit umsetzbar, aber noch **nicht**
+implementiert:
+
+- **Item-Suche (`searchItems`):** `GET /api/v1/items?search=<begriff>&
+  fields=All&limit=50&station=1` liefert Treffer im gleichen erweiterten
+  Format wie `?folder=<id>`. Der Stub war bisher leer, weil kein
+  Such-Endpunkt bekannt war — das gilt nicht mehr. Damit fällt auch die
+  bisherige Annahme, `GET /api/v1/items` verlange immer `folder=` oder
+  `ids=`. **Inzwischen implementiert** (siehe unten); noch offen:
+  Pagination und die weiteren `fields`-Werte (nur `All` ist verifiziert,
+  eine feldbasierte Einschränkung wird deshalb clientseitig nachgebildet).
+- **Cover (`IconData`):** Das Cover steckt im Item-Feld `IconData` als
+  base64-kodiertes JPEG — **lesbar** über `?icons=true` bzw. im
+  `?folder=`-Format und **schreibbar** über den normalen
+  `PUT /api/v1/items/<id>`. Im api-Modus wäre das Cover damit voll
+  anbindbar; `mapApiItemToInternal()`/`updateItem()` werten `IconData`
+  bisher nicht aus. (Das ist unabhängig vom gleichnamigen offenen TODO in
+  `sqlRepository.js`, wo `cover` aus `items.xmldata` geparst werden
+  müsste — zwei verschiedene Baustellen.)
+- **Restrictions schreiben:** `PUT /api/v1/items/<id>/restrictions`
+  (form-urlencoded, `$doc={"NotBefore":…,"NotAfter":…,"Hours":"<168
+  Bit>"}`) ist verifiziert; gelesen werden sie über
+  `getItemRestrictions()` schon heute. Der `Hours`-Bitstring bildet 7
+  Tage × 24 Stunden ab (`1` = erlaubt); die genaue Bit-Reihenfolge ist
+  vermutlich Mo 0 Uhr → So 23 Uhr, aber **noch gegen die Client-Anzeige
+  zu prüfen**, bevor darauf ein Editor gebaut wird.
+
+Ebenfalls neu dokumentiert, ohne Handlungsbedarf: der offizielle Client
+nutzt auch bei `PUT /items/<id>` und beim Playlist-PUT form-urlencoded
+mit `$doc` (unsere JSON-Variante funktioniert weiterhin), und beim
+Playlist-PUT schickt er `BaseTime` statt `VersionInfo` — `VersionInfo`
+ist beim Schreiben also offenbar optional. Details in
+[`docs/MAIRLISTDB-API.md`](MAIRLISTDB-API.md).
+
 **Bewusst noch nicht implementiert** (werfen einen klaren "im
 api-Modus noch nicht verfügbar"-Fehler statt zu crashen oder falsche
 Daten zu liefern):
@@ -279,7 +314,7 @@ Daten zu liefern):
 | Funktion / Bereich | Status |
 |---|---|
 | Storage-Verwaltung: `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
-| Item-Suche (`searchItems`), `getAttributeDefinitions`, `getCuePoints` | ⬜ |
+| `getAttributeDefinitions`, `getCuePoints` | ⬜ |
 | `uploadFile`, `resolveAudioPath` | ⬜ |
 | `getItemTypes` | ⬜ kein Endpunkt gefunden, bleibt leerer Stub (siehe oben) |
 | `getLogs`, `getRecentLogs` | ⬜ kein Logs-Endpunkt gefunden, liefern `[]` statt Fehler (siehe oben) |
@@ -311,6 +346,13 @@ Der echte Client hat sieben Wurzelknoten, wir haben bisher nur einen:
 | Suche auf bestimmte Felder einschränken (nur Artist, nur Titel …) | ✅ |
 | Volltextsuche an/aus (aus = nur Wortanfang, nutzt SQL-Indizes, schneller) | ✅ |
 | Advanced Search: mehrere Begriffe UND-verknüpft über alle Felder | ⬜ |
+
+Im **api-Modus** ist die Suche jetzt verfügbar über
+`GET /api/v1/items?search=…&fields=All&limit=50` — siehe
+[API-basierte Datenquelle](#-api-basierte-datenquelle-mairlistdb-server).
+Die Einschränkung auf bestimmte Felder (nur Artist, nur Titel …) wird
+dabei clientseitig nachgebildet, da die API selbst nur `fields=All`
+unterstützt.
 
 ### Item-Liste
 
@@ -364,7 +406,7 @@ mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper
 
 | Tab | Status |
 |---|---|
-| Allgemein (Titel, Interpret, Typ, Länge, IDs, Kommentar, Farbe, Cover) | ✅ |
+| Allgemein (Titel, Interpret, Typ, Länge, IDs, Kommentar, Farbe, Cover) | ✅ (Cover im api-Modus noch nicht angebunden — Feld `IconData`, les- und schreibbar, siehe API-Abschnitt) |
 | Wiedergabe (Gain, Normalisieren als Mock, Segue-Modus) | ✅ |
 | Attribute (vordefinierte Felder: Text kurz/lang, Zahl, Checkbox, Auswahl, Mehrfachauswahl) | ✅ |
 | Sendeplanung (Fix-Zeiten, Rotations-Regeln) | ⬜ |
@@ -455,6 +497,22 @@ Der VT Recorder ist im Original ein eigenes Fenster im DB Client. Ablauf laut Do
 | Nachbearbeitung im Mix Editor | ⬜ |
 | Tastatur-Shortcuts für den ganzen Ablauf | ⬜ |
 | VTDJ-Rolle: Nutzer, die nur voicetracken dürfen | ⬜ Phase Mehrbenutzer |
+
+**Serverseitig gibt es keine eigene Voice-Tracking-API** (Wireshark-
+Mitschnitt des offiziellen Clients, 07.09.2026). Ein Voice Track ist
+technisch ein **ganz normales Item vom `Type: "Voice"`**, dessen
+Audiodatei vorher über den Storage-Upload
+(`POST /api/v1/storages/<id>/files`) hochgeladen wurde. Der Client fragt
+davor nur `stations/<id>/config/VoiceTrackImportFolder` (Zielordner, bei
+der beobachteten Installation leer) und `folders/unsorted/config` ab.
+
+Für diese Phase heißt das: die API-Bausteine existieren in
+`apiRepository.js` bereits alle (Upload, `createItem`,
+`insertPlaylistItem`) — es fehlt kein Endpunkt mehr, nur die Aufnahme-
+und Mix-Logik im Frontend. Noch offen ist, welche Felder ein
+Voice-Track-Item über `Type: "Voice"` hinaus für korrekte Overlaps
+braucht. Details:
+[`docs/MAIRLISTDB-API.md` – Voice Tracking](MAIRLISTDB-API.md#voice-tracking--kein-eigener-endpunkt).
 
 ---
 

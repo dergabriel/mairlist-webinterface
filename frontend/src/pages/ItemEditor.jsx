@@ -132,7 +132,7 @@ const mmss = (sec) => {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 };
 
-const formatDate = (iso) => iso.replace("T", "  ");
+const formatDate = (iso) => (iso ?? "").replace("T", "  ");
 
 // Cue points are shown and edited as seconds with fractional part (e.g.
 // 140.533). Whether mAirList actually stores them this way internally is

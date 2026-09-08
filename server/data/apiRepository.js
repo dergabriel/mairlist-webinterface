@@ -661,8 +661,27 @@ async function getItemRestrictions(itemId) {
   return apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/restrictions`);
 }
 
+// Maps the API's history entries (PascalCase: Time, Duration, Studio,
+// ListenersStart, ListenersStop, PlaybackID) to the { slot, date, hour }
+// shape sqlRepository.js's getItemHistory() returns (see its parseSlot()/
+// buildSlot()) and that the frontend's history tab expects. Time is an ISO
+// timestamp ("2026-04-30T22:31:19") — date/hour are pulled straight out of
+// it, and slot is rebuilt in sqlRepository's own slot format (bare date at
+// midnight, "date HH:00:00.000" otherwise) so both repos agree exactly on
+// shape even though slot isn't itself used to derive date/hour here.
+function mapApiHistoryEntry(entry) {
+  if (!entry?.Time) return null;
+  const date = entry.Time.slice(0, 10);
+  const hourMatch = /T(\d{2}):/.exec(entry.Time);
+  const hour = hourMatch ? parseInt(hourMatch[1], 10) : 0;
+  const slot = hour === 0 ? date : `${date} ${String(hour).padStart(2, "0")}:00:00.000`;
+  return { slot, date, hour };
+}
+
 async function getItemHistory(itemId) {
-  return apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/history`);
+  const data = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/history`);
+  if (!Array.isArray(data)) return [];
+  return data.map(mapApiHistoryEntry).filter(Boolean);
 }
 
 // ---- audio streaming ----
@@ -1039,6 +1058,52 @@ async function getAttributeKeys() {
   return parseStandardAttributesXml(config?.StandardAttributes);
 }
 
+// Same StandardAttributes XML as getAttributeKeys, but reparsed to keep the
+// Kind attribute (dropped by parseStandardAttributesXml) and mapped to the
+// { key, label, type, options } shape sqlRepository.js's getAttributeDefinitions()
+// returns (ATTRIBUTE_DEFINITIONS in mockData.js), which the Item Editor's
+// Attribute tab expects: DropDown -> select, Check -> checkbox, no Kind ->
+// free-text.
+function mapStandardAttributeKind(kind) {
+  if (kind === "DropDown") return "select";
+  if (kind === "Check") return "checkbox";
+  return "text";
+}
+
+function parseStandardAttributeDefinitionsXml(xml) {
+  if (!xml) return [];
+  const result = [];
+  let match;
+  STANDARD_ATTRIBUTE_RE.lastIndex = 0;
+  while ((match = STANDARD_ATTRIBUTE_RE.exec(xml))) {
+    const name = match[1];
+    if (!name) continue;
+    const attrsStr = match[0];
+    const kindMatch = /\bKind="([^"]*)"/.exec(attrsStr.slice(0, attrsStr.indexOf(">") + 1));
+    const kind = kindMatch ? kindMatch[1] : null;
+    const inner = match[3] || "";
+    const values = [];
+    let valueMatch;
+    VALUE_RE.lastIndex = 0;
+    while ((valueMatch = VALUE_RE.exec(inner))) {
+      values.push(valueMatch[1]);
+    }
+    const type = mapStandardAttributeKind(kind);
+    result.push({
+      key: name,
+      label: name,
+      type,
+      ...(type === "select" || type === "checkbox" ? { options: values } : {}),
+    });
+  }
+  return result;
+}
+
+async function getAttributeDefinitions() {
+  const config = await getConfig();
+  return parseStandardAttributeDefinitionsXml(config?.StandardAttributes);
+}
+
 // ---- artists / titles (distinct-value search) ----
 //
 // docs/MAIRLISTDB-API.md documents these as `?artists&time=...&station=1` /
@@ -1269,7 +1334,6 @@ const deleteStorage = notImplemented("deleteStorage");
 const getItemTypes = emptyStub("getItemTypes", []);
 
 const getCuePoints = notImplemented("getCuePoints");
-const getAttributeDefinitions = notImplemented("getAttributeDefinitions");
 const uploadFile = notImplemented("uploadFile");
 const resolveAudioPath = notImplemented("resolveAudioPath");
 

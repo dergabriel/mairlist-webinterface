@@ -161,8 +161,8 @@ router.get("/artists", requireScope("library.read"), async (req, res, next) => {
 });
 
 // GET /api/attributes -> attribute keys present in the library, each with its distinct values
-router.get("/attributes", requireScope("library.read"), (req, res, next) => {
-  try { res.json(repo.getAttributeKeys()); } catch (e) { next(e); }
+router.get("/attributes", requireScope("library.read"), async (req, res, next) => {
+  try { res.json(await repo.getAttributeKeys()); } catch (e) { next(e); }
 });
 
 // GET /api/items?type=&artist=&folderId=&storageId=&attributeKey=&attributeValue=
@@ -290,8 +290,8 @@ router.get("/cuepoints", requireScope("library.read"), (req, res, next) => {
 });
 
 // GET /api/attributes/definitions -> predefined attribute schema for the item editor
-router.get("/attributes/definitions", requireScope("library.read"), (req, res, next) => {
-  try { res.json(repo.getAttributeDefinitions()); } catch (e) { next(e); }
+router.get("/attributes/definitions", requireScope("library.read"), async (req, res, next) => {
+  try { res.json(await repo.getAttributeDefinitions()); } catch (e) { next(e); }
 });
 
 // POST /api/items -> create a new item

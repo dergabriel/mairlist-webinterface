@@ -9,7 +9,7 @@ import {
   getTree, getItems, getStorages, createItem, deleteItem, uploadFile,
   getArtists, getItemTypes, getAttributeKeys, moveItemToFolder,
   createFolder, renameFolder, moveFolder, deleteFolder, getFolderChildren,
-  createStorage, updateStorage, deleteStorage, getDashboard,
+  createStorage, updateStorage, deleteStorage, getDashboard, searchItems,
 } from "../lib/api";
 import { useAppData } from "../lib/AppDataContext";
 import { useAuth } from "../lib/AuthContext";
@@ -828,6 +828,8 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     fullText: true,
   });
   const [showSearchOptions, setShowSearchOptions] = useState(false);
+  const [librarySearchResults, setLibrarySearchResults] = useState(null);
+  const [librarySearchLoading, setLibrarySearchLoading] = useState(false);
   const [sort, setSort] = useState({ key: "id", dir: "asc" });
   const [selected, setSelected] = useState(new Set());
 
@@ -908,6 +910,31 @@ export default function MairListDB({ onEditItem, onNavigate }) {
       .finally(() => { if (!cancelled) setFolderItemsLoading(false); });
     return () => { cancelled = true; };
   }, [filterState, getCached]);
+
+  // Library-wide search runs against the server (/api/search), which
+  // searches the whole library regardless of the currently open folder —
+  // unlike "view" scope, which just filters the already-loaded tree-scoped
+  // list client-side. Debounced so we don't fire a request per keystroke.
+  useEffect(() => {
+    const query = search.trim();
+    if (searchOptions.scope !== "library" || !query) {
+      setLibrarySearchResults(null);
+      setLibrarySearchLoading(false);
+      return;
+    }
+    const fields = Object.entries(searchOptions.fields)
+      .filter(([, on]) => on)
+      .map(([field]) => field);
+    let cancelled = false;
+    setLibrarySearchLoading(true);
+    const handle = setTimeout(() => {
+      searchItems(query, fields)
+        .then((data) => { if (!cancelled) setLibrarySearchResults(data); })
+        .catch(() => { if (!cancelled) setLibrarySearchResults([]); })
+        .finally(() => { if (!cancelled) setLibrarySearchLoading(false); });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [search, searchOptions.scope, searchOptions.fields]);
 
   const handleCreate = async (data) => {
     const created = await createItem(data);
@@ -1110,15 +1137,28 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   }, [items, tree, filterState, folderItems]);
 
   const visibleItems = useMemo(() => {
-    // Advanced search: scope "view" searches within the tree-filtered list,
-    // scope "library" searches the whole library regardless of the active
-    // tree node.
-    let list = search.trim()
-      ? searchOptions.scope === "view" ? filteredByTree : [...items]
-      : filteredByTree;
+    // Advanced search: scope "view" filters the already tree-filtered list
+    // client-side, scope "library" uses the server-side /api/search results
+    // (librarySearchResults), which cover the whole library regardless of
+    // the active tree node — client-side filtering over `items` doesn't
+    // work here because `items` may not hold the full library (e.g. the
+    // api-mode data source has no unfiltered "all items" endpoint).
+    const query = search.trim();
 
-    if (search.trim()) {
-      const q = search.toLowerCase();
+    if (query && searchOptions.scope === "library") {
+      return [...(librarySearchResults || [])].sort((a, b) => {
+        let av = a[sort.key], bv = b[sort.key];
+        if (typeof av === "string") { av = av.toLowerCase(); bv = bv.toLowerCase(); }
+        if (av < bv) return sort.dir === "asc" ? -1 : 1;
+        if (av > bv) return sort.dir === "asc" ? 1 : -1;
+        return 0;
+      });
+    }
+
+    let list = filteredByTree;
+
+    if (query) {
+      const q = query.toLowerCase();
       const fields = Object.entries(searchOptions.fields)
         .filter(([, on]) => on)
         .map(([field]) => field);
@@ -1139,7 +1179,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     });
 
     return list;
-  }, [items, filteredByTree, search, searchOptions, sort]);
+  }, [filteredByTree, search, searchOptions, sort, librarySearchResults]);
 
   const onSort = (key) =>
     setSort((prev) =>
@@ -1460,14 +1500,14 @@ export default function MairListDB({ onEditItem, onNavigate }) {
               </tr>
             </thead>
             <tbody>
-              {(loading || folderItemsLoading) && (
+              {(loading || folderItemsLoading || librarySearchLoading) && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center text-sm text-zinc-600">
                     Lade Elemente…
                   </td>
                 </tr>
               )}
-              {!loading && !folderItemsLoading && error && (
+              {!loading && !folderItemsLoading && !librarySearchLoading && error && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center text-sm">
                     <div className="flex flex-col items-center gap-2 text-red-500">
@@ -1477,7 +1517,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
                   </td>
                 </tr>
               )}
-              {!loading && !folderItemsLoading && !error && visibleItems.map((item) => (
+              {!loading && !folderItemsLoading && !librarySearchLoading && !error && visibleItems.map((item) => (
                 <tr
                   key={item.id}
                   draggable
@@ -1521,10 +1561,12 @@ export default function MairListDB({ onEditItem, onNavigate }) {
                   </td>
                 </tr>
               ))}
-              {!loading && !folderItemsLoading && !error && visibleItems.length === 0 && (
+              {!loading && !folderItemsLoading && !librarySearchLoading && !error && visibleItems.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center text-sm text-zinc-600">
-                    Keine Elemente in „{activeFolderName}“.
+                    {search.trim() && searchOptions.scope === "library"
+                      ? `Keine Treffer für „${search.trim()}“ in der Bibliothek.`
+                      : `Keine Elemente in „${activeFolderName}“.`}
                   </td>
                 </tr>
               )}

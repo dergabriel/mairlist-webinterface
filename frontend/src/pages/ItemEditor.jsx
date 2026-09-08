@@ -1043,16 +1043,18 @@ function HistoryStatTile({ value, label }) {
 
 const HEATMAP_MONTH_LABELS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 
-function heatmapColor(count, maxCount) {
-  if (!count) return "bg-zinc-800";
-  const ratio = maxCount > 0 ? count / maxCount : 0;
-  if (ratio > 0.75) return "bg-orange-500";
-  if (ratio > 0.5) return "bg-orange-600/80";
-  if (ratio > 0.25) return "bg-orange-700/60";
-  return "bg-orange-800/40";
+// Fixed absolute steps rather than normalizing against the day's max: for
+// items that play at most once or twice a day (the common case), a
+// max-relative ratio would put every non-zero day in the same low bucket,
+// making 0 and 1 plays visually indistinguishable.
+function heatmapColor(count) {
+  if (count <= 0) return "#27272a"; // zinc-800
+  if (count === 1) return "rgba(249,115,22,0.5)"; // orange-500 @ 50%
+  if (count === 2) return "rgba(249,115,22,0.75)"; // orange-500 @ 75%
+  return "#f97316"; // orange-500, full
 }
 
-function HistoryHeatmap({ weeks, maxCount }) {
+function HistoryHeatmap({ weeks }) {
   const CELL = 11;
   const GAP = 3;
   const step = CELL + GAP;
@@ -1094,7 +1096,7 @@ function HistoryHeatmap({ weeks, maxCount }) {
                 width={CELL}
                 height={CELL}
                 rx={2}
-                className={heatmapColor(day.count, maxCount)}
+                fill={heatmapColor(day.count)}
               >
                 <title>{`${formatHistoryDate(day.key)}: ${day.count}x`}</title>
               </rect>
@@ -1195,7 +1197,7 @@ function HistoryTab({ itemId }) {
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
         <div className="mb-3 text-sm font-semibold text-zinc-100">Verlauf im Zeitverlauf</div>
-        <HistoryHeatmap weeks={stats.weeks} maxCount={stats.maxCount} />
+        <HistoryHeatmap weeks={stats.weeks} />
       </div>
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">

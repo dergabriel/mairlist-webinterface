@@ -662,20 +662,20 @@ async function getItemRestrictions(itemId) {
 }
 
 // Maps the API's history entries (PascalCase: Time, Duration, Studio,
-// ListenersStart, ListenersStop, PlaybackID) to the { slot, date, hour }
-// shape sqlRepository.js's getItemHistory() returns (see its parseSlot()/
-// buildSlot()) and that the frontend's history tab expects. Time is an ISO
-// timestamp ("2026-04-30T22:31:19") — date/hour are pulled straight out of
-// it, and slot is rebuilt in sqlRepository's own slot format (bare date at
-// midnight, "date HH:00:00.000" otherwise) so both repos agree exactly on
-// shape even though slot isn't itself used to derive date/hour here.
+// ListenersStart, ListenersStop, PlaybackID) to the { playedAt, show,
+// moderator } shape the frontend's history tab actually reads (see
+// ItemEditor.jsx's history table: entry.playedAt/entry.show/entry.moderator).
+// sqlRepository.js's getItemHistory() returns { slot, date, hour } instead,
+// which that same table doesn't read — a pre-existing mismatch in the
+// sqlite path, left alone here (out of scope, and sqlRepository.js must not
+// be touched). Time is an ISO timestamp ("2026-04-30T22:31:19") and maps
+// directly to playedAt. The API has no per-entry show/moderator field —
+// Studio is the closest concept but isn't an "airing show"/host either, so
+// both stay null rather than guessing; the table already renders "-" for
+// falsy values.
 function mapApiHistoryEntry(entry) {
   if (!entry?.Time) return null;
-  const date = entry.Time.slice(0, 10);
-  const hourMatch = /T(\d{2}):/.exec(entry.Time);
-  const hour = hourMatch ? parseInt(hourMatch[1], 10) : 0;
-  const slot = hour === 0 ? date : `${date} ${String(hour).padStart(2, "0")}:00:00.000`;
-  return { slot, date, hour };
+  return { playedAt: entry.Time, show: null, moderator: null };
 }
 
 async function getItemHistory(itemId) {

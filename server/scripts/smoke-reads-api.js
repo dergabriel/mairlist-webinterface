@@ -196,8 +196,8 @@ async function main() {
     const history = await repo.getItemHistory(itemId);
     if (!Array.isArray(history)) throw new Error("expected an array");
     for (const entry of history) {
-      if (!("slot" in entry) || !("date" in entry) || !("hour" in entry)) {
-        throw new Error(`entry missing slot/date/hour: ${JSON.stringify(entry)}`);
+      if (!entry.playedAt) {
+        throw new Error(`entry missing playedAt: ${JSON.stringify(entry)}`);
       }
     }
     return { count: history.length };

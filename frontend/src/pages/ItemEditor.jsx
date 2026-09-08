@@ -10,6 +10,7 @@ import {
   getItemById, updateItem, getItemHistory, getAttributeDefinitions,
   getPlaylistById, savePlaylistItemOverrides, getAudioUrl,
 } from "../lib/api";
+import { aggregateHistory, formatDate as formatHistoryDate } from "../lib/historyStats";
 import { useAuth } from "../lib/AuthContext";
 import Sidebar from "../components/Sidebar";
 
@@ -52,13 +53,26 @@ function diffOverrides(globalItem, edited) {
 
 // --- Shared constants (mirror the backend) ---
 
+// TODO: Diese Typ-Liste ist unvollständig. Verifiziert wurden nur
+// die 7 Typen, die im aktuellen Bestand vorkommen (Music, Jingle,
+// Sweeper, Bed, Promo, Voice, Dummy). Der mAirList-Client kennt
+// weitere Typen (Nachrichten, Werbung, Wetter, Verkehr, Beitrag,
+// Trailer, Sponsor-Jingle, Station-ID, Instrumental, Sendung,
+// Stream, Container, Playlist, Befehl, Cartwall-Seite,
+// Unterbrechung, Stille, Fehler, Andere, Benutzerdefiniert 1-3).
+// Deren englische DB-Werte sind NICHT verifiziert. Um sie zu
+// ermitteln: im mAirList-Client ein Testitem auf den jeweiligen
+// Typ setzen, speichern, dann per API GET /api/v1/items/<id> den
+// Type-Wert auslesen (oder per Wireshark den PUT mitschneiden).
+// Sobald bekannt, hier ergänzen.
 const ITEM_TYPES = [
   { key: "music", label: "Musik" },
   { key: "jingle", label: "Jingle" },
-  { key: "advertising", label: "Werbung" },
-  { key: "container", label: "Container" },
-  { key: "stream", label: "Stream" },
-  { key: "dummy", label: "Dummy" },
+  { key: "sweeper", label: "Sweeper" },
+  { key: "bed", label: "Bett" },
+  { key: "promo", label: "Promo" },
+  { key: "voice", label: "Moderation" },
+  { key: "dummy", label: "Platzhalter" },
 ];
 
 const CONTAINER_TYPES = [
@@ -260,6 +274,9 @@ function GeneralTab({ item, update }) {
           <Field label="Type">
             <select className={inputClass} value={item.type} onChange={(e) => update("type", e.target.value)}>
               {ITEM_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+              {item.type && !ITEM_TYPES.some((t) => t.key === item.type) && (
+                <option key={item.type} value={item.type}>{item.type}</option>
+              )}
             </select>
           </Field>
           <Field label="Länge">
@@ -1015,16 +1032,109 @@ function PlaybackTab({ item, update }) {
   );
 }
 
+function HistoryStatTile({ value, label }) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-5 py-4">
+      <div className="text-2xl font-semibold text-orange-500">{value}</div>
+      <div className="mt-1 text-xs text-zinc-400">{label}</div>
+    </div>
+  );
+}
+
+const HEATMAP_MONTH_LABELS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+
+function heatmapColor(count, maxCount) {
+  if (!count) return "bg-zinc-800";
+  const ratio = maxCount > 0 ? count / maxCount : 0;
+  if (ratio > 0.75) return "bg-orange-500";
+  if (ratio > 0.5) return "bg-orange-600/80";
+  if (ratio > 0.25) return "bg-orange-700/60";
+  return "bg-orange-800/40";
+}
+
+function HistoryHeatmap({ weeks, maxCount }) {
+  const CELL = 11;
+  const GAP = 3;
+  const step = CELL + GAP;
+  const width = weeks.length * step;
+
+  const monthLabels = [];
+  let lastMonth = null;
+  weeks.forEach((week, wi) => {
+    const firstDay = week.find(Boolean);
+    if (!firstDay) return;
+    const month = firstDay.date.getMonth();
+    if (month !== lastMonth) {
+      monthLabels.push({ wi, label: HEATMAP_MONTH_LABELS[month] });
+      lastMonth = month;
+    }
+  });
+
+  return (
+    <div className="overflow-x-auto">
+      <svg width={width + 24} height={7 * step + 16} className="block">
+        {monthLabels.map(({ wi, label }) => (
+          <text key={wi} x={wi * step + 24} y={10} className="fill-zinc-400 text-[10px]">
+            {label}
+          </text>
+        ))}
+        {["Mo", "Mi", "Fr"].map((label, i) => (
+          <text key={label} x={0} y={16 + 20 + i * 2 * step} className="fill-zinc-400 text-[10px]">
+            {label}
+          </text>
+        ))}
+        {weeks.map((week, wi) =>
+          week.map((day, di) => {
+            if (!day) return null;
+            return (
+              <rect
+                key={day.key}
+                x={wi * step + 24}
+                y={di * step + 16}
+                width={CELL}
+                height={CELL}
+                rx={2}
+                className={heatmapColor(day.count, maxCount)}
+              >
+                <title>{`${formatHistoryDate(day.key)}: ${day.count}x`}</title>
+              </rect>
+            );
+          })
+        )}
+      </svg>
+    </div>
+  );
+}
+
+function HistoryHourChart({ hourDistribution }) {
+  const max = Math.max(1, ...hourDistribution.map((h) => h.count));
+  return (
+    <div className="flex h-24 items-end gap-[3px]">
+      {hourDistribution.map(({ hour, count }) => (
+        <div key={hour} className="flex flex-1 flex-col items-center gap-1" title={`${hour}:00 Uhr: ${count}x`}>
+          <div
+            className="w-full rounded-sm bg-orange-500"
+            style={{ height: `${Math.max(2, (count / max) * 80)}px` }}
+          />
+          {hour % 3 === 0 && <span className="text-[9px] text-zinc-500">{hour}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function HistoryTab({ itemId }) {
   const [history, setHistory] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     setHistory(null);
+    setShowAll(false);
     getItemHistory(itemId)
       .then((data) => {
         if (cancelled) return;
@@ -1040,6 +1150,8 @@ function HistoryTab({ itemId }) {
       });
     return () => { cancelled = true; };
   }, [itemId]);
+
+  const stats = useMemo(() => aggregateHistory(history), [history]);
 
   if (loading) {
     return (
@@ -1058,33 +1170,65 @@ function HistoryTab({ itemId }) {
     );
   }
 
-  if (history.length === 0) {
+  if (history.length === 0 || !stats) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center text-sm text-zinc-600">
-        Noch nicht gelaufen.
+        Dieses Element wurde noch nicht gespielt.
       </div>
     );
   }
 
+  const sortedDesc = [...history].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt));
+  const visibleEntries = showAll ? sortedDesc : sortedDesc.slice(0, 8);
+
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-zinc-800">
-          <th className="px-4 py-3 text-left font-medium text-zinc-400">Datum/Uhrzeit</th>
-          <th className="px-4 py-3 text-left font-medium text-zinc-400">Sendung</th>
-          <th className="px-4 py-3 text-left font-medium text-zinc-400">Moderator</th>
-        </tr>
-      </thead>
-      <tbody>
-        {history.map((entry, i) => (
-          <tr key={i} className="border-b border-zinc-800/60 transition-colors hover:bg-zinc-900/50">
-            <td className="px-4 py-3 text-zinc-300">{formatDate(entry.playedAt)}</td>
-            <td className="px-4 py-3 text-zinc-400">{entry.show || "-"}</td>
-            <td className="px-4 py-3 text-zinc-400">{entry.moderator || "-"}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="flex flex-col gap-6 p-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <HistoryStatTile value={stats.tiles.total} label="Gesamt-Abspielungen" />
+        <HistoryStatTile value={stats.tiles.lastPlayed} label="Zuletzt gelaufen" />
+        <HistoryStatTile
+          value={stats.tiles.firstPlayedSpan || stats.tiles.firstPlayed}
+          label="Erstes Mal"
+        />
+        <HistoryStatTile value={stats.tiles.avgInterval} label="Durchschnittlicher Abstand" />
+      </div>
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+        <div className="mb-3 text-sm font-semibold text-zinc-100">Verlauf im Zeitverlauf</div>
+        <HistoryHeatmap weeks={stats.weeks} maxCount={stats.maxCount} />
+      </div>
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+        <div className="mb-3 text-sm font-semibold text-zinc-100">Verteilung nach Uhrzeit</div>
+        <HistoryHourChart hourDistribution={stats.hourDistribution} />
+      </div>
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900">
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-zinc-800">
+              <th className="px-4 py-3 text-left font-medium text-zinc-400">Datum/Uhrzeit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleEntries.map((entry, i) => (
+              <tr key={i} className="border-b border-zinc-800/60 transition-colors hover:bg-zinc-900/50 last:border-b-0">
+                <td className="px-4 py-2 text-zinc-300">{formatHistoryDate(entry.playedAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {sortedDesc.length > 8 && (
+          <button
+            type="button"
+            onClick={() => setShowAll((v) => !v)}
+            className="w-full border-t border-zinc-800 px-4 py-2 text-center text-xs text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
+          >
+            {showAll ? "Weniger anzeigen" : `Alle ${sortedDesc.length} Einträge anzeigen`}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

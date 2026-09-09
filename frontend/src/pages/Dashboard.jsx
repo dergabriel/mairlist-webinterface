@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { LayoutDashboard, Music, HardDrive, Folder, Users, RefreshCw, AlertTriangle } from "lucide-react";
-import { getDashboard } from "../lib/api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { LayoutDashboard, Music, HardDrive, Folder, Users, RefreshCw, AlertTriangle, Headphones } from "lucide-react";
+import { getDashboard, getListeners, getPlaylistsByDate, getPlaylistById } from "../lib/api";
 import { useAuth } from "../lib/AuthContext";
 import Sidebar from "../components/Sidebar";
 
@@ -9,16 +9,10 @@ const pad2 = (n) => String(n).padStart(2, "0");
 const formatTime = (value) => {
   if (!value) return "–";
   const match = /(\d{2}):(\d{2}):(\d{2})/.exec(value);
-  return match ? `${match[1]}:${match[2]}:${match[3]}` : value;
+  return match ? `${match[1]}:${match[2]}` : value;
 };
 
-const formatDuration = (sec) => {
-  if (sec == null) return "–";
-  const total = Math.round(sec);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${pad2(s)}`;
-};
+const todayKey = () => new Date().toISOString().slice(0, 10);
 
 function StatTile({ icon: Icon, value, label }) {
   return (
@@ -32,30 +26,56 @@ function StatTile({ icon: Icon, value, label }) {
   );
 }
 
-function Panel({ title, children }) {
+function Panel({ title, children, className = "" }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900">
+    <div className={`rounded-lg border border-zinc-800 bg-zinc-900 ${className}`}>
       <div className="border-b border-zinc-800 px-4 py-3 text-sm font-semibold text-zinc-100">{title}</div>
       {children}
     </div>
   );
 }
 
-function Badge({ ok, children }) {
-  return (
-    <span
-      className={`rounded px-2 py-0.5 text-xs font-medium ${
-        ok ? "bg-green-600/15 text-green-500" : "bg-yellow-600/15 text-yellow-500"
-      }`}
-    >
-      {children}
-    </span>
-  );
+// Findet aus einer Liste von Playlist-Einträgen (mit scheduledStart) denjenigen,
+// dessen Startzeit am nächsten an "jetzt" liegt und in der Vergangenheit liegt.
+function findCurrentEntry(entries, now) {
+  const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+  let best = null;
+  let bestDelta = Infinity;
+  for (const entry of entries) {
+    const match = /(\d{2}):(\d{2}):(\d{2})/.exec(entry.scheduledStart || "");
+    if (!match) continue;
+    const seconds = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+    if (seconds <= nowSeconds) {
+      const delta = nowSeconds - seconds;
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = entry;
+      }
+    }
+  }
+  return best;
+}
+
+function findUpcomingEntries(entries, now, count) {
+  const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+  return entries
+    .map((entry) => {
+      const match = /(\d{2}):(\d{2}):(\d{2})/.exec(entry.scheduledStart || "");
+      if (!match) return null;
+      const seconds = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+      return { entry, seconds };
+    })
+    .filter((x) => x && x.seconds > nowSeconds)
+    .sort((a, b) => a.seconds - b.seconds)
+    .slice(0, count)
+    .map((x) => x.entry);
 }
 
 export default function Dashboard({ onNavigate }) {
   const { user } = useAuth();
   const [data, setData] = useState(null);
+  const [listeners, setListeners] = useState(null);
+  const [hourPlaylists, setHourPlaylists] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -66,20 +86,86 @@ export default function Dashboard({ onNavigate }) {
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    return getDashboard()
-      .then(setData)
+
+    const now = new Date();
+    const date = todayKey();
+    const currentHour = now.getHours();
+    const hours = Array.from({ length: 8 }, (_, i) => currentHour + i).filter((h) => h < 24);
+
+    return Promise.all([
+      getDashboard(),
+      getListeners().catch(() => ({ available: false })),
+      getPlaylistsByDate(date).catch(() => []),
+    ])
+      .then(([dashboard, listenerData, dayHours]) => {
+        setData(dashboard);
+        setListeners(listenerData);
+
+        const hasEntries = new Set(dayHours.filter((h) => h.hasEntries).map((h) => h.hour));
+        return Promise.all(
+          hours.map((hour) =>
+            hasEntries.has(hour)
+              ? getPlaylistById(`${date}-${pad2(hour)}`)
+                  .then((playlist) => [hour, playlist])
+                  .catch(() => [hour, null])
+              : Promise.resolve([hour, { entries: [] }])
+          )
+        );
+      })
+      .then((results) => {
+        const map = {};
+        for (const [hour, playlist] of results) map[hour] = playlist;
+        setHourPlaylists(map);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
     load();
+    const interval = setInterval(load, 60000);
+    return () => clearInterval(interval);
   }, [load]);
 
   const stats = data?.stats;
-  const recentLogs = data?.recentLogs ?? [];
-  const todayPlaylist = data?.todayPlaylist ?? [];
   const system = data?.system;
+
+  const now = new Date();
+  const currentHour = now.getHours();
+
+  const allUpcomingEntries = useMemo(() => {
+    const hours = Object.keys(hourPlaylists)
+      .map(Number)
+      .sort((a, b) => a - b);
+    const entries = [];
+    for (const hour of hours) {
+      const playlist = hourPlaylists[hour];
+      if (playlist?.entries) entries.push(...playlist.entries);
+    }
+    return entries;
+  }, [hourPlaylists]);
+
+  const currentEntry = useMemo(
+    () => findCurrentEntry(hourPlaylists[currentHour]?.entries ?? [], now),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hourPlaylists, currentHour]
+  );
+
+  const upcomingEntries = useMemo(
+    () => findUpcomingEntries(allUpcomingEntries, now, 4),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allUpcomingEntries]
+  );
+
+  const hourTiles = useMemo(() => {
+    return Array.from({ length: 8 }, (_, i) => currentHour + i)
+      .filter((h) => h < 24)
+      .map((hour) => ({
+        hour,
+        count: hourPlaylists[hour]?.entries?.length ?? null,
+      }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hourPlaylists, currentHour]);
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
@@ -109,106 +195,110 @@ export default function Dashboard({ onNavigate }) {
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-6">
-            {/* Oben links: Statistiken */}
-            <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-6">
+            {/* Sektion 1: Live-Cockpit */}
+            <div className="grid grid-cols-5 gap-6">
+              <Panel title="Läuft gerade" className="col-span-3">
+                <div className="flex items-center gap-4 px-4 py-4">
+                  {currentEntry?.item?.cover ? (
+                    <img
+                      src={`data:image/jpeg;base64,${currentEntry.item.cover}`}
+                      alt=""
+                      className="h-20 w-20 shrink-0 rounded-lg object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-orange-500">
+                      <Music size={28} />
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    {currentEntry ? (
+                      <>
+                        <div className="truncate text-lg font-medium text-zinc-100">
+                          {currentEntry.item?.title ?? "–"}
+                        </div>
+                        <div className="truncate text-sm text-zinc-400">{currentEntry.item?.artist || "–"}</div>
+                      </>
+                    ) : (
+                      <div className="text-sm text-zinc-600">
+                        {loading ? "Lädt…" : "Gerade läuft nichts Geplantes"}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Panel>
+
+              <Panel title="Als Nächstes" className="col-span-2">
+                <div className="divide-y divide-zinc-800">
+                  {upcomingEntries.length === 0 && (
+                    <div className="px-4 py-4 text-sm text-zinc-600">
+                      {loading ? "Lädt…" : "Keine kommenden Einträge"}
+                    </div>
+                  )}
+                  {upcomingEntries.map((entry, i) => (
+                    <div key={`${entry.itemId}-${i}`} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                      <span className="shrink-0 tabular-nums text-zinc-500">{formatTime(entry.scheduledStart)}</span>
+                      <span className="min-w-0 flex-1 truncate text-zinc-100">
+                        {entry.item?.title ?? "–"}
+                        {entry.item?.artist && <span className="text-zinc-500"> — {entry.item.artist}</span>}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+
+              {listeners?.available && (
+                <div className="col-span-5 flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900 px-5 py-4">
+                  <Headphones size={20} className="shrink-0 text-orange-500" />
+                  <div>
+                    <div className="text-2xl font-semibold text-orange-500">{listeners.count}</div>
+                    <div className="text-xs text-zinc-400">Aktuelle Hörer</div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Sektion 2: Sende-Vorschau */}
+            <div>
+              <div className="mb-2 text-sm text-zinc-400">Sendeplanung — nächste Stunden</div>
+              <div className="grid grid-cols-8 gap-3">
+                {hourTiles.map(({ hour, count }) => {
+                  const empty = count === 0;
+                  return (
+                    <div
+                      key={hour}
+                      className={`rounded-lg border px-3 py-3 text-center ${
+                        empty ? "border-red-900/60 bg-zinc-900" : "border-zinc-800 bg-zinc-900"
+                      }`}
+                    >
+                      <div className="text-sm font-medium text-zinc-100">{pad2(hour)}:00</div>
+                      {empty ? (
+                        <div className="mt-1 flex items-center justify-center gap-1 text-xs text-red-500">
+                          <AlertTriangle size={12} />
+                          <span>Keine Planung</span>
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-xs text-zinc-400">
+                          {count == null ? "…" : `${count} Einträge`}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Sektion 3: Bibliotheks-Statistiken */}
+            <div className="grid grid-cols-4 gap-4">
               <StatTile icon={Music} value={loading ? "…" : stats?.totalItems ?? 0} label="Items" />
               <StatTile icon={HardDrive} value={loading ? "…" : stats?.totalStorages ?? 0} label="Storages" />
               <StatTile icon={Folder} value={loading ? "…" : stats?.totalFolders ?? 0} label="Ordner" />
               <StatTile icon={Users} value={loading ? "…" : stats?.totalUsers ?? 0} label="Benutzer" />
             </div>
 
-            {/* Oben rechts: Heutige Playlist */}
-            <Panel title="Heutige Playlist">
-              <div className="overflow-hidden">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-zinc-800 text-zinc-400">
-                      <th className="px-4 py-2 font-medium">Zeit</th>
-                      <th className="px-4 py-2 font-medium">Titel</th>
-                      <th className="px-4 py-2 font-medium">Artist</th>
-                      <th className="px-4 py-2 font-medium">Dauer</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {!loading && todayPlaylist.slice(0, 10).map((entry, i) => (
-                      <tr
-                        key={`${entry.itemId}-${i}`}
-                        className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-800/50"
-                      >
-                        <td className="whitespace-nowrap px-4 py-2 text-zinc-500">{formatTime(entry.scheduledStart)}</td>
-                        <td className="px-4 py-2 text-zinc-100">{entry.item?.title ?? "–"}</td>
-                        <td className="px-4 py-2 text-zinc-400">{entry.item?.artist || "–"}</td>
-                        <td className="whitespace-nowrap px-4 py-2 text-zinc-400">{formatDuration(entry.item?.duration)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {!loading && todayPlaylist.length === 0 && (
-                  <div className="px-4 py-6 text-center text-sm text-zinc-600">Keine Playlist für heute</div>
-                )}
-              </div>
-            </Panel>
-
-            {/* Unten links: Letzte Wiedergaben */}
-            <Panel title="Letzte Wiedergaben">
-              <div className="overflow-hidden">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-zinc-800 text-zinc-400">
-                      <th className="px-4 py-2 font-medium">Zeit</th>
-                      <th className="px-4 py-2 font-medium">Titel</th>
-                      <th className="px-4 py-2 font-medium">Station</th>
-                      <th className="px-4 py-2 font-medium">Studio</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {!loading && recentLogs.slice(0, 10).map((log, i) => (
-                      <tr
-                        key={`${log.starttime}-${i}`}
-                        className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-800/50"
-                      >
-                        <td className="whitespace-nowrap px-4 py-2 text-zinc-500">{formatTime(log.starttime)}</td>
-                        <td className="px-4 py-2 text-zinc-100">{log.item || "–"}</td>
-                        <td className="whitespace-nowrap px-4 py-2 text-zinc-400">{log.station}</td>
-                        <td className="whitespace-nowrap px-4 py-2 text-zinc-400">{log.studio || "–"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {!loading && recentLogs.length === 0 && (
-                  <div className="px-4 py-6 text-center text-sm text-zinc-600">Keine Wiedergaben</div>
-                )}
-              </div>
-            </Panel>
-
-            {/* Unten rechts: Systemstatus */}
-            <Panel title="Systemstatus">
-              <div className="space-y-3 px-4 py-4 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">Data Source</span>
-                  <Badge ok={system?.dataSource === "sqlite"}>{system?.dataSource ?? "–"}</Badge>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">Server</span>
-                  <Badge ok>Online</Badge>
-                </div>
-                {isAdmin && system?.dbPath && (
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="shrink-0 text-zinc-400">DB-Pfad</span>
-                    <span className="truncate text-right text-xs text-zinc-500">{system.dbPath}</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">Angemeldet als</span>
-                  <span className="text-zinc-100">{user?.username ?? "–"}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">Rolle</span>
-                  <span className="text-zinc-100">{isAdmin ? "Administrator" : "Benutzer"}</span>
-                </div>
-              </div>
-            </Panel>
+            {isAdmin && system?.dbPath && (
+              <div className="text-xs text-zinc-600">DB-Pfad: {system.dbPath}</div>
+            )}
           </div>
         </div>
       </main>

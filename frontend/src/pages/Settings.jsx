@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Settings as SettingsIcon, Save, Check } from "lucide-react";
 import { useAuth } from "../lib/AuthContext";
-import { getSettings, saveSettings } from "../lib/api";
+import { getSettings, saveSettings, getListeners } from "../lib/api";
 import Sidebar from "../components/Sidebar";
 
 function Field({ label, hint, children }) {
@@ -37,6 +37,10 @@ const DEFAULT_SETTINGS = {
   audioBaseDir: "",
   uploadBaseDir: "",
   allowedOrigins: "",
+  listenerSource: "none",
+  lautfmStation: "",
+  listenerUrl: "",
+  listenerJsonPath: "",
 };
 
 export default function Settings({ onNavigate }) {
@@ -46,6 +50,8 @@ export default function Settings({ onNavigate }) {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(false);
   const [error, setError] = useState("");
+  const [listenerTest, setListenerTest] = useState(null);
+  const [listenerTesting, setListenerTesting] = useState(false);
 
   useEffect(() => {
     getSettings()
@@ -55,6 +61,24 @@ export default function Settings({ onNavigate }) {
   }, []);
 
   const setField = (key) => (value) => setSettings((s) => ({ ...s, [key]: value }));
+
+  const handleTestListeners = async () => {
+    setListenerTesting(true);
+    setListenerTest(null);
+    try {
+      await saveSettings(settings);
+      const result = await getListeners();
+      setListenerTest(
+        result.available
+          ? { ok: true, message: `Aktuell ${result.count} Hörer` }
+          : { ok: false, message: result.error || "Keine Hörerzahl verfügbar" }
+      );
+    } catch (e) {
+      setListenerTest({ ok: false, message: e.message });
+    } finally {
+      setListenerTesting(false);
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -193,6 +217,75 @@ export default function Settings({ onNavigate }) {
                     className={inputClass}
                   />
                 </Field>
+              </Card>
+
+              <Card title="Hörerzahlen">
+                <Field label="Quelle">
+                  <select
+                    value={settings.listenerSource}
+                    onChange={(e) => setField("listenerSource")(e.target.value)}
+                    className={inputClass}
+                  >
+                    <option value="none">Keine</option>
+                    <option value="lautfm">laut.fm</option>
+                    <option value="custom">Eigene URL</option>
+                  </select>
+                </Field>
+
+                {settings.listenerSource === "lautfm" && (
+                  <Field label="Stationsname" hint="Findest du in deiner laut.fm-Stations-URL">
+                    <input
+                      type="text"
+                      value={settings.lautfmStation}
+                      onChange={(e) => setField("lautfmStation")(e.target.value)}
+                      placeholder="meinsender"
+                      className={inputClass}
+                    />
+                  </Field>
+                )}
+
+                {settings.listenerSource === "custom" && (
+                  <>
+                    <Field label="URL">
+                      <input
+                        type="text"
+                        value={settings.listenerUrl}
+                        onChange={(e) => setField("listenerUrl")(e.target.value)}
+                        placeholder="https://example.com/status.json"
+                        className={inputClass}
+                      />
+                    </Field>
+                    <Field
+                      label="JSON-Pfad"
+                      hint="Die URL muss ein JSON liefern, das eine Zahl enthält. Gib den Pfad zu dieser Zahl an, z. B. 'listeners' oder 'data.count'."
+                    >
+                      <input
+                        type="text"
+                        value={settings.listenerJsonPath}
+                        onChange={(e) => setField("listenerJsonPath")(e.target.value)}
+                        placeholder="listeners"
+                        className={inputClass}
+                      />
+                    </Field>
+                  </>
+                )}
+
+                {settings.listenerSource !== "none" && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={handleTestListeners}
+                      disabled={listenerTesting}
+                      className="rounded-md border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-60"
+                    >
+                      {listenerTesting ? "Testet…" : "Testen"}
+                    </button>
+                    {listenerTest && (
+                      <span className={`text-sm ${listenerTest.ok ? "text-green-500" : "text-red-500"}`}>
+                        {listenerTest.message}
+                      </span>
+                    )}
+                  </div>
+                )}
               </Card>
 
               <div className="flex justify-end">

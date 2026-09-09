@@ -172,6 +172,10 @@ export function getDashboard() {
   return request("/dashboard");
 }
 
+export function getListeners() {
+  return request("/listeners");
+}
+
 export function getSettings() {
   return request("/settings");
 }

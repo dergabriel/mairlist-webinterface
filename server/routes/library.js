@@ -14,6 +14,7 @@ const repo = process.env.DATA_SOURCE === "sqlite"
 const apiRepo = process.env.DATA_SOURCE === "api" ? require("../data/apiRepository") : null;
 const { requireAuth, requireScope } = require("../middleware/auth");
 const { getSettings, saveSettings } = require("../lib/settings");
+const { getListenerCount } = require("../lib/listenerSource");
 
 router.use(requireAuth);
 
@@ -441,6 +442,13 @@ router.get("/settings", (req, res, next) => {
 // PUT /api/settings -> save panel settings
 router.put("/settings", requireScope("admin"), (req, res, next) => {
   try { res.json(saveSettings(req.body)); } catch (e) { next(e); }
+});
+
+// GET /api/listeners -> current listener count from the configured source
+router.get("/listeners", requireScope("library.read"), async (req, res, next) => {
+  try {
+    res.json(await getListenerCount(getSettings()));
+  } catch (e) { next(e); }
 });
 
 // DELETE /api/items/:id -> delete an item

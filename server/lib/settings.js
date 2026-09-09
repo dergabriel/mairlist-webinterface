@@ -15,6 +15,10 @@ const DEFAULT_SETTINGS = {
   audioBaseDir: "",
   uploadBaseDir: "",
   allowedOrigins: "",
+  listenerSource: "none",
+  lautfmStation: "",
+  listenerUrl: "",
+  listenerJsonPath: "",
 };
 
 function getSettings() {

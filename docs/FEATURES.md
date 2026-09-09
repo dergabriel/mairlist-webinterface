@@ -162,21 +162,34 @@ Container-Eintrag, aber nicht einzeln aufklapp- oder bearbeitbar. Ein
 Container ohne eigene Sub-Items führt zu keinem Fehler, sondern zeigt
 schlicht keine Sub-Items an.
 
-**Bewusst leer statt Fehler** (`getItemTypes`, `getLogs`,
-`getRecentLogs`): Diese Funktionen liefern im
-api-Modus ein leeres Array statt eines Fehlers. Grund: Das Frontend
-(`Playlist.jsx`, `DatabaseManager.jsx`) lädt den Ordnerbaum zusammen mit
-solchen Listen in einem gemeinsamen `Promise.all` — würde auch nur eine
-davon werfen, schlägt der gesamte Batch fehl und die Sidebar zeigt "Baum
-nicht verfügbar", obwohl `/api/tree` selbst erfolgreich war. Ein leeres
-Array lässt die UI laden; es gibt für `getItemTypes`/`getLogs`/
-`getRecentLogs` (noch) keinen entsprechenden Single-Shot-Endpunkt in der
-mAirListDB Server API (siehe `docs/MAIRLISTDB-API.md`). `getItems`
-liefert ebenfalls `[]`, allerdings nur wenn keine `folderId` übergeben
-wird (siehe unten) — mit `folderId` liefert es echte Daten. Jede dieser
-Funktionen loggt beim ersten Aufruf seit Serverstart einmalig eine
-`console.warn`-Zeile, damit der leere Zustand im Server-Log sichtbar
-bleibt, ohne bei jedem Request zu spammen.
+**Bewusst leer statt Fehler** (`getLogs`, `getRecentLogs`): Diese
+Funktionen liefern im api-Modus ein leeres Array statt eines Fehlers.
+Grund: Das Frontend (`Playlist.jsx`, `DatabaseManager.jsx`) lädt den
+Ordnerbaum zusammen mit solchen Listen in einem gemeinsamen
+`Promise.all` — würde auch nur eine davon werfen, schlägt der gesamte
+Batch fehl und die Sidebar zeigt "Baum nicht verfügbar", obwohl
+`/api/tree` selbst erfolgreich war. Ein leeres Array lässt die UI
+laden; es gibt für `getLogs`/`getRecentLogs` (noch) keinen
+entsprechenden Single-Shot-Endpunkt in der mAirListDB Server API
+(siehe `docs/MAIRLISTDB-API.md`). `getItems` liefert ebenfalls `[]`,
+allerdings nur wenn keine `folderId` übergeben wird (siehe unten) —
+mit `folderId` liefert es echte Daten. Jede dieser Funktionen loggt
+beim ersten Aufruf seit Serverstart einmalig eine `console.warn`-Zeile,
+damit der leere Zustand im Server-Log sichtbar bleibt, ohne bei jedem
+Request zu spammen.
+
+**`getItemTypes` – hartcodierte, teils verifizierte Liste**: Kein
+`/api/v1/itemtypes`-Endpunkt existiert. `apiRepository.js` liefert
+deshalb eine feste Liste der 7 Typen, die per Live-Abfrage der
+Datenbank tatsächlich im Bestand bestätigt wurden (Music, Jingle,
+Sweeper, Bed, Promo, Voice, Dummy). Weitere Typen aus dem
+mAirList-Client-Dropdown sind darin NICHT enthalten, weil ihre
+englischen DB-Werte nicht verifiziert sind (siehe TODO-Kommentar in
+`apiRepository.js` und "Offene Punkte" in `docs/MAIRLISTDB-API.md`).
+Damit Items mit einem noch nicht erfassten Typ trotzdem korrekt
+angezeigt werden, zeigt das Typ-Dropdown in `ItemEditor.jsx` für einen
+unbekannten Wert den Rohwert als zusätzliche Option an, statt leer zu
+bleiben oder zu crashen.
 
 **`getAttributeKeys` — aus dem Config-Schema, nicht aus Item-Daten:**
 Anders als `sqlRepository.js` (das die tatsächlich beobachteten
@@ -316,7 +329,6 @@ Daten zu liefern):
 | Storage-Verwaltung: `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
 | `getAttributeDefinitions`, `getCuePoints` | ⬜ |
 | `uploadFile`, `resolveAudioPath` | ⬜ |
-| `getItemTypes` | ⬜ kein Endpunkt gefunden, bleibt leerer Stub (siehe oben) |
 | `getLogs`, `getRecentLogs` | ⬜ kein Logs-Endpunkt gefunden, liefern `[]` statt Fehler (siehe oben) |
 
 ---
@@ -615,6 +627,17 @@ sowie mehrere Playlisten pro Station (über das mAirList-Original hinausgehend).
 |---|---|
 | Mini Scheduler | Stundenvorlagen (Templates), automatische Playlist-Generierung, Vorlagen-Zuweisungen (Standard, "1. Montag im Monat", gerade/ungerade Wochen, Feiertage) |
 | Werbung | Kampagnen, Advertising-Planung |
+
+## 🖥️ Neue Startseite & Hörerzahlen
+
+- Startseite (`Dashboard.jsx`) neu gebaut: Live-Cockpit ("Läuft gerade" / "Als Nächstes"),
+  Sende-Vorschau der nächsten Stunden mit Warnhinweis bei fehlender Planung, sowie die
+  bestehenden Bibliotheks-Statistiken. Aktualisiert sich alle 60 Sekunden.
+- Optionale Hörerzahl-Anzeige: Quelle (laut.fm oder eigene JSON-URL) in den Einstellungen
+  konfigurierbar (`server/lib/listenerSource.js`, `GET /api/listeners`). Bei Quelle "Keine"
+  oder Fehler wird die Kachel einfach weggelassen, kein Platzhalter.
+- "Lange nicht gespielt"-Übersicht wurde ausgelassen, da eine performante Datenquelle ohne
+  volle Bibliotheks-Iteration fehlt — mögliche spätere Lösung: caching o.ä.
 
 ## ❌ Außerhalb des Scopes
 

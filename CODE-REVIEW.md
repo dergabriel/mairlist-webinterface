@@ -6,17 +6,17 @@ Reiner Analyse-Durchgang, Stand 2026-09-09. Keine Code-Änderungen vorgenommen. 
 
 ## Bereich 1: Sicherheit
 
-### 1.1 Echte Server-IP in eingecheckter Beispiel-Konfiguration
+### 1.1 Echte Server-IP in eingecheckter Beispiel-Konfiguration — ✅ behoben (2026-09-09)
 **Fundort:** `server/.env.production.example:1,43`
-Die Datei enthält als Kommentar und als `ALLOWED_ORIGINS`-Wert die reale Produktions-IP `135.181.214.103:8841` des Windows-Servers. Das ist keine Zugangsdaten-Leckage (kein Passwort/Token), aber eine unnötige Preisgabe privater Infrastruktur-Details in einem öffentlichen GitHub-Repo.
-**Einschätzung:** niedrig bis mittel (Aufklärungswert für Angreifer: bekannte IP + offener Port 8841 für Portscans/Bruteforce).
-**Vorschlag:** Platzhalter wie `<SERVER-IP>:8841` bzw. `https://radio.example.com` verwenden, wie es in `server/index.js:14` als Beispiel bereits vorgemacht wird.
+Die Datei enthielt als Kommentar und als `ALLOWED_ORIGINS`-Wert die reale Produktions-IP des Windows-Servers. Das war keine Zugangsdaten-Leckage (kein Passwort/Token), aber eine unnötige Preisgabe privater Infrastruktur-Details in einem öffentlichen GitHub-Repo.
+**Einschätzung:** niedrig bis mittel (Aufklärungswert für Angreifer: bekannte IP + offener Port für Portscans/Bruteforce).
+**Behoben:** Beide Vorkommen durch den Platzhalter `<SERVER-IP>` ersetzt. Ein Repo-weiter Grep bestätigt, dass die IP in keiner committeten Datei mehr steht. Hinweis: Die IP bleibt in der Git-Historie einsehbar — bei Bedarf wäre ein History-Rewrite nötig.
 
 ### 1.2 Keine echten Secrets im Code gefunden
 Grep nach typischen Passwort-/Token-/API-Key-Mustern in `.js`/`.md`/`.example`-Dateien lieferte keine Treffer. `.env` selbst ist korrekt in `.gitignore` ausgeschlossen, ebenso `webinterface-auth.db*`, `*.mldb*` und `server/settings.json`. `.env.production.example` enthält nur Platzhalter für Zugangsdaten (`API_DB_USER=`, `API_DB_PASSWORD=`, `INITIAL_ADMIN_PASSWORD=`).
 **Einschätzung:** kein Befund / positiv.
 
-### 1.3 Session-Cookie: `secure: false` fest codiert
+### 1.3 Session-Cookie: `secure: false` fest codiert — ✅ behoben (2026-09-09)
 **Fundort:** `server/routes/auth.js:32-37`
 ```js
 res.cookie("session", sid, {
@@ -28,7 +28,7 @@ res.cookie("session", sid, {
 ```
 `httpOnly` und `sameSite` sind gesetzt, aber `secure` ist hart auf `false` codiert statt an z. B. `process.env.NODE_ENV === "production"` oder eine eigene Env-Variable gekoppelt zu sein. Bei einem HTTPS-Deploy (Caddy + TLS ist laut `README.md` Phase H geplant) wird das Session-Cookie dadurch weiterhin auch über unverschlüsseltes HTTP übertragen, falls der Reverse Proxy nicht strikt auf HTTPS erzwingt.
 **Einschätzung:** mittel (wird relevant, sobald TLS/Caddy in Phase H produktiv geht; aktuell laut `DEPLOYMENT.md` ohne TLS deployt, daher kein akuter Widerspruch, aber ein Stolperstein für später).
-**Vorschlag:** `secure: process.env.COOKIE_SECURE === "true"` o. ä., mit klarer Dokumentation in `DEPLOYMENT.md` Schritt „Als Dienst einrichten“.
+**Behoben:** `secure` hängt jetzt an der neuen Env-Variable `COOKIE_SECURE` (Default `false`), dokumentiert in `.env.production.example`. Bewusst nicht an `NODE_ENV` gekoppelt, da das Webinterface produktiv auch über reines HTTP läuft — eine automatische Kopplung hätte dort das Login lahmgelegt. `res.clearCookie()` nutzt dieselben Flags, sonst schlägt das Logout bei `secure: true` fehl.
 
 ### 1.4 Kein Brute-Force-Schutz beim Login
 **Fundort:** `server/routes/auth.js:16-41` (`POST /login`)
@@ -63,11 +63,12 @@ Es gibt kein Rate-Limiting, keine Verzögerung nach Fehlversuchen und keinen Acc
 Alle Requests an den mAirListDB Server laufen über `REQUEST_TIMEOUT_MS = 10000` mit `AbortController` — sowohl in `doApiRequest()` als auch in `getAudioStream()`. Das ist sauber umgesetzt.
 **Einschätzung:** kein Befund / positiv.
 
-### 1.9 SSRF-Risiko bei benutzerdefinierter Hörerzahl-URL
+### 1.9 SSRF-Risiko bei benutzerdefinierter Hörerzahl-URL — ✅ behoben (2026-09-09)
 **Fundort:** `server/lib/listenerSource.js:20-30, 51-58`
 Der `custom`-Modus der Hörerzahl-Anzeige lässt Admins (`requireScope("admin")` in `library.js:443` für `PUT /api/settings`) eine beliebige `listenerUrl` konfigurieren, die der Server serverseitig per `fetch()` abruft (`fetchJson()`), inklusive eines per `listenerJsonPath` konfigurierbaren Pfads in die Antwort. Es gibt keine Prüfung gegen `localhost`/`127.0.0.1`/private IP-Ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) oder Cloud-Metadata-Adressen (`169.254.169.254`). Da die Route bereits `admin`-Scope voraussetzt, ist das Risiko auf böswillige/kompromittierte Admin-Accounts beschränkt, aber es ist ein klassisches SSRF-Muster (Server ruft nutzerkonfigurierte URL ab, Antwort-Inhalt wird zurückgegeben).
 **Einschätzung:** mittel (Ausnutzung erfordert Admin-Rechte, aber genau dafür ist der Endpunkt gedacht — kein Zusatzschutz vorhanden).
-**Vorschlag:** URL-Validierung vor dem Speichern der Settings: Schema auf `http(s)` beschränken, Hostname gegen private/loopback/link-local-Ranges prüfen (z. B. via `net.isIP` + Range-Check oder eine DNS-Rebinding-resistente Bibliothek).
+**Behoben:** `assertUrlAllowed()` in `server/lib/listenerSource.js` prüft vor jedem custom-Abruf: nur `http`/`https`, kein `localhost`/`.local`, und — nach DNS-Auflösung — keine Loopback-, privaten oder link-local-Adressen (inkl. Cloud-Metadata `169.254.169.254`), IPv4 wie IPv6. Die Prüfung greift bewusst auf der aufgelösten IP, damit ein Hostname, der auf `127.0.0.1` zeigt, sie nicht umgeht. Nur im `custom`-Modus aktiv; laut.fm bleibt unverändert. Abgelehnte URLs liefern `{ available: false, error }` statt zu crashen. Verifiziert gegen acht Angriffsvarianten (localhost, 127.0.0.1, 169.254.169.254, 192.168.x, 10.x, `file://`, `[::1]`, kaputte URL) — alle blockiert, legitime externe URLs weiterhin erreichbar.
+**Rest-Risiko:** Die Prüfung ist nicht vollständig DNS-Rebinding-fest — zwischen Auflösung und dem eigentlichen `fetch()` liegt eine zweite, ungeprüfte Auflösung (TOCTOU). Für ein Admin-Scope-Feature vertretbar; eine harte Absicherung bräuchte einen eigenen Agent, der pro Verbindung die Ziel-IP prüft.
 
 ### 1.10 CORS-Konfiguration
 **Fundort:** `server/index.js:13-28`
@@ -80,10 +81,10 @@ Kein `helmet` oder manuelle Security-Header (CSP, `X-Content-Type-Options`, `X-F
 **Einschätzung:** niedrig.
 **Vorschlag:** `helmet` mit Standardeinstellungen ergänzen, CSP ggf. anpassen für Audio-Streaming/Inline-Styles.
 
-### 1.12 Abhängigkeiten (`npm audit`)
+### 1.12 Abhängigkeiten (`npm audit`) — ✅ teilweise behoben (2026-09-09)
 **Backend (`server/package.json`):**
-- `multer` (aktuell `^2.2.0`) — **hoch**: mehrere bekannte DoS-Schwachstellen (GHSA-wc9g-mqfw-jrwm, GHSA-qfvm-cv95-jqjf, GHSA-535w-7cp7-47q4), Fix verfügbar.
-- `express`/`body-parser` — moderat, über transitive `qs`-Abhängigkeit, Fix verfügbar.
+- `multer` — ✅ **behoben**: von 2.2.0 auf 2.3.0 gehoben, beseitigt alle vier DoS-CVEs (GHSA-wc9g-mqfw-jrwm, GHSA-qfvm-cv95-jqjf, GHSA-535w-7cp7-47q4, GHSA-qvfw-j98x-7q72). Kein Breaking Change: die genutzte API (`memoryStorage`, `single()`, `limits`, `fileFilter`) ist unverändert, `library.js` brauchte keine Anpassung. `body-parser` zog dabei auf 1.20.8 nach.
+- `qs` (moderat, transitiv über express) — ⚠️ **offen**: Express 4 pinnt `qs` hart auf `~6.15.1`, die gepatchte 6.16.0 liegt außerhalb dieser Range. Ein Fix erfordert entweder Express 5 (Major, Breaking) oder einen erzwungenen `overrides`-Eintrag. Bewusst nicht im Rahmen des Sicherheits-Fixes gemacht. `body-parser` nutzt intern bereits 6.16.0; betroffen ist nur noch Express' eigener Query-Parser.
 - Versionierung: `bcryptjs`, `better-sqlite3`, `cookie-parser`, `cors`, `express`, `multer` sind alle mit `^` (Caret-Range) gepinnt — außer `dotenv`, das bewusst exakt auf `16.4.5` gepinnt ist (siehe `README.md:115-116`, Referenz auf den dotenv-17-Prompt-Injection-Vorfall). Das ist inkonsistent: Wenn die dotenv-Historie als Grund für exaktes Pinning genannt wird, wäre zu überlegen, ob nicht auch die übrigen direkten Abhängigkeiten (insb. `multer`, das gerade aktive CVEs hat) enger gepinnt oder zumindest per Lockfile+CI-Audit überwacht werden sollten. Aktuell verlässt sich das Projekt bei allen anderen Paketen auf Caret-Ranges, was künftige Minor-Updates automatisch zulässt.
 
 **Frontend (`frontend/package.json`):**
@@ -91,8 +92,11 @@ Kein `helmet` oder manuelle Security-Header (CSP, `X-Content-Type-Options`, `X-F
 - `esbuild` (transitiv über vite) — moderat.
 - Reine Dev-Dependencies (`vite`, `esbuild`, `@vitejs/plugin-react` etc.) betreffen nur die lokale Entwicklungsumgebung, nicht den Produktions-Build selbst — Risiko dadurch eingegrenzt, aber sollte trotzdem aktualisiert werden.
 
-**Einschätzung:** mittel (multer-DoS ist die konkreteste, mit vertretbarem Aufwand behebbare Lücke: `npm audit fix` sollte `multer` ohne Breaking Change auf eine gepatchte Version heben).
-**Vorschlag:** `npm audit fix` im Backend ausführen (multer/express/body-parser), vite-Major-Upgrade separat planen (Breaking Changes prüfen), und generell erwägen, sicherheitsrelevante direkte Dependencies (nicht nur dotenv) exakt zu pinnen oder per Dependabot/Renovate + CI-Audit-Gate zu überwachen.
+**Einschätzung:** mittel — die einzige `high`-Lücke (multer) ist beseitigt; die verbliebenen sind moderat und hängen beide an Major-Upgrades.
+**Offene Punkte für einen eigenen Durchgang:**
+1. **Express 4 → 5** — löst die `qs`-Lücke. Breaking Changes in Routing/Middleware, braucht einen Test-Durchgang über alle Routen.
+2. **Vite 4 → 8** — löst die esbuild-Lücke. Betrifft nur den Dev-Server, nicht den Produktions-Build, daher niedrige Dringlichkeit.
+3. **Pinning-Strategie** — nach dem Update wurde geprüft, dass die drei geänderten Pakete (multer, body-parser, qs) keine `preinstall`/`install`/`postinstall`/`prepare`-Scripts mitbringen; Lehre aus dem dotenv-17-Vorfall. Als dauerhafte Absicherung wäre Dependabot/Renovate + CI-Audit-Gate sinnvoller als manuelles Pinning aller Pakete.
 
 ---
 
@@ -206,14 +210,16 @@ Hier wird der multer-Fehler direkt mit hartem `400` beantwortet statt über `nex
 
 ## Zusammenfassung: Die 5 wichtigsten Punkte zum Anfangen
 
-1. **`getItemHistory()`-Formatinkonsistenz zwischen SQL- und API-Pfad** (2.1) — im produktiven `sqlite`-Modus zeigt die Verlauf-Tabelle im Item Editor vermutlich kein Datum an, weil `entry.playedAt` dort nie gesetzt wird. Das ist der einzige Befund mit klarem Verdacht auf einen aktiven Funktionsfehler im Standard-Deploy-Modus — sollte zuerst verifiziert und behoben werden.
+**Stand 2026-09-09:** Die Punkte 2, 4 und 5 der ursprünglichen Liste sind in einem gezielten Sicherheits-Durchgang behoben worden (je ein eigener Commit). Offen bleiben:
 
-2. **`multer`-Sicherheitslücken (hoch)** (1.12) — mehrere bekannte DoS-CVEs mit verfügbarem Fix. `npm audit fix` im Backend ist niedrigschwellig und sollte zeitnah laufen.
+1. **`getItemHistory()`-Formatinkonsistenz zwischen SQL- und API-Pfad** (2.1) — im produktiven `sqlite`-Modus zeigt die Verlauf-Tabelle im Item Editor vermutlich kein Datum an, weil `entry.playedAt` dort nie gesetzt wird. Das ist der einzige Befund mit klarem Verdacht auf einen aktiven Funktionsfehler im Standard-Deploy-Modus — **jetzt der wichtigste offene Punkt**, sollte zuerst verifiziert und behoben werden.
 
-3. **Kein Brute-Force-Schutz beim Login** (1.4) — einfach nachzurüsten (`express-rate-limit`), schließt eine klassische Lücke auf dem einzigen echten Authentifizierungs-Einstiegspunkt.
+2. ~~**`multer`-Sicherheitslücken (hoch)** (1.12)~~ — ✅ behoben: multer 2.2.0 → 2.3.0. Verbleibend nur noch die moderate `qs`-Lücke, die an einem Express-5-Upgrade hängt.
 
-4. **SSRF bei benutzerdefinierter Hörerzahl-URL** (1.9) und **`secure: false` im Session-Cookie** (1.3) — beide sind für sich genommen mittleres Risiko, aber leicht behebbar (URL-Validierung bzw. Env-gesteuertes `secure`-Flag) und sollten vor einem TLS-Produktiv-Deploy (Phase H laut README) geschlossen sein.
+3. **Kein Brute-Force-Schutz beim Login** (1.4) — einfach nachzurüsten (`express-rate-limit`), schließt eine klassische Lücke auf dem einzigen echten Authentifizierungs-Einstiegspunkt. **Der wichtigste offene Sicherheitspunkt.**
 
-5. **Reale Server-IP in `server/.env.production.example`** (1.1) — kleine, aber schnell behebbare Infrastruktur-Preisgabe in einer öffentlich einsehbaren Datei; durch Platzhalter ersetzen.
+4. ~~**SSRF bei benutzerdefinierter Hörerzahl-URL** (1.9) und **`secure: false` im Session-Cookie** (1.3)~~ — ✅ beide behoben: URL-Validierung mit DNS-Auflösung bzw. `COOKIE_SECURE`-Env-Variable. Für den TLS-Deploy (Phase H) ist damit nur noch `COOKIE_SECURE=true` zu setzen.
+
+5. ~~**Reale Server-IP in `server/.env.production.example`** (1.1)~~ — ✅ behoben, durch `<SERVER-IP>` ersetzt. Hinweis: in der Git-Historie weiterhin einsehbar.
 
 Ergänzend, als niedriger priorisierte, aber sinnvolle Aufräumarbeiten: veraltete TODOs in `repository.js` (2.6), fehlende npm-Skripte für die Smoke-Tests (2.7), und die dokumentierte, aber nicht ausgelagerte Code-Duplizierung zwischen den beiden echten Repositories (3.2).

@@ -19,6 +19,60 @@ const SESSION_COOKIE_OPTIONS = {
   secure: COOKIE_SECURE,
 };
 
+// Brute-Force-Schutz. Bewusst In-Memory und ohne zusaetzliche Dependency:
+// das Webinterface laeuft als Einzelinstanz fuer ein kleines Team. Die
+// Zaehler gehen bei einem Serverneustart verloren - fuer diesen Einsatzzweck
+// akzeptiert, bei mehreren Instanzen braeuchte es einen gemeinsamen Store.
+const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS) || 5;
+const LOGIN_LOCKOUT_MS = (Number(process.env.LOGIN_LOCKOUT_MINUTES) || 15) * 60 * 1000;
+
+// Getrennt nach Benutzername und IP, weil sonst entweder viele Namen von
+// einer IP oder ein Name von vielen IPs durchprobiert werden koennten.
+const loginAttempts = new Map();
+
+function attemptKeys(username, ip) {
+  return [`user:${String(username).toLowerCase()}`, `ip:${ip}`];
+}
+
+function isLockedOut(username, ip) {
+  const now = Date.now();
+  return attemptKeys(username, ip).some((key) => {
+    const entry = loginAttempts.get(key);
+    if (!entry) return false;
+    if (entry.expiresAt <= now) {
+      loginAttempts.delete(key);
+      return false;
+    }
+    return entry.count >= LOGIN_MAX_ATTEMPTS;
+  });
+}
+
+function registerFailedAttempt(username, ip) {
+  const now = Date.now();
+  for (const key of attemptKeys(username, ip)) {
+    const entry = loginAttempts.get(key);
+    if (!entry || entry.expiresAt <= now) {
+      loginAttempts.set(key, { count: 1, expiresAt: now + LOGIN_LOCKOUT_MS });
+    } else {
+      entry.count += 1;
+    }
+  }
+}
+
+function clearAttempts(username, ip) {
+  for (const key of attemptKeys(username, ip)) loginAttempts.delete(key);
+}
+
+// Abgelaufene Eintraege verfallen zwar auch beim Zugriff, aber ohne
+// periodischen Cleanup wuechse die Map bei gestreuten Angriffen unbegrenzt.
+const attemptCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of loginAttempts) {
+    if (entry.expiresAt <= now) loginAttempts.delete(key);
+  }
+}, LOGIN_LOCKOUT_MS);
+attemptCleanup.unref();
+
 function loadScopesForUser(userId) {
   return [...repo.getScopesByUserId(userId), ...repo.getScopesByGroupId(userId)];
 }
@@ -31,10 +85,18 @@ router.post("/login", (req, res, next) => {
       return res.status(400).json({ error: "Benutzername und Passwort sind erforderlich" });
     }
 
+    // Neutrale Meldung, damit die Sperre nicht verraet ob es den Namen gibt.
+    if (isLockedOut(username, req.ip)) {
+      return res.status(429).json({ error: "Zu viele Fehlversuche, bitte später erneut versuchen" });
+    }
+
     const user = repo.getUserByUsername(username);
     if (!user || !repo.verifyUserPassword(user, password)) {
+      registerFailedAttempt(username, req.ip);
       return res.status(401).json({ error: "Ungültige Zugangsdaten" });
     }
+
+    clearAttempts(username, req.ip);
 
     const sid = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();

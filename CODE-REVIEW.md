@@ -30,17 +30,18 @@ res.cookie("session", sid, {
 **Einschätzung:** mittel (wird relevant, sobald TLS/Caddy in Phase H produktiv geht; aktuell laut `DEPLOYMENT.md` ohne TLS deployt, daher kein akuter Widerspruch, aber ein Stolperstein für später).
 **Behoben:** `secure` hängt jetzt an der neuen Env-Variable `COOKIE_SECURE` (Default `false`), dokumentiert in `.env.production.example`. Bewusst nicht an `NODE_ENV` gekoppelt, da das Webinterface produktiv auch über reines HTTP läuft — eine automatische Kopplung hätte dort das Login lahmgelegt. `res.clearCookie()` nutzt dieselben Flags, sonst schlägt das Logout bei `secure: true` fehl.
 
-### 1.4 Kein Brute-Force-Schutz beim Login
+### 1.4 Kein Brute-Force-Schutz beim Login — ✅ behoben (2026-09-09)
 **Fundort:** `server/routes/auth.js:16-41` (`POST /login`)
 Es gibt kein Rate-Limiting, keine Verzögerung nach Fehlversuchen und keinen Account-Lockout. Ein Angreifer kann beliebig viele Login-Versuche gegen `admin` fahren. bcrypt (10 Runden, s. u.) bremst zwar pro Versuch, aber ohne Rate-Limit ist verteiltes/paralleles Brute-Forcing möglich.
 **Einschätzung:** mittel (kein kritisches Datenleck, aber ein klassischer Login-Endpoint-Fehler, besonders da der Admin-Benutzername `admin` fest vorgegeben ist, s. `server/data/webAuthDb.js:72`).
-**Vorschlag:** `express-rate-limit` (oder gleichwertig) auf `/api/auth/login` je IP/Username, z. B. 5 Versuche / 15 Min.
+**Behoben:** In-Memory-Rate-Limiting direkt in `auth.js`, ohne neue Dependency. Gezählt wird getrennt nach Benutzername **und** IP; nach `LOGIN_MAX_ATTEMPTS` (Default 5) Fehlversuchen antwortet die Route für `LOGIN_LOCKOUT_MINUTES` (Default 15) mit HTTP 429. Erfolgreicher Login setzt beide Zähler zurück, abgelaufene Einträge werden beim Zugriff und zusätzlich periodisch aufgeräumt. Beide Werte sind in `.env.production.example` dokumentiert. Die 429-Meldung ist neutral formuliert — verifiziert, dass existierende und nicht existierende Benutzernamen identische Antworten liefern.
+**Bewusste Einschränkung:** Die Zähler liegen im Arbeitsspeicher und gehen bei einem Neustart verloren; bei mehreren Instanzen bräuchte es einen gemeinsamen Store. Für die Einzelinstanz akzeptiert, im Code kommentiert.
 
-### 1.5 bcrypt-Runden (Cost-Faktor 10)
+### 1.5 bcrypt-Runden (Cost-Faktor 10) — ✅ behoben (2026-09-09)
 **Fundort:** `server/data/webAuthDb.js:68, 175, 205`
 `bcrypt.hashSync(password, 10)` wird an drei Stellen verwendet (Bootstrap-Admin, `createUser`, `changeUserPassword`). Cost-Faktor 10 ist der bcrypt-Standardwert und für 2026er Hardware inzwischen eher niedrig; 12 gilt heute als gängige Empfehlung für neue Systeme.
 **Einschätzung:** niedrig (10 ist nicht unsicher, aber nicht mehr State-of-the-Art).
-**Vorschlag:** Auf 12 anheben, ggf. als Konstante extrahieren statt dreimal literal `10`.
+**Behoben:** Als Konstante `BCRYPT_COST = 12` an einer Stelle definiert, alle drei Verwendungen referenzieren sie. Betrifft nur neu gesetzte Passwörter — bestehende Cost-10-Hashes bleiben gültig, da bcrypt den Cost aus dem Hash selbst liest (verifiziert). Kein Migrationsbedarf. Hash-Dauer steigt auf ~420 ms, was für Logins unproblematisch ist und Brute-Force zusätzlich bremst.
 
 ### 1.6 Eingabevalidierung in den Routen ist lückenhaft, aber nicht kritisch
 **Fundorte:** `server/routes/library.js` (diverse), `server/routes/auth.js`
@@ -102,14 +103,15 @@ Kein `helmet` oder manuelle Security-Header (CSP, `X-Content-Type-Options`, `X-F
 
 ## Bereich 2: Dokumentation
 
-### 2.1 `getItemHistory()`-Rückgabeformat weicht zwischen SQL- und API-Repository ab — vom Frontend nur teilweise unterstützt
+### 2.1 `getItemHistory()`-Rückgabeformat weicht zwischen SQL- und API-Repository ab — ✅ behoben (2026-09-09)
 **Fundort:** `server/data/sqlRepository.js:381-402` vs. `server/data/apiRepository.js:664-685` vs. `frontend/src/pages/ItemEditor.jsx:1218`
 - `sqlRepository.js#getItemHistory` gibt `{ slot, date, hour }` zurück.
 - `apiRepository.js#getItemHistory` (kommentiert als "mirrors" der API) gibt `{ playedAt, show, moderator }` zurück und weist im Kommentar (`apiRepository.js:668-675`) explizit auf diese Inkonsistenz hin: *"sqlRepository.js's getItemHistory() returns { slot, date, hour } instead, which that same table doesn't read — a pre-existing mismatch in the sqlite path, left alone here"*.
 - Das Frontend (`ItemEditor.jsx:1218`) liest `entry.playedAt` — das Feld existiert nur im API-Modus. Im `DATA_SOURCE=sqlite`-Modus (laut `.env.production.example:16` der **Standard-Produktionsmodus**) zeigt die History-Tabelle im Item-Editor daher vermutlich für jeden Eintrag "-" statt eines Datums, weil `playedAt` dort `undefined` ist.
 - Der Git-Log zeigt einen Commit `10043d1 fix: getItemHistory liefert playedAt fuer die Verlauf-Tabelle` — das deutet darauf hin, dass dies im API-Pfad bereits behoben wurde, der SQL-Pfad aber laut explizitem Kommentar bewusst unangetastet blieb.
 **Einschätzung:** mittel bis kritisch — abhängig davon, ob `sqlite` der tatsächlich genutzte Produktionsmodus ist (laut `.env.production.example` ja). Wenn ja, ist die Verlauf-Tabelle im Item Editor im Produktivbetrieb vermutlich funktional kaputt (zeigt kein Datum an).
-**Vorschlag:** `sqlRepository.js#getItemHistory` auf dasselbe `{ playedAt, show, moderator }`-Format ziehen (oder das Frontend auf beide Formate vorbereiten), und den Punkt in `docs/FEATURES.md`/`docs/MAIRLISTDB-API.md` als bekannte Diskrepanz dokumentieren, falls er bewusst offen bleiben soll.
+**Behoben:** `sqlRepository.js#getItemHistory` liefert jetzt zusätzlich `playedAt`, `show` und `moderator` im Format des API-Repositories. `slot`/`date`/`hour` bleiben erhalten (vorher geprüft: außerhalb dieser Funktion liest sie niemand). Der Verdacht hat sich bestätigt — gegen die Test-DB verifiziert: vor dem Fix war `playedAt` bei allen Einträgen `undefined`, jetzt liefern alle 43 Einträge gültige Datumswerte, Sortierung und Stunden-Verteilung funktionieren.
+**Bekannte Einschränkung:** Die `playlist`-Tabelle kennt nur Datum + Stunde, der Zeitstempel ist also stundengenau (Minuten immer `:00`) — anders als im `api`-Modus mit exakter Uhrzeit. Bewusst ohne Zeitzonen-Suffix konstruiert, damit die Stunde beim Parsen im Browser nicht verschoben wird. Im Code kommentiert.
 
 ### 2.2 README behauptet DB-Zugriff über "echten SQL Server", tatsächlich läuft SQLite
 **Fundort:** `README.md:39` vs. `README.md:41`
@@ -210,16 +212,25 @@ Hier wird der multer-Fehler direkt mit hartem `400` beantwortet statt über `nex
 
 ## Zusammenfassung: Die 5 wichtigsten Punkte zum Anfangen
 
-**Stand 2026-09-09:** Die Punkte 2, 4 und 5 der ursprünglichen Liste sind in einem gezielten Sicherheits-Durchgang behoben worden (je ein eigener Commit). Offen bleiben:
+**Stand 2026-09-09:** Alle fünf ursprünglichen Prioritäten sind in zwei gezielten Durchgängen abgearbeitet (je ein Commit pro Punkt):
 
-1. **`getItemHistory()`-Formatinkonsistenz zwischen SQL- und API-Pfad** (2.1) — im produktiven `sqlite`-Modus zeigt die Verlauf-Tabelle im Item Editor vermutlich kein Datum an, weil `entry.playedAt` dort nie gesetzt wird. Das ist der einzige Befund mit klarem Verdacht auf einen aktiven Funktionsfehler im Standard-Deploy-Modus — **jetzt der wichtigste offene Punkt**, sollte zuerst verifiziert und behoben werden.
+1. ~~**`getItemHistory()`-Formatinkonsistenz zwischen SQL- und API-Pfad** (2.1)~~ — ✅ behoben. Der Verdacht hat sich bestätigt: im `sqlite`-Modus war die Verlauf-Ansicht tatsächlich leer. `playedAt` wird jetzt auch dort gesetzt.
 
 2. ~~**`multer`-Sicherheitslücken (hoch)** (1.12)~~ — ✅ behoben: multer 2.2.0 → 2.3.0. Verbleibend nur noch die moderate `qs`-Lücke, die an einem Express-5-Upgrade hängt.
 
-3. **Kein Brute-Force-Schutz beim Login** (1.4) — einfach nachzurüsten (`express-rate-limit`), schließt eine klassische Lücke auf dem einzigen echten Authentifizierungs-Einstiegspunkt. **Der wichtigste offene Sicherheitspunkt.**
+3. ~~**Kein Brute-Force-Schutz beim Login** (1.4)~~ — ✅ behoben: In-Memory-Rate-Limiting nach Benutzername und IP, konfigurierbar per Env.
 
 4. ~~**SSRF bei benutzerdefinierter Hörerzahl-URL** (1.9) und **`secure: false` im Session-Cookie** (1.3)~~ — ✅ beide behoben: URL-Validierung mit DNS-Auflösung bzw. `COOKIE_SECURE`-Env-Variable. Für den TLS-Deploy (Phase H) ist damit nur noch `COOKIE_SECURE=true` zu setzen.
 
 5. ~~**Reale Server-IP in `server/.env.production.example`** (1.1)~~ — ✅ behoben, durch `<SERVER-IP>` ersetzt. Hinweis: in der Git-Historie weiterhin einsehbar.
 
-Ergänzend, als niedriger priorisierte, aber sinnvolle Aufräumarbeiten: veraltete TODOs in `repository.js` (2.6), fehlende npm-Skripte für die Smoke-Tests (2.7), und die dokumentierte, aber nicht ausgelagerte Code-Duplizierung zwischen den beiden echten Repositories (3.2).
+Ebenfalls erledigt: bcrypt-Cost 10 → 12 (1.5).
+
+### Nächste sinnvolle Schritte
+
+Da die ursprüngliche Top-5-Liste abgearbeitet ist, rücken diese Punkte nach vorn:
+
+1. **Upload-Validierung nur über die Datei-Extension** (1.7) — der Typ-Filter prüft `originalname`, nicht den Inhalt. Der derzeit gewichtigste offene Sicherheitspunkt.
+2. **Fehlende Security-Header** (1.11) und **Eingabevalidierung in den Routen** (1.6) — beide niedrigschwellig.
+3. **Express 4 → 5** (1.12) — schließt die letzte gemeldete Backend-Lücke (`qs`), braucht aber einen Test-Durchgang über alle Routen.
+4. Aufräumarbeiten: veraltete TODOs in `repository.js` (2.6), fehlende npm-Skripte für die Smoke-Tests (2.7), Code-Duplizierung zwischen den beiden echten Repositories (3.2).

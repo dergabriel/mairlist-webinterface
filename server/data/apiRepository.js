@@ -20,6 +20,7 @@
 // of DATA_SOURCE (see docs/FEATURES.md), used only for getDashboardStats()'s
 // totalUsers below.
 const webAuthDb = require("./webAuthDb");
+const { CUE_TO_DB, DB_TO_CUE, typeToCode, parsePlaylistId, playlistId, secondsToClock } = require("./shared");
 
 const BASE_URL = process.env.API_DB_BASE_URL || "http://localhost:8840";
 const API_USER = process.env.API_DB_USER;
@@ -197,18 +198,9 @@ async function doApiRequest(method, path, { query = {}, rawFlags = [], body, for
 
 // ---- item field mapping (API PascalCase <-> internal camelCase) ----
 //
-// Mirrors sqlRepository.js's CUE_TO_DB / DB_TO_CUE and rowToItem() so the
-// two repositories return items in the same shape.
-
-const CUE_TO_DB = {
-  cueIn: "CueIn", fadeIn: "FadeIn", ramp1: "Ramp1", ramp2: "Ramp2", ramp3: "Ramp3",
-  loopIn: "LoopIn", loopOut: "LoopOut", hookIn: "HookIn", hookFade: "HookFade",
-  hookOut: "HookOut", outro: "Outro", startNext: "StartNext", fadeOut: "FadeOut",
-  fadeEnd: "FadeEnd", cueOut: "CueOut", preroll: "Preroll", anchor: "Anchor",
-};
-const DB_TO_CUE = Object.fromEntries(Object.entries(CUE_TO_DB).map(([k, v]) => [v, k]));
-
-const typeToCode = (t) => (t || "").toLowerCase();
+// CUE_TO_DB/DB_TO_CUE/typeToCode live in shared.js (identical to
+// sqlRepository.js's copy) so the two repositories return items in the
+// same shape.
 
 function mapMarkersToInternal(markers) {
   const cue = {};
@@ -762,14 +754,8 @@ function pad2(n) {
   return String(n).padStart(2, "0");
 }
 
-// Seconds-since-midnight -> "HH:MM:SS", wrapping past 24h. Mirrors
-// sqlRepository.js's resequenceEntries() cursor formatting.
-function secondsToClock(totalSeconds) {
-  const h = String(Math.floor(totalSeconds / 3600) % 24).padStart(2, "0");
-  const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
-  const s = String(Math.floor(totalSeconds % 60)).padStart(2, "0");
-  return `${h}:${m}:${s}`;
-}
+// secondsToClock() lives in shared.js (identical to sqlRepository.js's
+// resequenceEntries() cursor formatting).
 
 async function getPlaylistHour(year, month, day, hour) {
   const path = `/api/v1/playlists/${year}/${pad2(month)}/${pad2(day)}/${pad2(hour)}/0`;
@@ -782,7 +768,9 @@ async function getPlaylistAttributes(year, month, day, hour) {
   return apiRequest("GET", path);
 }
 
-const playlistHourId = (date, hour) => `${date}-${String(hour).padStart(2, "0")}`;
+// playlistHourId is this file's name for shared.js's playlistId() (same
+// "YYYY-MM-DD-HH" format sqlRepository.js uses).
+const playlistHourId = playlistId;
 
 // Mirrors sqlRepository.js's getPlaylistsByDate(date): one entry per hour
 // of the day (0-23), each flagged hasEntries. The API has no single
@@ -805,13 +793,8 @@ async function getPlaylistsByDate(date) {
   }));
 }
 
-const PLAYLIST_ID_RE = /^(\d{4}-\d{2}-\d{2})-(\d{2})$/;
-
-function parsePlaylistId(id) {
-  const match = PLAYLIST_ID_RE.exec(id);
-  if (!match) return null;
-  return { date: match[1], hour: parseInt(match[2], 10) };
-}
+// parsePlaylistId() lives in shared.js (identical to sqlRepository.js's
+// copy).
 
 // Mirrors sqlRepository.js's getPlaylistById(id) -> { id, date, hour,
 // entries: [{ position, itemId, scheduledStart, overrides, item }] }.

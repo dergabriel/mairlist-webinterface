@@ -10,6 +10,7 @@ const path = require("path");
 const fs = require("fs");
 const { CUE_POINTS, ATTRIBUTE_DEFINITIONS } = require("./mockData");
 const webAuthDb = require("./webAuthDb");
+const { CUE_TO_DB, DB_TO_CUE, typeToCode, parsePlaylistId, secondsToClock } = require("./shared");
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "../mairlist.mldb");
 
@@ -79,17 +80,8 @@ function pickWritable(data) {
   );
 }
 
-// camelCase (code) <-> PascalCase (DB) cue marker types
-const CUE_TO_DB = {
-  cueIn: "CueIn", fadeIn: "FadeIn", ramp1: "Ramp1", ramp2: "Ramp2", ramp3: "Ramp3",
-  loopIn: "LoopIn", loopOut: "LoopOut", hookIn: "HookIn", hookFade: "HookFade",
-  hookOut: "HookOut", outro: "Outro", startNext: "StartNext", fadeOut: "FadeOut",
-  fadeEnd: "FadeEnd", cueOut: "CueOut", preroll: "Preroll", anchor: "Anchor",
-};
-const DB_TO_CUE = Object.fromEntries(Object.entries(CUE_TO_DB).map(([k, v]) => [v, k]));
-
-// item.type: DB PascalCase <-> code lowercase
-const typeToCode = (t) => (t || "").toLowerCase();
+// item.type: DB PascalCase -> code lowercase (CUE_TO_DB/DB_TO_CUE/typeToCode
+// live in shared.js, identical to apiRepository.js's copy - see there)
 const typeToDb = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
 
 // Slot string -> { date, hour }. Midnight is stored bare ("2026-03-21"),
@@ -107,13 +99,8 @@ function buildSlot(date, hour) {
   return `${date} ${String(hour).padStart(2, "0")}:00:00.000`;
 }
 
-function parsePlaylistId(id) {
-  const match = /^(\d{4}-\d{2}-\d{2})-(\d{2})$/.exec(id);
-  if (!match) return null;
-  return { date: match[1], hour: parseInt(match[2], 10) };
-}
-
-const playlistId = (date, hour) => `${date}-${String(hour).padStart(2, "0")}`;
+// parsePlaylistId()/playlistId() live in shared.js (identical to
+// apiRepository.js's copy)
 
 // ---- folders ----
 
@@ -781,10 +768,7 @@ function getPlaylistById(id) {
 function resequenceEntries(entries, hour) {
   let cursorSeconds = hour * 3600;
   for (const entry of entries) {
-    const h = String(Math.floor(cursorSeconds / 3600) % 24).padStart(2, "0");
-    const m = String(Math.floor((cursorSeconds % 3600) / 60)).padStart(2, "0");
-    const s = String(Math.floor(cursorSeconds % 60)).padStart(2, "0");
-    entry.scheduledStart = `${h}:${m}:${s}`;
+    entry.scheduledStart = secondsToClock(cursorSeconds);
     cursorSeconds += entry.item ? entry.item.duration : 0;
   }
 }

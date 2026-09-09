@@ -43,7 +43,7 @@ Es gibt kein Rate-Limiting, keine Verzögerung nach Fehlversuchen und keinen Acc
 **Einschätzung:** niedrig (10 ist nicht unsicher, aber nicht mehr State-of-the-Art).
 **Behoben:** Als Konstante `BCRYPT_COST = 12` an einer Stelle definiert, alle drei Verwendungen referenzieren sie. Betrifft nur neu gesetzte Passwörter — bestehende Cost-10-Hashes bleiben gültig, da bcrypt den Cost aus dem Hash selbst liest (verifiziert). Kein Migrationsbedarf. Hash-Dauer steigt auf ~420 ms, was für Logins unproblematisch ist und Brute-Force zusätzlich bremst.
 
-### 1.6 Eingabevalidierung in den Routen ist lückenhaft, aber nicht kritisch
+### 1.6 ~~Eingabevalidierung in den Routen ist lückenhaft, aber nicht kritisch~~ ✅ behoben
 **Fundorte:** `server/routes/library.js` (diverse), `server/routes/auth.js`
 - Positiv: Alle SQL-Zugriffe in `sqlRepository.js` laufen konsequent über parametrisierte `better-sqlite3`-Prepared-Statements (`db.prepare(...).all(...)`/`.run(...)`), keine String-Konkatenation von Nutzereingaben in SQL gefunden — kein SQL-Injection-Risiko identifiziert.
 - Es gibt jedoch kaum Typ-/Format-Validierung auf Body-/Query-Parametern jenseits von "ist vorhanden" (`if (!name || !name.trim())` etc.). Beispiele:
@@ -52,6 +52,21 @@ Es gibt kein Rate-Limiting, keine Verzögerung nach Fehlversuchen und keinen Acc
   - `auth.js:117-128` (`PUT /admin/users/:id/permissions`): `role` wird nicht gegen `webAuthDb.ROLES` validiert, bevor es an `setUserPermissions` geht — dort filtert `ROLES.includes(role)` zwar korrekt (`webAuthDb.js:222`), sodass ein ungültiger Wert nur stillschweigend ignoriert statt einen 400 zurückzugeben.
 **Einschätzung:** niedrig bis mittel (kein direktes Sicherheitsloch, eher Robustheits-/UX-Lücke; im admin-geschützten Storage-Fall potenziell relevant für Path-Traversal-Härtung).
 **Vorschlag:** Kleine Validierungsschicht (z. B. `zod`/`joi` oder manuelle Guards) für Body-/Query-Parameter vor dem Repository-Aufruf, besonders bei numerischen IDs und Rollen-Strings.
+
+**Behoben:** Neue Datei `server/lib/validate.js` mit kleinen, lesbaren Guards — bewusst **ohne** zusätzliche Dependency. Sie liefert `requireId`/`optionalId`, `requireDate`/`optionalDate`, `requirePlaylistId`, `optionalCount`, `requirePosition`, `requireText`/`optionalText` sowie `requireObject`/`optionalObject`. Der Helfer `wrapValidation()` verpackt die Handler so, dass ein `ValidationError` als sauberer 400 mit deutscher Meldung beantwortet wird, statt als 500 im globalen Error-Handler zu landen.
+
+Angewendet auf alle Handler in `library.js` und `auth.js`:
+- **IDs** werden nur auf "vorhanden, String/Zahl, plausibel kurz" geprüft und *nicht* auf ein Format — die Repositories nutzen unterschiedliche ID-Typen (mock/sqlite numerisch, mAirListDB-API String), eine strengere Prüfung hätte je nach `DATA_SOURCE` legitime Aufrufe abgelehnt. `/api/items/abc/history` liefert deshalb weiterhin 404 ("nicht gefunden"), nicht 400 — es stürzt aber nicht mehr ab.
+- **Datum** (`?date=`) und **Playlist-IDs** (`YYYY-MM-DD-HH`) werden per Regex geprüft.
+- **`limit`** ist auf max. 500 gedeckelt, `limit`/`offset` müssen nicht-negative Ganzzahlen sein.
+- **Freitext** (Titel, Ordnername, Suchbegriff, Filter) ist auf 500 Zeichen begrenzt; Storage-Pfade auf 4000.
+- **Bodys** werden vor dem Zugriff als Objekt verifiziert (Arrays und Skalare ⇒ 400).
+- **Login** akzeptiert nur noch nicht-leere Strings für `username`/`password` (max. 200 Zeichen) — hält u. a. Objekt-Payloads und sehr große Eingaben vom teuren bcrypt-Vergleich fern. Falsches Passwort bleibt korrekt 401.
+- **`role`** wird jetzt in beiden Routen gegen `webAuthDb.ROLES` geprüft und mit 400 abgelehnt, statt still verworfen zu werden (der oben beschriebene Fall).
+
+Bewusst großzügig gehalten, damit nichts Bestehendes bricht: optionale Parameter bleiben optional (fehlend ≠ ungültig), `newParentId: null` und `folderId: null` bleiben erlaubt (Verschieben auf oberste Ebene bzw. aus dem Ordner heraus), und `afterPosition: 0` bleibt gültig ("ganz an den Anfang").
+
+Verifiziert: `smoke-writes.js` weiterhin 12/12 grün; alle Lese- und Schreibrouten gegen einen laufenden Server mit gültigen Anfragen geprüft (unverändert 2xx); kaputte Anfragen (`?date=kaputt`, `?limit=-5`, `?limit=999999`, überlange Freitexte, `order: "nichtarray"`, Array-statt-Objekt-Body, Playlist-ID `nichtsogut`, Position `abc`) liefern jetzt durchweg 400 mit verständlicher Meldung statt Crash oder stillem Fehlverhalten. Der API-Modus (`smoke-reads-api.js`) wurde nicht ausgeführt — dafür fehlt hier eine erreichbare mAirListDB-Server-Instanz.
 
 ### 1.7 Datei-Upload: Typ/Größe geprüft, aber Extension-Filter ist client-kontrolliert
 **Fundort:** `server/routes/library.js:21, 40-51`
@@ -231,6 +246,6 @@ Ebenfalls erledigt: bcrypt-Cost 10 → 12 (1.5).
 Da die ursprüngliche Top-5-Liste abgearbeitet ist, rücken diese Punkte nach vorn:
 
 1. **Upload-Validierung nur über die Datei-Extension** (1.7) — der Typ-Filter prüft `originalname`, nicht den Inhalt. Der derzeit gewichtigste offene Sicherheitspunkt.
-2. **Fehlende Security-Header** (1.11) und **Eingabevalidierung in den Routen** (1.6) — beide niedrigschwellig.
+2. **Fehlende Security-Header** (1.11) — niedrigschwellig. (~~Eingabevalidierung in den Routen, 1.6~~ — ✅ behoben, siehe oben.)
 3. **Express 4 → 5** (1.12) — schließt die letzte gemeldete Backend-Lücke (`qs`), braucht aber einen Test-Durchgang über alle Routen.
 4. Aufräumarbeiten: veraltete TODOs in `repository.js` (2.6), fehlende npm-Skripte für die Smoke-Tests (2.7), Code-Duplizierung zwischen den beiden echten Repositories (3.2).

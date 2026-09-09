@@ -5,6 +5,13 @@ const repo = process.env.DATA_SOURCE === "sqlite"
   ? require("../data/sqlRepository")
   : require("../data/repository");
 const { requireAuth, requireScope } = require("../middleware/auth");
+const {
+  requireId, requireText, optionalText, requireObject, wrapValidation,
+} = require("../lib/validate");
+// Einzige Quelle der Wahrheit fuer die fuenf festen Rollen. Bisher wurde ein
+// ungueltiger Wert in setUserPermissions() stillschweigend verworfen - hier
+// gibt es dafuer jetzt einen 400 mit klarer Meldung.
+const { ROLES } = require("../data/webAuthDb");
 
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8h
 
@@ -80,9 +87,16 @@ function loadScopesForUser(userId) {
 // POST /api/auth/login -> { username, password } -> sets httpOnly "session" cookie
 router.post("/login", (req, res, next) => {
   try {
-    const { username, password } = req.body || {};
-    if (!username || !password) {
+    const body = req.body;
+    const isObject = body !== null && typeof body === "object" && !Array.isArray(body);
+    const { username, password } = isObject ? body : {};
+    // Beides muss ein nicht-leerer String sein.
+    if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
       return res.status(400).json({ error: "Benutzername und Passwort sind erforderlich" });
+    }
+    // Laengenbegrenzung haelt sehr grosse Eingaben vom teuren bcrypt-Vergleich fern.
+    if (username.length > 200 || password.length > 200) {
+      return res.status(400).json({ error: "Benutzername oder Passwort ist zu lang" });
     }
 
     // Neutrale Meldung, damit die Sperre nicht verraet ob es den Namen gibt.
@@ -136,94 +150,98 @@ router.get("/admin/users", requireAuth, requireScope("admin"), (req, res, next) 
   } catch (e) { next(e); }
 });
 
-router.get("/admin/users/:id", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const user = repo.getUserWithScopes(req.params.id);
-    if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
-    res.json(user);
-  } catch (e) { next(e); }
-});
+router.get("/admin/users/:id", requireAuth, requireScope("admin"), wrapValidation((req, res) => {
+  const user = repo.getUserWithScopes(requireId(req.params.id, "id"));
+  if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+  res.json(user);
+}));
 
-router.post("/admin/users", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const { name, description, password, role } = req.body || {};
-    if (!name || !password) {
-      return res.status(400).json({ error: "Name und Passwort sind erforderlich" });
-    }
-    res.status(201).json(repo.createUser(name, description, password, role));
-  } catch (e) { next(e); }
-});
+router.post("/admin/users", requireAuth, requireScope("admin"), wrapValidation((req, res) => {
+  const body = requireObject(req.body);
+  if (!body.name || !body.password) {
+    return res.status(400).json({ error: "Name und Passwort sind erforderlich" });
+  }
+  const name = requireText(body.name, "Name", { maxLength: 200 });
+  const password = requireText(body.password, "Passwort", { maxLength: 200 });
+  const description = optionalText(body.description, "description");
+  const role = optionalText(body.role, "role", { maxLength: 50 });
+  if (role !== undefined && !ROLES.includes(role)) {
+    return res.status(400).json({ error: `role muss einer von ${ROLES.join(", ")} sein` });
+  }
+  res.status(201).json(repo.createUser(name, description, password, role));
+}));
 
-router.put("/admin/users/:id", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const { name, description } = req.body || {};
-    if (!name) return res.status(400).json({ error: "Name ist erforderlich" });
-    const user = repo.updateUser(req.params.id, name, description);
-    if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
-    res.json(user);
-  } catch (e) { next(e); }
-});
+router.put("/admin/users/:id", requireAuth, requireScope("admin"), wrapValidation((req, res) => {
+  const body = requireObject(req.body);
+  if (!body.name) return res.status(400).json({ error: "Name ist erforderlich" });
+  const user = repo.updateUser(
+    requireId(req.params.id, "id"),
+    requireText(body.name, "Name", { maxLength: 200 }),
+    optionalText(body.description, "description")
+  );
+  if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+  res.json(user);
+}));
 
-router.delete("/admin/users/:id", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    if (String(req.user.id) === String(req.params.id)) {
-      return res.status(400).json({ error: "Der eigene Account kann nicht gelöscht werden" });
-    }
-    const deleted = repo.deleteUser(req.params.id);
-    if (!deleted) return res.status(404).json({ error: "Benutzer nicht gefunden" });
-    res.status(204).end();
-  } catch (e) { next(e); }
-});
+router.delete("/admin/users/:id", requireAuth, requireScope("admin"), wrapValidation((req, res) => {
+  const id = requireId(req.params.id, "id");
+  if (String(req.user.id) === id) {
+    return res.status(400).json({ error: "Der eigene Account kann nicht gelöscht werden" });
+  }
+  const deleted = repo.deleteUser(id);
+  if (!deleted) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+  res.status(204).end();
+}));
 
-router.put("/admin/users/:id/password", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const { password } = req.body || {};
-    if (!password) return res.status(400).json({ error: "Passwort ist erforderlich" });
-    const ok = repo.changeUserPassword(req.params.id, password);
-    if (!ok) return res.status(404).json({ error: "Benutzer nicht gefunden" });
-    res.status(204).end();
-  } catch (e) { next(e); }
-});
+router.put("/admin/users/:id/password", requireAuth, requireScope("admin"), wrapValidation((req, res) => {
+  const body = requireObject(req.body);
+  if (!body.password) return res.status(400).json({ error: "Passwort ist erforderlich" });
+  const ok = repo.changeUserPassword(
+    requireId(req.params.id, "id"),
+    requireText(body.password, "Passwort", { maxLength: 200 })
+  );
+  if (!ok) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+  res.status(204).end();
+}));
 
-router.put("/admin/users/:id/permissions", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const { scopeId, permissions, role } = req.body || {};
-    const nextRole = role || permissions?.role;
-    if (!nextRole) {
-      return res.status(400).json({ error: "role ist erforderlich" });
-    }
-    const user = repo.getUserWithScopes(req.params.id);
-    if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
-    res.json(repo.setUserPermissions(req.params.id, scopeId ?? 1, nextRole));
-  } catch (e) { next(e); }
-});
+router.put("/admin/users/:id/permissions", requireAuth, requireScope("admin"), wrapValidation((req, res) => {
+  const { scopeId, permissions, role } = requireObject(req.body);
+  const nextRole = role || permissions?.role;
+  if (!nextRole) {
+    return res.status(400).json({ error: "role ist erforderlich" });
+  }
+  const id = requireId(req.params.id, "id");
+  const user = repo.getUserWithScopes(id);
+  if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+  const validRole = requireText(nextRole, "role", { maxLength: 50 });
+  if (!ROLES.includes(validRole)) {
+    return res.status(400).json({ error: `role muss einer von ${ROLES.join(", ")} sein` });
+  }
+  res.json(repo.setUserPermissions(id, scopeId ?? 1, validRole));
+}));
 
 // ---- admin: API tokens ----
 
-router.get("/admin/users/:id/tokens", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const user = repo.getUserWithScopes(req.params.id);
-    if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
-    res.json(repo.getTokensByUserId(req.params.id));
-  } catch (e) { next(e); }
-});
+router.get("/admin/users/:id/tokens", requireAuth, requireScope("admin"), wrapValidation((req, res) => {
+  const id = requireId(req.params.id, "id");
+  const user = repo.getUserWithScopes(id);
+  if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+  res.json(repo.getTokensByUserId(id));
+}));
 
-router.post("/admin/users/:id/tokens", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const user = repo.getUserWithScopes(req.params.id);
-    if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
-    const scopeId = req.body?.scopeId ?? user.scopes?.[0]?.scopeId ?? 1;
-    res.status(201).json(repo.createToken(req.params.id, scopeId));
-  } catch (e) { next(e); }
-});
+router.post("/admin/users/:id/tokens", requireAuth, requireScope("admin"), wrapValidation((req, res) => {
+  const id = requireId(req.params.id, "id");
+  const user = repo.getUserWithScopes(id);
+  if (!user) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+  const scopeId = req.body?.scopeId ?? user.scopes?.[0]?.scopeId ?? 1;
+  res.status(201).json(repo.createToken(id, scopeId));
+}));
 
-router.delete("/admin/users/:id/tokens/:tokenId", requireAuth, requireScope("admin"), (req, res, next) => {
-  try {
-    const deleted = repo.deleteToken(req.params.tokenId);
-    if (!deleted) return res.status(404).json({ error: "Token nicht gefunden" });
-    res.status(204).end();
-  } catch (e) { next(e); }
-});
+router.delete("/admin/users/:id/tokens/:tokenId", requireAuth, requireScope("admin"), wrapValidation((req, res) => {
+  const deleted = repo.deleteToken(requireId(req.params.tokenId, "tokenId"));
+  if (!deleted) return res.status(404).json({ error: "Token nicht gefunden" });
+  res.status(204).end();
+}));
 
 // Group management is not supported — the five fixed roles
 // (readonly/studio/dj/vtdj/admin) replace the group concept.

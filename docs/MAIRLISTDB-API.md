@@ -1020,11 +1020,22 @@ aus tatsächlich beobachteten Item-Werten.
       Endpunkt noch ein Feld in `/api/v1/config`. `sqlRepository.js`s
       `getItemTypes()` braucht ein `DISTINCT type, COUNT(*) GROUP BY type`
       über die gesamte Items-Tabelle; die API hat dafür keine Entsprechung
-      ohne alle ~155 Ordner einzeln abzufragen. Eine hartcodierte Liste
-      (Music/Jingle/Sweeper/Drop/Container/Dummy, aus beobachteten
-      `Type`-Werten) wurde erwogen, aber verworfen: `hasItems`/`note` wären
-      dann geraten statt aus echten Daten abgeleitet.
-      `apiRepository.js`s `getItemTypes()` bleibt deshalb der leere Stub.
+      ohne alle ~155 Ordner einzeln abzufragen. `apiRepository.js`s
+      `getItemTypes()` liefert deshalb eine hartcodierte Liste, deren
+      Werte per Live-Abfrage der echten DB verifiziert wurden (Items
+      700-830 plus mehrere Ordner durchsucht): Music, Jingle, Sweeper,
+      Bed, Promo, Voice, Dummy. **Diese Liste ist unvollständig** — der
+      mAirList-Client kennt weitere Typen (Nachrichten, Werbung, Wetter,
+      Verkehr, Beitrag, Trailer, Sponsor-Jingle, Station-ID,
+      Instrumental, Sendung, Stream, Container, Playlist, Befehl,
+      Cartwall-Seite, Unterbrechung, Stille, Fehler, Andere,
+      Benutzerdefiniert 1-3), deren englische DB-Werte NICHT verifiziert
+      sind. Um sie zu ermitteln: im mAirList-Client ein Testitem auf den
+      jeweiligen Typ setzen, speichern, dann per API
+      `GET /api/v1/items/<id>` den `Type`-Wert auslesen (oder per
+      Wireshark den PUT mitschneiden). `hasItems`/`note` sind bei dieser
+      Liste keine echten DB-Werte, sondern Platzhalter
+      (`hasItems: true`, `note: ""`).
 - [ ] **Kein Logs-/Sendeprotokoll-Endpunkt gefunden** – nur
       `/api/v1/items/<id>/history` (pro Item) existiert, das skaliert nicht
       für eine Gesamtübersicht. `getLogs()`/`getRecentLogs()` liefern

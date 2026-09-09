@@ -1325,13 +1325,43 @@ const deleteStorage = notImplemented("deleteStorage");
 // its list from `SELECT DISTINCT type, COUNT(*) ... GROUP BY type` over the
 // full items table — the API has no equivalent whole-library scan (GET
 // /api/v1/items always requires folder=<id> or ids=<id,...>, see docs), so
-// getting real counts would mean walking all ~155 folders. A hardcoded
-// list (Music/Jingle/Sweeper/Drop/Container/Dummy, from types seen in
-// traffic) was considered, but every list field sqlRepository.js provides
-// (hasItems, note) would then be a guess rather than derived data — worse
-// than an honest empty result. Stays an empty stub; see "Offene Punkte" in
-// docs/MAIRLISTDB-API.md.
-const getItemTypes = emptyStub("getItemTypes", []);
+// getting real counts is impossible without walking all ~155 folders.
+//
+// Instead of an empty stub, this returns a hardcoded list built from a live
+// query of the actual database (items 700-830 plus several folders). Keys
+// are lowercased via typeToCode() to match the format item.type already
+// uses (see mapApiItemToInternal above) and what updateItem's Type
+// round-trip expects (`safe.type.charAt(0).toUpperCase() + ...`).
+//
+// TODO: Diese Typ-Liste ist unvollständig. Verifiziert wurden nur
+// die 7 Typen, die im aktuellen Bestand vorkommen (Music, Jingle,
+// Sweeper, Bed, Promo, Voice, Dummy). Der mAirList-Client kennt
+// weitere Typen (Nachrichten, Werbung, Wetter, Verkehr, Beitrag,
+// Trailer, Sponsor-Jingle, Station-ID, Instrumental, Sendung,
+// Stream, Container, Playlist, Befehl, Cartwall-Seite,
+// Unterbrechung, Stille, Fehler, Andere, Benutzerdefiniert 1-3).
+// Deren englische DB-Werte sind NICHT verifiziert. Um sie zu
+// ermitteln: im mAirList-Client ein Testitem auf den jeweiligen
+// Typ setzen, speichern, dann per API GET /api/v1/items/<id> den
+// Type-Wert auslesen (oder per Wireshark den PUT mitschneiden).
+// Sobald bekannt, hier ergänzen.
+const VERIFIED_ITEM_TYPES = [
+  { db: "Music", label: "Musik" },
+  { db: "Jingle", label: "Jingle" },
+  { db: "Sweeper", label: "Sweeper" },
+  { db: "Bed", label: "Bett" },
+  { db: "Promo", label: "Promo" },
+  { db: "Voice", label: "Moderation" },
+  { db: "Dummy", label: "Platzhalter" },
+];
+function getItemTypes() {
+  return VERIFIED_ITEM_TYPES.map((t) => ({
+    key: typeToCode(t.db),
+    label: t.label,
+    hasItems: true,
+    note: "",
+  }));
+}
 
 const getCuePoints = notImplemented("getCuePoints");
 const uploadFile = notImplemented("uploadFile");

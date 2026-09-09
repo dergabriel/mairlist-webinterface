@@ -8,6 +8,17 @@ const { requireAuth, requireScope } = require("../middleware/auth");
 
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8h
 
+// Bewusst eine eigene Variable statt NODE_ENV: das Webinterface laeuft
+// produktiv auch ueber reines HTTP, wo ein secure-Cookie das Login
+// unmoeglich machen wuerde.
+const COOKIE_SECURE = process.env.COOKIE_SECURE === "true";
+
+const SESSION_COOKIE_OPTIONS = {
+  httpOnly: true,
+  sameSite: "lax",
+  secure: COOKIE_SECURE,
+};
+
 function loadScopesForUser(userId) {
   return [...repo.getScopesByUserId(userId), ...repo.getScopesByGroupId(userId)];
 }
@@ -30,9 +41,7 @@ router.post("/login", (req, res, next) => {
     repo.createSession(user.id, sid, expiresAt);
 
     res.cookie("session", sid, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: false,
+      ...SESSION_COOKIE_OPTIONS,
       expires: new Date(expiresAt),
     });
 
@@ -45,7 +54,7 @@ router.post("/logout", (req, res, next) => {
   try {
     const sid = req.cookies?.session;
     if (sid) repo.deleteSession(sid);
-    res.clearCookie("session");
+    res.clearCookie("session", SESSION_COOKIE_OPTIONS);
     res.status(204).end();
   } catch (e) { next(e); }
 });

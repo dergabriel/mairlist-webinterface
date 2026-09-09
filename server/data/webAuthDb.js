@@ -9,6 +9,11 @@ const path = require("path");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 
+// Cost-Faktor fuer neu gesetzte Passwoerter. Aeltere Hashes (Cost 10) bleiben
+// gueltig: bcrypt liest den Cost aus dem Hash selbst, compareSync verifiziert
+// sie also weiterhin. Ein Rehash bestehender Passwoerter ist nicht noetig.
+const BCRYPT_COST = 12;
+
 const DB_PATH = process.env.WEB_AUTH_DB_PATH || path.join(__dirname, "../webinterface-auth.db");
 const db = new Database(DB_PATH, { readonly: false });
 db.pragma("journal_mode = WAL");
@@ -65,7 +70,7 @@ function bootstrapAdmin() {
   if (count > 0) return;
 
   const password = process.env.INITIAL_ADMIN_PASSWORD || crypto.randomBytes(9).toString("base64url");
-  const pwHash = bcrypt.hashSync(password, 10);
+  const pwHash = bcrypt.hashSync(password, BCRYPT_COST);
   const now = new Date().toISOString();
   db.prepare(
     "INSERT INTO web_users (username, description, pw_hash, role, created) VALUES (?, ?, ?, ?, ?)"
@@ -172,7 +177,7 @@ function getUserWithScopes(id) {
 }
 
 function createUser(name, description, password, role) {
-  const pwHash = bcrypt.hashSync(password, 10);
+  const pwHash = bcrypt.hashSync(password, BCRYPT_COST);
   const now = new Date().toISOString();
   const info = db
     .prepare("INSERT INTO web_users (username, description, pw_hash, role, created) VALUES (?, ?, ?, ?, ?)")
@@ -202,7 +207,7 @@ function deleteUser(id) {
 function changeUserPassword(id, password) {
   const row = db.prepare("SELECT id FROM web_users WHERE id = ?").get(Number(id));
   if (!row) return false;
-  const pwHash = bcrypt.hashSync(password, 10);
+  const pwHash = bcrypt.hashSync(password, BCRYPT_COST);
   db.prepare("UPDATE web_users SET pw_hash = ?, updated = ? WHERE id = ?").run(pwHash, new Date().toISOString(), Number(id));
   return true;
 }

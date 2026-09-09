@@ -1122,7 +1122,7 @@ async function getAttributeDefinitions() {
 // Frontend expects a plain array here (Playlist.jsx/DatabaseManager.jsx
 // set it straight into an `artists` state array and iterate it in
 // LibraryTree's ListSection). Falling through to the raw unexpected
-// payload (an object, per the TODO above) instead of an array broke
+// payload (an object, per the note above) instead of an array broke
 // that iteration in api-mode — same class of bug as the getStorages/
 // getItemTypes/etc. stubs above, fixed the same way: empty array
 // instead of a non-array value, with a one-time warning.

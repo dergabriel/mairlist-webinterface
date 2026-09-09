@@ -1,9 +1,12 @@
-// Repository layer. This is the ONLY place that knows where data comes from.
+// Mock-Repository: haelt alle Daten im Speicher (aus mockData) und schreibt
+// nichts persistent. Das ist der DATA_SOURCE=mock-Modus, gedacht als Test-
+// und Demo-Betrieb ohne Datenbank oder mAirList-Server.
 //
-// Right now it reads from mockData. When the real schema is available, we
-// create a second implementation (e.g. sqlRepository.js) with the exact same
-// function signatures, and switch via the DATA_SOURCE env variable. The API
-// and the frontend never change.
+// Kein Implementierungsziel mehr: die echten Implementierungen existieren
+// laengst parallel als sqlRepository.js (DATA_SOURCE=sqlite, Standard in
+// Produktion) und apiRepository.js (DATA_SOURCE=api). Alle drei halten
+// dieselben Signaturen ein, umgeschaltet wird ueber DATA_SOURCE; API und
+// Frontend aendern sich dabei nie.
 //
 // Interface (keep stable across implementations):
 //   getFolderTree()          -> nested folder tree
@@ -319,7 +322,6 @@ function createFolder(name, parentId) {
     name: (name || "").trim(),
     parentId: parentId == null ? null : Number(parentId),
   };
-  // TODO: replace with a real SQL INSERT once the schema is confirmed.
   folders.push(folder);
   return folder;
 }
@@ -327,7 +329,6 @@ function createFolder(name, parentId) {
 function renameFolder(id, name) {
   const folder = getFolderById(id);
   if (!folder) return null;
-  // TODO: replace with a real SQL UPDATE once the schema is confirmed.
   folder.name = (name || "").trim();
   return folder;
 }
@@ -344,7 +345,6 @@ function moveFolder(id, newParentId) {
     return false;
   }
 
-  // TODO: replace with a real SQL UPDATE once the schema is confirmed.
   folder.parentId = targetId;
   return folder;
 }
@@ -359,7 +359,6 @@ function deleteFolder(id) {
   const hasItems = items.some((i) => i.folderId === folder.id);
   if (hasSubfolders || hasItems) return "not_empty";
 
-  // TODO: replace with a real SQL DELETE once the schema is confirmed.
   const index = folders.findIndex((f) => f.id === folder.id);
   folders.splice(index, 1);
   return "ok";
@@ -529,7 +528,6 @@ function createItem(data = {}) {
     attributes: safe.attributes || {},
     updatedAt: new Date().toISOString(),
   };
-  // TODO: replace with a real SQL INSERT once the schema is confirmed.
   items.push(item);
   return item;
 }
@@ -537,7 +535,6 @@ function createItem(data = {}) {
 function updateItem(id, data = {}) {
   const item = getItemById(id);
   if (!item) return null;
-  // TODO: replace with a real SQL UPDATE once the schema is confirmed.
   Object.assign(item, pickWritable(data), { updatedAt: new Date().toISOString() });
   return item;
 }
@@ -545,7 +542,6 @@ function updateItem(id, data = {}) {
 function deleteItem(id) {
   const index = items.findIndex((i) => i.id === id);
   if (index === -1) return false;
-  // TODO: replace with a real SQL DELETE once the schema is confirmed.
   items.splice(index, 1);
   return true;
 }
@@ -555,7 +551,6 @@ function deleteItem(id) {
 function moveItemToFolder(id, folderId) {
   const item = getItemById(id);
   if (!item) return null;
-  // TODO: replace with real SQL (item_folders n:m table per docs/SCHEMA.md).
   item.folderId = folderId == null ? null : Number(folderId);
   item.updatedAt = new Date().toISOString();
   return item;
@@ -619,7 +614,6 @@ function uploadFile(storageId, filename, buffer, title) {
   const ext = path.extname(safeFilename);
   const derivedTitle = title && title.trim() !== "" ? title.trim() : path.basename(safeFilename, ext);
 
-  // TODO: replace with real SQL + real file system write
   const targetDir = resolveStorageDir(storage);
 
   // Path-Traversal-Schutz: Zielverzeichnis muss innerhalb von UPLOAD_BASE_DIR liegen
@@ -691,7 +685,6 @@ function savePlaylistItemOverrides(id, position, overrides) {
   const entry = playlist.entries.find((e) => e.position === Number(position));
   if (!entry) return null;
 
-  // TODO: replace with a real SQL UPDATE (playlist_entry.overrides) once the schema is confirmed.
   if (overrides == null || Object.keys(overrides).length === 0) {
     delete entry.overrides;
   } else {
@@ -752,7 +745,6 @@ function reorderPlaylist(id, order) {
   const reordered = order.map((pos) => byPosition.get(Number(pos)));
   if (reordered.some((e) => !e)) return null;
 
-  // TODO: replace with a real SQL transaction (bulk position UPDATE) once the schema is confirmed.
   playlist.entries = reordered;
   resequence(playlist);
   return getPlaylistById(id);
@@ -770,7 +762,6 @@ function insertPlaylistItem(id, { itemId, afterPosition }) {
   if (!getItemById(itemId)) return null;
 
   const insertAt = afterPosition == null ? playlist.entries.length : Number(afterPosition);
-  // TODO: replace with a real SQL INSERT (+ position shift) once the schema is confirmed.
   playlist.entries.splice(insertAt, 0, { position: 0, itemId, scheduledStart: "" });
   resequence(playlist);
   return getPlaylistById(id);
@@ -786,7 +777,6 @@ function removePlaylistItem(id, position) {
   const index = playlist.entries.findIndex((e) => e.position === Number(position));
   if (index === -1) return null;
 
-  // TODO: replace with a real SQL DELETE (+ position shift) once the schema is confirmed.
   playlist.entries.splice(index, 1);
   resequence(playlist);
   return getPlaylistById(id);

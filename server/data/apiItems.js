@@ -31,6 +31,19 @@ function mapMarkersToInternal(markers) {
 // in explicitly when the caller already knows which folder the item came
 // from (e.g. getItemsByFolder). Otherwise it's left null; use
 // getItemFolders(id) to look up an item's folder assignments.
+// Whether an item is a container can NOT be read reliably off Type — e.g.
+// the news container's Type is "News", indistinguishable from a plain news
+// item by Type alone. Class is the only reliable signal: container classes
+// all end in "Container" or "ContainerMarker" (Container, HookContainer,
+// AutoHookContainer, NewsContainer, RegionContainer, AutoHookContainerMarker,
+// ...). mapInternalItemToApi's round-trip only ever needs to distinguish
+// "Container" from "File" on write, so the raw Class string is preserved
+// here (not collapsed to a boolean) for the frontend to key its container
+// styling off of.
+function isContainerClass(apiClass) {
+  return /(?:Container|ContainerMarker)$/.test(apiClass || "");
+}
+
 function mapApiItemToInternal(apiItem, folderId = null) {
   if (!apiItem) return null;
 
@@ -44,7 +57,7 @@ function mapApiItemToInternal(apiItem, folderId = null) {
     internalId: hasDatabaseId ? Number(apiItem.DatabaseID) : null,
     externalId: null,
     type: typeToCode(apiItem.Type),
-    containerType: apiItem.Class === "Container" ? apiItem.Class : null,
+    containerType: isContainerClass(apiItem.Class) ? apiItem.Class : null,
     title: apiItem.Title || "",
     artist: apiItem.Artist || "",
     duration: apiItem.Duration || 0,
@@ -97,7 +110,7 @@ function mapMarkersToApi(cue) {
 // rejects them.
 function mapInternalItemToApi(internalItem) {
   return {
-    Class: internalItem.containerType === "Container" ? "Container" : "File",
+    Class: isContainerClass(internalItem.containerType) ? internalItem.containerType : "File",
     DatabaseID: String(internalItem.internalId ?? internalItem.id),
     Title: internalItem.title ?? "",
     Artist: internalItem.artist ?? "",
@@ -611,31 +624,43 @@ async function getTitles(searchTerm) {
 // /api/v1/items always requires folder=<id> or ids=<id,...>, see docs), so
 // getting real counts is impossible without walking all ~155 folders.
 //
-// Instead of an empty stub, this returns a hardcoded list built from a live
-// query of the actual database (items 700-830 plus several folders). Keys
-// are lowercased via typeToCode() to match the format item.type already
-// uses (see mapApiItemToInternal above) and what updateItem's Type
-// round-trip expects (`safe.type.charAt(0).toUpperCase() + ...`).
+// Instead of an empty stub, this returns a hardcoded list built from live
+// queries of the actual database. Keys are lowercased via typeToCode() to
+// match the format item.type already uses (see mapApiItemToInternal above)
+// and what updateItem's Type round-trip expects
+// (`safe.type.charAt(0).toUpperCase() + ...`).
 //
-// TODO: Diese Typ-Liste ist unvollständig. Verifiziert wurden nur
-// die 7 Typen, die im aktuellen Bestand vorkommen (Music, Jingle,
-// Sweeper, Bed, Promo, Voice, Dummy). Der mAirList-Client kennt
-// weitere Typen (Nachrichten, Werbung, Wetter, Verkehr, Beitrag,
-// Trailer, Sponsor-Jingle, Station-ID, Instrumental, Sendung,
-// Stream, Container, Playlist, Befehl, Cartwall-Seite,
-// Unterbrechung, Stille, Fehler, Andere, Benutzerdefiniert 1-3).
-// Deren englische DB-Werte sind NICHT verifiziert. Um sie zu
-// ermitteln: im mAirList-Client ein Testitem auf den jeweiligen
-// Typ setzen, speichern, dann per API GET /api/v1/items/<id> den
-// Type-Wert auslesen (oder per Wireshark den PUT mitschneiden).
-// Sobald bekannt, hier ergänzen.
+// Verified: 24 of the 27 types in the mAirList client dropdown (test items
+// created per type, DB value read back via GET /api/v1/items/<id>). Not
+// verified (not present in this install): Cartwall page, Custom 1-3. See
+// "Item-Typen (Type-Feld)" in docs/MAIRLISTDB-API.md for the full table and
+// the Container/Class caveat — Container is not a Type value, it's a
+// separate concept keyed off the Class field.
 const VERIFIED_ITEM_TYPES = [
   { db: "Music", label: "Musik" },
+  { db: "Voice", label: "Moderation" },
+  { db: "News", label: "Nachrichten" },
+  { db: "Weather", label: "Wetter" },
+  { db: "Traffic", label: "Verkehr" },
+  { db: "Advertising", label: "Werbung" },
+  { db: "Package", label: "Beitrag" },
   { db: "Jingle", label: "Jingle" },
   { db: "Sweeper", label: "Sweeper" },
-  { db: "Bed", label: "Bett" },
+  { db: "Drop", label: "Drop" },
+  { db: "Trailer", label: "Trailer" },
   { db: "Promo", label: "Promo" },
-  { db: "Voice", label: "Moderation" },
+  { db: "Sponsorship", label: "Sponsor-Jingle" },
+  { db: "StationID", label: "Station-ID" },
+  { db: "Bed", label: "Bett" },
+  { db: "Instrumental", label: "Instrumental" },
+  { db: "Show", label: "Sendung" },
+  { db: "Stream", label: "Stream" },
+  { db: "Playlist", label: "Playlist" },
+  { db: "Command", label: "Befehl" },
+  { db: "Break", label: "Unterbrechung" },
+  { db: "Silence", label: "Stille" },
+  { db: "Error", label: "Fehler" },
+  { db: "Other", label: "Andere" },
   { db: "Dummy", label: "Platzhalter" },
 ];
 function getItemTypes() {

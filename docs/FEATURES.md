@@ -178,18 +178,19 @@ beim ersten Aufruf seit Serverstart einmalig eine `console.warn`-Zeile,
 damit der leere Zustand im Server-Log sichtbar bleibt, ohne bei jedem
 Request zu spammen.
 
-**`getItemTypes` – hartcodierte, teils verifizierte Liste**: Kein
-`/api/v1/itemtypes`-Endpunkt existiert. `apiRepository.js` liefert
-deshalb eine feste Liste der 7 Typen, die per Live-Abfrage der
-Datenbank tatsächlich im Bestand bestätigt wurden (Music, Jingle,
-Sweeper, Bed, Promo, Voice, Dummy). Weitere Typen aus dem
-mAirList-Client-Dropdown sind darin NICHT enthalten, weil ihre
-englischen DB-Werte nicht verifiziert sind (siehe TODO-Kommentar in
-`apiRepository.js` und "Offene Punkte" in `docs/MAIRLISTDB-API.md`).
-Damit Items mit einem noch nicht erfassten Typ trotzdem korrekt
-angezeigt werden, zeigt das Typ-Dropdown in `ItemEditor.jsx` für einen
-unbekannten Wert den Rohwert als zusätzliche Option an, statt leer zu
-bleiben oder zu crashen.
+**`getItemTypes` – hartcodierte, größtenteils verifizierte Liste**: Kein
+`/api/v1/itemtypes`-Endpunkt existiert. `apiItems.js` liefert deshalb
+eine feste Liste, die per Live-Abfrage gegen die echte Datenbank
+verifiziert wurde: 24 von 27 Typen aus dem mAirList-Client-Dropdown
+(vollständige Tabelle in "Item-Typen (`Type`-Feld)" in
+`docs/MAIRLISTDB-API.md`). Nicht verifiziert (im Bestand nicht
+vorhanden): Cartwall-Seite, Benutzerdefiniert 1-3. Container sind kein
+eigener `Type`-Wert, sondern über das `Class`-Feld erkennbar — siehe den
+⚠️-Hinweis dort, das ist eine leicht zu übersehende Falle für jede
+typbasierte Logik. Damit Items mit einem noch nicht erfassten Typ
+trotzdem korrekt angezeigt werden, zeigt das Typ-Dropdown in
+`ItemEditor.jsx` für einen unbekannten Wert den Rohwert als zusätzliche
+Option an, statt leer zu bleiben oder zu crashen.
 
 **`getAttributeKeys` — aus dem Config-Schema, nicht aus Item-Daten:**
 Anders als `sqlRepository.js` (das die tatsächlich beobachteten

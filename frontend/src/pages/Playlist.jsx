@@ -3,7 +3,7 @@ import {
   ListMusic,
   ChevronLeft, ChevronRight, RefreshCw, Pencil, AlertTriangle, Save, Sliders,
   Plus, Trash2, CalendarDays, GripVertical, Search, Music, Megaphone, Box, X,
-  ArrowUp, ArrowDown, CircleDot, Wand2, Mic, Download, Upload,
+  ArrowUp, ArrowDown, CircleDot, Wand2, Mic, Download, Upload, Layers,
 } from "lucide-react";
 import {
   getPlaylistsByDate, getPlaylistById, reorderPlaylist,
@@ -15,6 +15,7 @@ import { useAppData } from "../lib/AppDataContext";
 import { useAuth } from "../lib/AuthContext";
 import LibraryTree, { ALL_FILTER, filterItemsByTree } from "../components/LibraryTree";
 import Sidebar from "../components/Sidebar";
+import { isContainerItem, itemRowClass } from "../lib/itemRowStyle";
 
 // --- Helpers ---
 
@@ -454,7 +455,9 @@ function PlaylistTable({
                     setDragOverPosition(null);
                   }}
                   className={`cursor-pointer select-none border-b border-zinc-800/60 transition-colors ${
-                    isSelected ? "bg-orange-500/20 hover:bg-orange-500/25" : "hover:bg-zinc-900/50"
+                    isSelected
+                      ? "bg-orange-500/20 hover:bg-orange-500/25"
+                      : `${itemRowClass(entry.item)} hover:bg-zinc-900/50`
                   } ${isDragOver ? "border-t-2 border-t-orange-500" : ""}`}
                 >
                   <td className="px-2 py-2.5 text-zinc-600">
@@ -466,6 +469,13 @@ function PlaylistTable({
                   <td className="px-3 py-2.5 text-zinc-600">{entry.item?.externalId ?? "-"}</td>
                   <td className="px-3 py-2.5 text-zinc-100">
                     <span className="inline-flex items-center gap-1.5">
+                      {isContainerItem(entry.item) && (
+                        <Layers
+                          size={13}
+                          className="shrink-0 text-violet-400"
+                          title="Container (enthält weiteren Inhalt)"
+                        />
+                      )}
                       {entry.item?.title || "–"}
                       {entry.overrides && Object.keys(entry.overrides).length > 0 && (
                         <CircleDot

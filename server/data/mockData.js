@@ -378,11 +378,11 @@ function buildHourEntries(hour, patternLength, musicOffset, containerOffset) {
 }
 
 const playlists = [
-  { id: "pl-06", date: today, hour: 6, entries: buildHourEntries(6, 7, 0, 0) },
-  { id: "pl-07", date: today, hour: 7, entries: buildHourEntries(7, 8, 1, 1) },
-  { id: "pl-08", date: today, hour: 8, entries: buildHourEntries(8, 6, 2, 2) },
-  { id: "pl-09", date: today, hour: 9, entries: buildHourEntries(9, 8, 3, 0) },
-  { id: "pl-10", date: today, hour: 10, entries: buildHourEntries(10, 7, 0, 1) },
+  { id: `${today}-06`, date: today, hour: 6, entries: buildHourEntries(6, 7, 0, 0) },
+  { id: `${today}-07`, date: today, hour: 7, entries: buildHourEntries(7, 8, 1, 1) },
+  { id: `${today}-08`, date: today, hour: 8, entries: buildHourEntries(8, 6, 2, 2) },
+  { id: `${today}-09`, date: today, hour: 9, entries: buildHourEntries(9, 8, 3, 0) },
+  { id: `${today}-10`, date: today, hour: 10, entries: buildHourEntries(10, 7, 0, 1) },
 ];
 
 module.exports = {

@@ -271,6 +271,78 @@ immer der komplette Body mit beiden Feldern gesendet.
 | POST | `/api/v1/items?station=1` | **VERIFIZIERT:** neues Item anlegen |
 | DELETE | `/api/v1/items/<id>?station=1` | **VERIFIZIERT:** Item löschen |
 
+### Item-Typen (`Type`-Feld) – VERIFIZIERT (24 von 27)
+
+Es gibt keinen `/api/v1/itemtypes`-Endpunkt (siehe "Offene Punkte"
+unten). Die folgende Zuordnung Client-Anzeige ↔ DB-Wert wurde per
+Live-Abfrage gegen die echte Datenbank ermittelt (Testitems je Typ im
+mAirList-Client angelegt, per `GET /api/v1/items/<id>` den `Type`-Wert
+ausgelesen):
+
+| Deutsch (Client-Anzeige) | DB-Wert (`Type`) |
+|---|---|
+| Musik | `Music` |
+| Moderation | `Voice` |
+| Nachrichten | `News` |
+| Wetter | `Weather` |
+| Verkehr | `Traffic` |
+| Werbung | `Advertising` |
+| Beitrag | `Package` |
+| Jingle | `Jingle` |
+| Sweeper | `Sweeper` |
+| Drop | `Drop` |
+| Trailer | `Trailer` |
+| Promo | `Promo` |
+| Sponsor-Jingle | `Sponsorship` |
+| Station-ID | `StationID` |
+| Bett | `Bed` |
+| Instrumental | `Instrumental` |
+| Sendung | `Show` |
+| Stream | `Stream` |
+| Playlist | `Playlist` |
+| Befehl | `Command` |
+| Unterbrechung | `Break` |
+| Stille | `Silence` |
+| Fehler | `Error` |
+| Andere | `Other` |
+| Platzhalter | `Dummy` |
+
+**Nicht verifiziert** (im aktuellen Bestand nicht vorhanden): Container
+(siehe eigenen Abschnitt unten, hat ein eigenes Konzept), Cartwall-Seite,
+Benutzerdefiniert 1-3.
+
+#### Container: eigenes Konzept, nicht über `Type` erkennbar
+
+Container sind Elemente, die weitere Elemente enthalten (z. B.
+Werbeblöcke). Sie tragen zusätzlich zum `Type`-Feld ein `Class`-Feld,
+das die eigentliche Container-Art verrät. Verifiziert per Live-Abfrage
+gegen sechs echte Test-Items:
+
+| Titel | `Type` | `Class` |
+|---|---|---|
+| Nachrichten-Container | `News` | `NewsContainer` |
+| Hook-Container | `Container` | `HookContainer` |
+| Automatischer Hook-Container | `Container` | `AutoHookContainer` |
+| Auto-Hook-Container-Marker | `Dummy` | `AutoHookContainerMarker` |
+| Regionen-Container (Regionalisierung) | `Container` | `RegionContainer` |
+| Einfacher Container | `Container` | `Container` |
+
+> ⚠️ **Falle für jede typbasierte Anzeige-/Logik-Prüfung:** Der
+> Nachrichten-Container hat `Type: "News"`, **NICHT** `Type: "Container"`.
+> Auf Type-Ebene sieht er aus wie eine normale Nachrichtenmeldung, ist
+> aber technisch ein Container mit Inhalt (ebenso hat der
+> Auto-Hook-Container-Marker `Type: "Dummy"`, nicht `"Container"`). Jede
+> Logik, die prüfen will "ist das ein Container", **muss zusätzlich das
+> `Class`-Feld** auf einen der obigen `*Container`/`*ContainerMarker`-Werte
+> prüfen — sich nur auf `Type: "Container"` zu verlassen übersieht
+> mindestens diese beiden Fälle.
+
+Container-Items haben (bei leerem Inhalt) ein leeres `Items`-Array. In
+eine Playlist eingebettet enthält dieses Array die tatsächlichen
+Sub-Elemente (siehe "Response: gefüllte Stunde" weiter unten).
+`InnerFadeDuration` und `Options` (Wert `["NoLogging"]` beobachtet) sind
+container-spezifische Zusatzfelder, bisher nicht weiter ausgewertet.
+
 ### Response: `/api/v1/items/<id>?station=1`
 
 ```json
@@ -652,9 +724,12 @@ Stunde (`GET /api/v1/playlists/2026/09/05/14/0`):
   Zeitfeld — ihre tatsächliche Startzeit ergibt sich kumulativ aus der
   Stundenstart-Zeit plus der Summe der `Duration` aller vorangehenden
   Einträge (wie bei `sqlRepository.js`'s `resequenceEntries`)
-- Container-Items (`Class: "Container"`, z. B. Werbeblöcke) haben
-  vermutlich weiterhin eine eigene `Items`-Liste für ihre Unterelemente
-  (noch nicht gegen eine echte Instanz mit Container-Inhalt verifiziert)
+- Container-Items (z. B. Werbeblöcke) haben eine eigene `Items`-Liste
+  für ihre Unterelemente — VERIFIZIERT, siehe "Item-Typen (`Type`-Feld)"
+  oben. ⚠️ `Class` ist dabei nicht auf `"Container"` beschränkt (u. a.
+  `NewsContainer`, `HookContainer`, `AutoHookContainer`,
+  `AutoHookContainerMarker`, `RegionContainer` beobachtet) — für eine
+  Container-Erkennung reicht `Type: "Container"` allein nicht aus
 - `Filename` kann sowohl auf `/storages/...` (echte Mediendateien) als auch
   auf lokale Windows-Pfade zeigen (z. B. bei Dummy-/Platzhalter-Elementen)
 
@@ -1016,25 +1091,17 @@ aus tatsächlich beobachteten Item-Werten.
 - [x] **`/api/v1/storages`** – VERIFIZIERT: Endpunkt existiert doch, live
       getestet (2 Storages), Response-Format vollständig dokumentiert,
       siehe "Storages / Audio-Dateien" oben
-- [ ] **Kein `/api/v1/itemtypes`-Endpunkt gefunden** – weder ein eigener
+- [x] **Kein `/api/v1/itemtypes`-Endpunkt gefunden** – weder ein eigener
       Endpunkt noch ein Feld in `/api/v1/config`. `sqlRepository.js`s
       `getItemTypes()` braucht ein `DISTINCT type, COUNT(*) GROUP BY type`
       über die gesamte Items-Tabelle; die API hat dafür keine Entsprechung
-      ohne alle ~155 Ordner einzeln abzufragen. `apiRepository.js`s
-      `getItemTypes()` liefert deshalb eine hartcodierte Liste, deren
-      Werte per Live-Abfrage der echten DB verifiziert wurden (Items
-      700-830 plus mehrere Ordner durchsucht): Music, Jingle, Sweeper,
-      Bed, Promo, Voice, Dummy. **Diese Liste ist unvollständig** — der
-      mAirList-Client kennt weitere Typen (Nachrichten, Werbung, Wetter,
-      Verkehr, Beitrag, Trailer, Sponsor-Jingle, Station-ID,
-      Instrumental, Sendung, Stream, Container, Playlist, Befehl,
-      Cartwall-Seite, Unterbrechung, Stille, Fehler, Andere,
-      Benutzerdefiniert 1-3), deren englische DB-Werte NICHT verifiziert
-      sind. Um sie zu ermitteln: im mAirList-Client ein Testitem auf den
-      jeweiligen Typ setzen, speichern, dann per API
-      `GET /api/v1/items/<id>` den `Type`-Wert auslesen (oder per
-      Wireshark den PUT mitschneiden). `hasItems`/`note` sind bei dieser
-      Liste keine echten DB-Werte, sondern Platzhalter
+      ohne alle ~155 Ordner einzeln abzufragen. `apiItems.js`s
+      `getItemTypes()` liefert deshalb eine hartcodierte Liste. VERIFIZIERT:
+      24 von 27 Typen aus dem Client-Dropdown sind per Live-Abfrage gegen
+      die echte DB bestätigt, siehe Abschnitt "Item-Typen (Type-Feld)"
+      unten. Nicht verifiziert: Cartwall-Seite, Benutzerdefiniert 1-3 (im
+      Bestand nicht vorhanden). `hasItems`/`note` sind bei dieser Liste
+      weiterhin keine echten DB-Werte, sondern Platzhalter
       (`hasItems: true`, `note: ""`).
 - [ ] **Kein Logs-/Sendeprotokoll-Endpunkt gefunden** – nur
       `/api/v1/items/<id>/history` (pro Item) existiert, das skaliert nicht

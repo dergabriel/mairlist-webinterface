@@ -150,12 +150,13 @@ Es wird nicht erwähnt, dass beim `DATA_SOURCE=api`-Modus zusätzlich `API_DB_US
 **Einschätzung:** niedrig (Standardmodus ist `sqlite`, `api`-Modus ist laut README noch nicht vollständig — daher nachrangig).
 **Vorschlag:** Kurzer Absatz in `DEPLOYMENT.md` für den optionalen `api`-Modus, mit Verweis auf `docs/MAIRLISTDB-API.md`.
 
-### 2.6 Toter/auskommentierter Code
+### 2.6 Toter/auskommentierter Code — ✅ behoben (2026-09-10)
 **Fundorte:**
 - `server/data/repository.js:322,330,347,362,532,540,548,558,622,694,755,773,789` — durchgehend `TODO: replace with a real SQL ... once the schema is confirmed` Kommentare. Das Schema ist inzwischen längst bestätigt (`docs/SCHEMA.md` existiert, `sqlRepository.js` ist produktiv) — diese Datei ist damit vermutlich das ursprüngliche Mock-Repository und wird nur noch als `DATA_SOURCE` Fallback (`mock`) benutzt. Die TODOs sind über den Punkt hinaus veraltet, an dem sie noch Sinn ergeben (die reale SQL-Implementierung existiert längst parallel in `sqlRepository.js`).
 - `server/data/apiRepository.js:1336` — ein weiteres TODO ("Diese Typ-Liste ist unvollständig...") das im Kontext der Funktion nachvollziehbar und noch aktuell ist (kein Dead-Code-Befund, nur zur Vollständigkeit erwähnt).
 - `server/data/sqlRepository.js:788-790` — TODO zu `writeHour()`, bewusst als Kompromisslösung dokumentiert (Full-Delete+Reinsert statt gezielter Positions-Verschiebung); nachvollziehbar begründet, kein Handlungsbedarf ohne Kontext zu akuten Problemen.
 **Einschätzung:** niedrig (keine Sicherheitsrelevanz, aber Aufräumpotenzial: `repository.js`s TODOs sollten entweder entfernt/umformuliert werden, wenn `mock`-Modus dauerhaft als reiner Test-/Demo-Modus ohne SQL-Ambition bestehen bleibt, oder die Datei klar als "nur für Mock-Zwecke, kein Implementierungsziel mehr" gekennzeichnet werden).
+**Behoben:** Alle 13 veralteten `TODO: replace with a real SQL ...`-Kommentare aus `repository.js` entfernt; der Datei-Header stellt jetzt klar, dass `repository.js` dauerhaft der `DATA_SOURCE=mock`-Test-/Demo-Modus ist und kein Implementierungsziel mehr. Die beiden weiterhin aktuellen TODOs (`apiRepository.js` jetzt in `apiItems.js`, unvollständige Typ-Liste; `sqlRepository.js:793`, bewusster Kompromiss bei `writeHour()`) bleiben unverändert stehen — beide sind bereits in `docs/FEATURES.md` dokumentiert, nicht nur im Code versteckt.
 
 ### 2.7 Smoke-Test-Skripte (`server/scripts/*.js`) sind gut dokumentiert, aber nicht in `DEPLOYMENT.md`/`README.md` als CI-Artefakt erwähnt
 **Fundort:** `server/scripts/smoke-reads-api.js` (329 Zeilen, sehr sorgfältig geschrieben, mit klaren Assertions und Kommentaren)
@@ -185,17 +186,19 @@ Pro Item in einem Ordner wird ein separates `getItemById()` aufgerufen, das inte
 **Einschätzung:** niedrig bis mittel (Performance-Optimierung, kein funktionaler Bug; Relevanz steigt mit Bibliotheksgröße/Nutzerzahl).
 **Vorschlag:** Für `getFolderById`/`getItemFolders` einen kurzlebigen In-Memory-Cache des Ordnerbaums pro Request-Zyklus erwägen. Für `getFolderChildren` (SQL-Pfad) einen gejointen Bulk-Query statt N Einzelaufrufen von `getItemById`.
 
-### 3.2 Redundanz zwischen `sqlRepository.js` und `apiRepository.js`
+### 3.2 Redundanz zwischen `sqlRepository.js` und `apiRepository.js` — ✅ behoben (2026-09-10)
 **Fundorte:** `CUE_TO_DB`/`DB_TO_CUE` (`sqlRepository.js:83-89` identisch zu `apiRepository.js:203-209`), `typeToCode()` (`sqlRepository.js:92` identisch zu `apiRepository.js:211`), `parsePlaylistId()` (`sqlRepository.js:110-114` fast identisch zu `apiRepository.js:808-814`), `secondsToClock`/`resequenceEntries`-Logik (`sqlRepository.js:774-785` vs. `apiRepository.js:761-772`, beide Kommentare verweisen explizit aufeinander als "mirrors").
 Diese Duplizierung ist an mehreren Stellen im Code selbst als bewusst dokumentiert (z. B. `apiRepository.js:198-201`: "Mirrors sqlRepository.js's..."), vermutlich um die beiden Repositories unabhängig voneinander änderbar zu halten, während `DATA_SOURCE` zwischen ihnen umschaltet. Das ist ein nachvollziehbarer Trade-off, aber bei einer Änderung der Cue-Marker-Namen (`CUE_TO_DB`) müssten beide Dateien synchron gepflegt werden — leicht zu vergessen.
 **Einschätzung:** niedrig (architektonische Entscheidung, keine akute Fehlerquelle, aber Wartungsrisiko).
 **Vorschlag:** `CUE_TO_DB`/`DB_TO_CUE`, `typeToCode`, `parsePlaylistId` und die Sekunden-zu-Uhrzeit-Konvertierung in ein gemeinsames `server/data/shared.js` (oder ähnlich) auslagern, das beide Repositories importieren — reduziert Drift-Risiko, ohne die Repositories inhaltlich zu koppeln.
+**Behoben:** `CUE_TO_DB`/`DB_TO_CUE`, `typeToCode`, `parsePlaylistId`/`playlistId` und `secondsToClock` nach `server/data/shared.js` ausgelagert, von `sqlRepository.js` und `apiRepository.js` (jetzt `apiItems.js`/`apiPlaylists.js`) importiert. `typeToDb()` (nur sqlRepository) und die umgebende Resequence-Iterations-/Mutationslogik (in beiden Dateien unterschiedlich: FixTime-Override im API-Pfad, In-Place-Mutation im SQL-Pfad) bewusst NICHT vereinheitlicht. `repository.js` (Mock) bewusst nicht angeschlossen, bleibt unabhängig. Export-Interface beider Repositories vor/nach Diff verglichen (identisch).
 
-### 3.3 `apiRepository.js` ist sehr groß (1476 Zeilen)
+### 3.3 `apiRepository.js` ist sehr groß (1476 Zeilen) — ✅ behoben (2026-09-10)
 **Fundort:** `server/data/apiRepository.js` (gesamte Datei)
 Die Datei deckt Items, Folders, Playlists, Audio-Streaming, Attribute-Parsing (XML-Regex), Artists/Titles-Suche und Permissions/Capabilities in einer Datei ab. Sehr gut kommentiert, aber thematisch breit.
 **Einschätzung:** niedrig (reine Wartbarkeits-Empfehlung, kein Bug).
 **Vorschlag (nicht umzusetzen, nur Empfehlung):** Aufteilung nach Domäne denkbar, z. B. `apiRepository/items.js`, `apiRepository/folders.js`, `apiRepository/playlists.js`, `apiRepository/attributes.js`, mit einem `index.js`, das alles zusammenführt (ähnlich dem bestehenden `module.exports`-Muster). Der gemeinsame `apiRequest()`-Helper (Zeilen 140-196) und die Concurrency-/Retry-Logik (Zeilen 35-104) wären ein natürlicher gemeinsamer Kern.
+**Behoben:** Nach Domäne aufgeteilt in `apiClient.js` (apiRequest, Concurrency-Queue, Retry-Logik, Fehlertypen, Auth), `apiItems.js` (Items, Mapping, Suche, Attribute, Artists/Titles), `apiFolders.js` (Ordner-CRUD/-Baum), `apiPlaylists.js` (Playlists lesen/schreiben), `apiAudio.js` (Storage/Audio-Streaming). `apiRepository.js` ist jetzt eine schlanke Fassade (228 statt 1458 Zeilen), re-exportiert alle Untermodule unverändert und behält nur echte domänenübergreifende Kompositionen (`getFolderChildren`, `getDashboardStats`, `getTodayPlaylist`, Storages, Permissions/Capabilities, Logs-Stubs). Modul-Abhängigkeiten bilden einen azyklischen Graphen (kein zirkulärer Require). Export-Interface der Fassade vor/nach Diff verglichen (57 Funktionsnamen, identisch), kein Aufrufer in `routes/`/`scripts/` musste angepasst werden.
 
 ### 3.4 Frontend: Hooks-Nutzung uneinheitlich
 **Fundort:** `frontend/src/pages/ItemEditor.jsx` (größte Datei mit erkennbaren `.map`/`.filter`-Mustern im Komponentenkörper, nutzt aber bereits `useMemo`/`useCallback` an anderer Stelle laut Grep-Treffer)
@@ -248,4 +251,4 @@ Da die ursprüngliche Top-5-Liste abgearbeitet ist, rücken diese Punkte nach vo
 1. **Upload-Validierung nur über die Datei-Extension** (1.7) — der Typ-Filter prüft `originalname`, nicht den Inhalt. Der derzeit gewichtigste offene Sicherheitspunkt.
 2. **Fehlende Security-Header** (1.11) — niedrigschwellig. (~~Eingabevalidierung in den Routen, 1.6~~ — ✅ behoben, siehe oben.)
 3. **Express 4 → 5** (1.12) — schließt die letzte gemeldete Backend-Lücke (`qs`), braucht aber einen Test-Durchgang über alle Routen.
-4. Aufräumarbeiten: veraltete TODOs in `repository.js` (2.6), fehlende npm-Skripte für die Smoke-Tests (2.7), Code-Duplizierung zwischen den beiden echten Repositories (3.2).
+4. ~~Aufräumarbeiten: veraltete TODOs in `repository.js` (2.6), Code-Duplizierung zwischen den beiden echten Repositories (3.2), `apiRepository.js`-Größe (3.3)~~ — ✅ alle drei behoben (2026-09-10), siehe dort. Weiterhin offen: fehlende npm-Skripte für die Smoke-Tests (2.7).

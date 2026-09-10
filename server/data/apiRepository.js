@@ -15,969 +15,36 @@
 // natural shape (getFolders(parentId), getItemsByFolder(folderId), ...)
 // rather than sqlRepository.js's getFolderTree()/getItems(filters) — the
 // two repositories are not yet interface-identical.
+//
+// This file used to hold the entire implementation (~1460 lines covering
+// items, folders, playlists, audio streaming, and more) in one place; it's
+// now split by domain into apiClient.js / apiItems.js / apiFolders.js /
+// apiPlaylists.js / apiAudio.js (see CODE-REVIEW.md 3.3). This file is now
+// a facade: it re-exports every one of those modules' functions unchanged,
+// plus the few functions that genuinely compose across domains (folders +
+// items, or folders + storages + users) and so can't live in any single
+// domain module without creating a circular require between them (see the
+// comments on getFolderChildren/getDashboardStats/getTodayPlaylist below).
+//
+// module.exports below is byte-for-byte the same set of names the old
+// single-file version exported — no caller in routes/ or scripts/ needed
+// to change.
 
 // Webinterface's own user store (bcrypt, separate SQLite file) — independent
 // of DATA_SOURCE (see docs/FEATURES.md), used only for getDashboardStats()'s
 // totalUsers below.
 const webAuthDb = require("./webAuthDb");
-const { CUE_TO_DB, DB_TO_CUE, typeToCode, parsePlaylistId, playlistId, secondsToClock } = require("./shared");
 
-const BASE_URL = process.env.API_DB_BASE_URL || "http://localhost:8840";
-const API_USER = process.env.API_DB_USER;
-const API_PASSWORD = process.env.API_DB_PASSWORD;
-
-// Only single-station setups are handled today; kept as a named constant
-// (not hardcoded inline) so a future multi-station caller has one place to
-// override it.
-const STATION = process.env.API_DB_STATION || "1";
-
-const REQUEST_TIMEOUT_MS = 10000;
-
-// ---- concurrency limiter ----
-//
-// The mAirListDB Server's dbserver.ini caps MaxCachedConnections at 5 by
-// default; past that it returns HTTP 500 "database is locked" under
-// concurrent load (e.g. ~12 parallel requests firing off the dashboard on
-// page load). We stay under that cap (default 3) so other clients (the
-// real mAirList client) still have headroom. Small hand-rolled queue
-// instead of a dependency: an active-request counter plus a FIFO list of
-// resolvers waiting for a free slot.
-const MAX_CONCURRENT = Number(process.env.API_DB_MAX_CONCURRENT) || 3;
-
-let activeRequests = 0;
-const waitQueue = [];
-
-function acquireSlot() {
-  if (activeRequests < MAX_CONCURRENT) {
-    activeRequests++;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => waitQueue.push(resolve));
-}
-
-function releaseSlot() {
-  const next = waitQueue.shift();
-  if (next) {
-    next();
-  } else {
-    activeRequests--;
-  }
-}
-
-async function withConcurrencyLimit(fn) {
-  await acquireSlot();
-  try {
-    return await fn();
-  } finally {
-    releaseSlot();
-  }
-}
-
-// ---- retry on transient "database is locked" errors ----
-//
-// Only retries the specific SQLite contention error the server surfaces
-// under load (500 + "database is locked" in the body) — any other error
-// (404, 401, network failure, unrelated 500s) passes straight through.
-const RETRY_DELAYS_MS = [300, 600, 1200];
-
-function isDatabaseLockedError(err) {
-  return err instanceof DatabaseLockedError;
-}
-
-async function withRetry(fn) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (!isDatabaseLockedError(err) || attempt >= RETRY_DELAYS_MS.length) throw err;
-      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
-    }
-  }
-}
-
-class DatabaseLockedError extends Error {
-  constructor(path, status, body) {
-    super(`mAirListDB Server: ${path} failed with ${status} (database is locked)`);
-    this.name = "DatabaseLockedError";
-    this.status = status;
-    this.body = body;
-  }
-}
-
-class ApiNotFoundError extends Error {
-  constructor(path) {
-    super(`mAirListDB Server: resource not found: ${path}`);
-    this.name = "ApiNotFoundError";
-  }
-}
-
-class ApiUnreachableError extends Error {
-  constructor(url, cause) {
-    super(`mAirListDB Server nicht erreichbar unter ${url}`);
-    this.name = "ApiUnreachableError";
-    this.cause = cause;
-  }
-}
-
-function authHeader() {
-  const token = Buffer.from(`${API_USER}:${API_PASSWORD}`).toString("base64");
-  return `Basic ${token}`;
-}
-
-// Central request helper. `query` is a plain object of query params;
-// station is appended automatically unless the caller already set it or
-// explicitly passes station: null to omit it (e.g. /permissions,
-// /capabilities have no station scoping per the API docs). `rawFlags` is
-// an array of bare query flags sent without a value or "=" (e.g. the API's
-// `?artists&...` / `?titles&...` distinct-list flags) — URLSearchParams
-// can't express a valueless flag (it always serializes `set(k, "")` as
-// `k=`), so these are appended to the built query string directly.
-//
-// `body` is sent as JSON. Some POST endpoints require
-// application/x-www-form-urlencoded instead (see docs/MAIRLISTDB-API.md,
-// "POST-Endpunkte (form-urlencoded)"); those pass `formBody` — an already
-// encoded body string — instead of `body`. Both go through the same
-// concurrency limiter and retry logic here; nothing bypasses apiRequest().
-async function apiRequest(method, path, { query = {}, rawFlags = [], body, formBody, withStation = true } = {}) {
-  return withConcurrencyLimit(() =>
-    withRetry(() => doApiRequest(method, path, { query, rawFlags, body, formBody, withStation }))
-  );
-}
-
-async function doApiRequest(method, path, { query = {}, rawFlags = [], body, formBody, withStation = true } = {}) {
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
-    if (value === undefined || value === null) continue;
-    params.set(key, value);
-  }
-  if (withStation && !params.has("station")) params.set("station", STATION);
-
-  const qs = [...rawFlags, params.toString()].filter(Boolean).join("&");
-  const url = `${BASE_URL}${path}${qs ? `?${qs}` : ""}`;
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  let response;
-  try {
-    response = await fetch(url, {
-      method,
-      headers: {
-        Authorization: authHeader(),
-        ...(formBody !== undefined
-          ? { "Content-Type": "application/x-www-form-urlencoded" }
-          : body !== undefined
-            ? { "Content-Type": "application/json" }
-            : {}),
-      },
-      body: formBody !== undefined ? formBody : body !== undefined ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    });
-  } catch (err) {
-    throw new ApiUnreachableError(BASE_URL, err);
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  if (response.status === 404) {
-    throw new ApiNotFoundError(path);
-  }
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    if (response.status === 500 && /database is locked/i.test(text)) {
-      throw new DatabaseLockedError(path, response.status, text);
-    }
-    throw new Error(`mAirListDB Server: ${method} ${path} failed with ${response.status}${text ? `: ${text}` : ""}`);
-  }
-
-  if (response.status === 204) return null;
-  const text = await response.text();
-  if (!text) return null;
-  return JSON.parse(text);
-}
-
-// ---- item field mapping (API PascalCase <-> internal camelCase) ----
-//
-// CUE_TO_DB/DB_TO_CUE/typeToCode live in shared.js (identical to
-// sqlRepository.js's copy) so the two repositories return items in the
-// same shape.
-
-function mapMarkersToInternal(markers) {
-  const cue = {};
-  for (const key of Object.keys(CUE_TO_DB)) cue[key] = null;
-  if (!markers) return cue;
-  for (const [dbKey, value] of Object.entries(markers)) {
-    const key = DB_TO_CUE[dbKey];
-    if (key) cue[key] = value;
-  }
-  return cue;
-}
-
-// Maps one API item object (as returned by GET /api/v1/items/<id>, or
-// nested under Item in playlist/folder responses) to the internal item
-// shape used throughout the app (same fields as sqlRepository.js's
-// rowToItem()).
-//
-// `folderId` is not part of the item response itself (see docs) — pass it
-// in explicitly when the caller already knows which folder the item came
-// from (e.g. getItemsByFolder). Otherwise it's left null; use
-// getItemFolders(id) to look up an item's folder assignments.
-function mapApiItemToInternal(apiItem, folderId = null) {
-  if (!apiItem) return null;
-
-  // Dummy playlist slots (Class: "Dummy", e.g. hour-start placeholders)
-  // carry no DatabaseID — leave id/internalId null instead of the bogus
-  // "undefined"/NaN that String()/Number() would otherwise produce.
-  const hasDatabaseId = apiItem.DatabaseID !== undefined && apiItem.DatabaseID !== null;
-
-  return {
-    id: hasDatabaseId ? String(apiItem.DatabaseID) : null,
-    internalId: hasDatabaseId ? Number(apiItem.DatabaseID) : null,
-    externalId: null,
-    type: typeToCode(apiItem.Type),
-    containerType: apiItem.Class === "Container" ? apiItem.Class : null,
-    title: apiItem.Title || "",
-    artist: apiItem.Artist || "",
-    duration: apiItem.Duration || 0,
-    endTime: null,
-    storageId: null,
-    relativePath: apiItem.Filename || null,
-    folderId,
-    comment: "",
-    color: null,
-    cover: null,
-    cue: mapMarkersToInternal(apiItem.Markers),
-    playback: {
-      // API's Amplification is already a dB gain value (negative = below
-      // unity), same convention as sqlRepository.js's amplification column
-      // -> gainDb. No sign/scale conversion applied.
-      gainDb: apiItem.Amplification ?? 0,
-      normalizedLufs: apiItem.Levels?.Loudness ?? null,
-      segueMode: "normal",
-    },
-    attributes: apiItem.Attributes || {},
-    updatedAt: new Date().toISOString(),
-    playHistory: [],
-  };
-}
-
-// Inverse of mapMarkersToInternal(): only writes markers that actually
-// have a value (not undefined/null) into the API object. The internal
-// cue object always has all CUE_TO_DB keys present (initialized to null
-// by mapMarkersToInternal for markers absent in the API response), so a
-// naive full round-trip would send e.g. `HookIn: null` for markers the
-// item never had — safer to omit them entirely than risk the server
-// interpreting a null/0 as "set this marker to zero".
-function mapMarkersToApi(cue) {
-  const markers = {};
-  if (!cue) return markers;
-  for (const [key, dbKey] of Object.entries(CUE_TO_DB)) {
-    const value = cue[key];
-    if (value !== undefined && value !== null) markers[dbKey] = value;
-  }
-  return markers;
-}
-
-// Inverse of mapApiItemToInternal(). Only fields the API is known to
-// accept are written back (Title, Artist, Duration, Type, Markers,
-// Amplification, Attributes, Filename, DatabaseID, Class) — internal
-// fields with no API counterpart (folderId, comment, color, cover,
-// endTime, storageId, externalId, playHistory, updatedAt,
-// playback.normalizedLufs/segueMode) are deliberately left out, since
-// it's unverified whether the server ignores unknown fields on PUT or
-// rejects them.
-function mapInternalItemToApi(internalItem) {
-  return {
-    Class: internalItem.containerType === "Container" ? "Container" : "File",
-    DatabaseID: String(internalItem.internalId ?? internalItem.id),
-    Title: internalItem.title ?? "",
-    Artist: internalItem.artist ?? "",
-    Duration: internalItem.duration ?? 0,
-    Type: internalItem.type
-      ? internalItem.type.charAt(0).toUpperCase() + internalItem.type.slice(1)
-      : "",
-    Filename: internalItem.relativePath ?? undefined,
-    Amplification: internalItem.playback?.gainDb ?? 0,
-    Markers: mapMarkersToApi(internalItem.cue),
-    Attributes: internalItem.attributes || {},
-  };
-}
-
-function rowToFolder(apiFolder) {
-  if (!apiFolder) return null;
-  return {
-    id: apiFolder.ID,
-    name: apiFolder.Name || "",
-    parentId: apiFolder.Parent === "root" || apiFolder.Parent == null ? null : apiFolder.Parent,
-  };
-}
-
-// ---- folders ----
-
-async function getFolders(parentId) {
-  const query = parentId != null ? { parent: parentId } : {};
-  const data = await apiRequest("GET", "/api/v1/folders", { query });
-  const list = Array.isArray(data) ? data : data?.Folders || [];
-  return list.map(rowToFolder);
-}
-
-// ---- items ----
-
-async function getItemsByFolder(folderId) {
-  const data = await apiRequest("GET", "/api/v1/items", { query: { folder: folderId } });
-  const list = Array.isArray(data) ? data : data?.Items || [];
-  // The API doesn't echo the folder back on each item, but since we
-  // queried this exact folder, every returned item belongs to it.
-  return list.map((apiItem) => mapApiItemToInternal(apiItem, folderId ?? null));
-}
-
-// sqlRepository.js's getItems(filters) can list the whole library
-// (no folderId) via a plain SQL scan; the API has no such unfiltered
-// items endpoint (GET /api/v1/items always requires folder=<id> or
-// ids=<id,...>, see docs/MAIRLISTDB-API.md). So folderId is required
-// here — the frontend always supplies one when browsing library.js's
-// GET /api/items (the folder tree UI), and the remaining filters
-// (type/artist/storageId/attributeKey+Value) are applied client-side
-// on top of that folder's items, mirroring sqlRepository.js's own
-// post-query filtering for folderId/attributeKey there.
-async function getItems(filters = {}) {
-  if (filters.folderId == null) return [];
-
-  let result = await getItemsByFolder(filters.folderId);
-
-  if (filters.type) {
-    result = result.filter((i) => i.type === typeToCode(filters.type));
-  }
-  if (filters.artist) {
-    result = result.filter((i) => i.artist === filters.artist);
-  }
-  if (filters.storageId != null) {
-    result = result.filter((i) => resolveStorageFile(i)?.storageId === String(filters.storageId));
-  }
-  if (filters.attributeKey) {
-    result = result.filter(
-      (i) => String(i.attributes?.[filters.attributeKey] ?? "") === String(filters.attributeValue)
-    );
-  }
-
-  return result;
-}
-
-async function getItemById(id) {
-  if (id === null || id === undefined || id === "") return null;
-  try {
-    const data = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(id)}`);
-    // No folder field on the single-item response (see docs) — folderId
-    // stays null here. Call getItemFolders(id) if the folder assignment
-    // is needed.
-    return mapApiItemToInternal(data);
-  } catch (err) {
-    if (err instanceof ApiNotFoundError) return null;
-    throw err;
-  }
-}
-
-async function getItemsByIds(ids) {
-  if (!ids || ids.length === 0) return [];
-  const data = await apiRequest("GET", "/api/v1/items", {
-    query: { ids: ids.join(","), icons: "true" },
-  });
-  const list = Array.isArray(data) ? data : data?.Items || [];
-  // No folder field on this response either (see docs) — folderId stays
-  // null, consistent with getItemById. Must not pass map's index arg
-  // through as folderId.
-  return list.map((apiItem) => mapApiItemToInternal(apiItem));
-}
-
-// GET /api/v1/items?search=<term>&fields=All&limit=<n>&station=<n> —
-// verified via Wireshark (see docs/MAIRLISTDB-API.md). Response is the
-// same extended item shape as ?folder=<id> (Folders/NextUse/LastUse/
-// LastPlayed/EffectiveDuration included), so it's mapped the same way.
-// No folder field is echoed back (the search spans the whole library),
-// so folderId stays null here — same as getItemById/getItemsByIds.
-//
-// sqlRepository.js's searchItems(query, opts) accepts opts.fields to
-// restrict the match to a subset of ["title", "artist", "comment"]; the
-// API's `fields` parameter isn't documented to support that (only "All"
-// has been observed), so a requested field restriction is reproduced
-// client-side on top of the server's full-text results. `comment` is
-// never populated by mapApiItemToInternal() (the API doesn't expose it),
-// so restricting to just "comment" always yields an empty result here —
-// consistent with there being no comment data to match against.
-async function searchItems(query, opts = {}) {
-  if (!query || query.trim() === "") return [];
-
-  const limit = opts.limit || 50;
-  const data = await apiRequest("GET", "/api/v1/items", {
-    query: { search: query, fields: "All", limit },
-  });
-  const list = Array.isArray(data) ? data : data?.Items || [];
-  let result = list.map((apiItem) => mapApiItemToInternal(apiItem, null));
-
-  if (opts.fields) {
-    const validFields = opts.fields.filter((f) => ["title", "artist", "comment"].includes(f));
-    if (validFields.length === 0) return [];
-    const q = query.toLowerCase();
-    result = result.filter((item) =>
-      validFields.some((f) => String(item[f] || "").toLowerCase().includes(q))
-    );
-  }
-
-  return result;
-}
-
-// Response is a bare array of folder ID strings, e.g. ["8"] — not folder
-// objects (unlike the `Folders` array embedded in
-// /api/v1/items?folder=<id> responses). Resolve each ID against the full
-// folder tree (getFolders()) to return proper { id, name, parentId }
-// folder objects.
-async function getItemFolders(itemId) {
-  const data = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/folders`);
-  const ids = Array.isArray(data) ? data : data?.Folders || [];
-  const allFolders = await getFolders();
-  const byId = new Map(allFolders.map((f) => [String(f.id), f]));
-  return ids.map((id) => byId.get(String(id))).filter(Boolean);
-}
-
-// Mirrors sqlRepository.js's updateItem's writable-field set (see also
-// ITEM_WRITABLE_FIELDS in server/routes/library.js). Only fields the API
-// round-trip actually supports (see mapInternalItemToApi) are applied;
-// folderId/comment/color/cover etc. are accepted here (for interface
-// parity with sqlRepository.js) but silently have no effect, since the
-// API has no per-item field for them.
-const API_WRITABLE_FIELDS = new Set([
-  "title", "artist", "type", "duration", "relativePath", "cue", "playback", "attributes",
-]);
-
-function pickWritable(changes) {
-  return Object.fromEntries(
-    Object.entries(changes || {}).filter(([key]) => API_WRITABLE_FIELDS.has(key))
-  );
-}
-
-async function updateItem(id, changes) {
-  const current = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(id)}`);
-  if (!current) return null;
-
-  const safe = pickWritable(changes);
-  const merged = { ...current };
-
-  if (safe.title !== undefined) merged.Title = safe.title;
-  if (safe.artist !== undefined) merged.Artist = safe.artist;
-  if (safe.type !== undefined) merged.Type = safe.type.charAt(0).toUpperCase() + safe.type.slice(1);
-  if (safe.duration !== undefined) merged.Duration = Number(safe.duration);
-  if (safe.relativePath !== undefined) merged.Filename = safe.relativePath;
-  if (safe.playback?.gainDb !== undefined) merged.Amplification = safe.playback.gainDb;
-  if (safe.attributes !== undefined) merged.Attributes = { ...(merged.Attributes || {}), ...safe.attributes };
-  if (safe.cue !== undefined) {
-    merged.Markers = { ...(merged.Markers || {}), ...mapMarkersToApi(safe.cue) };
-  }
-
-  await apiRequest("PUT", `/api/v1/items/${encodeURIComponent(id)}`, { body: merged });
-
-  return getItemById(id);
-}
-
-// POST /api/v1/items?station=1 — VERIFIZIERT live gegen den mAirListDB
-// Server (siehe docs/MAIRLISTDB-API.md): Pflichtfelder sind Class (ohne
-// -> "Invalid playlist item class") und Filename (ohne -> "Invalid
-// location type"); die Response ist ein nackter JSON-String mit der
-// neuen Item-ID (z. B. "2634"), kein Objekt.
-//
-// mapInternalItemToApi() liefert bereits Class ("File"/"Container" via
-// containerType) und Filename (aus relativePath), also reicht es, das
-// interne Item durch dieselbe Mapping-Funktion wie updateItem/
-// insertPlaylistItem zu schicken. DatabaseID wird dabei mitgeschickt
-// (String(undefined) = "undefined"), ist beim Anlegen aber irrelevant —
-// der Server vergibt ohnehin eine neue ID und ignoriert das Feld
-// offenbar (bestätigt durch den Live-Test).
-//
-// Eine mitgegebene folderId wird nach dem Anlegen per
-// assignItemsToFolder() nachgezogen (separater POST, siehe dort).
-async function createItem(data = {}) {
-  const apiItem = mapInternalItemToApi({
-    ...data,
-    containerType: data.containerType ?? null,
-  });
-  if (!apiItem.Filename) {
-    throw new Error("createItem: relativePath (Filename) ist erforderlich");
-  }
-
-  const newId = await apiRequest("POST", "/api/v1/items", { body: apiItem });
-
-  // Das Item existiert an dieser Stelle bereits — schlägt nur die
-  // Ordner-Zuordnung fehl, wäre es falsch, den ganzen Aufruf scheitern zu
-  // lassen (der Aufrufer würde das angelegte Item sonst nie zu sehen
-  // bekommen und es bliebe verwaist zurück). Also loggen und mit dem
-  // ordnerlosen Item weitermachen.
-  if (data.folderId != null && data.folderId !== "") {
-    try {
-      await assignItemsToFolder(data.folderId, [newId]);
-    } catch (err) {
-      console.error(
-        `createItem: Item ${newId} wurde angelegt, die Zuordnung zu Ordner ${data.folderId} ist aber fehlgeschlagen: ${err.message}`
-      );
-    }
-  }
-
-  return getItemById(String(newId));
-}
-
-// POST /api/v1/folders/<folderId>/items — VERIFIZIERT per
-// Wireshark-Mitschnitt des offiziellen Clients (siehe
-// docs/MAIRLISTDB-API.md, "POST-Endpunkte (form-urlencoded)"):
-//
-//   Content-Type: application/x-www-form-urlencoded
-//   Body:         add&station=1&$doc=<urlencodiertes JSON-Array von IDs>
-//
-// `add` ist ein NACKTES Flag ohne Wert und zwingend erforderlich (fehlt
-// es, antwortet der Server mit "Invalid operation"). `$doc` ist ein
-// JSON-Array von ID-Strings, nicht eine einzelne ID — mehrere Items
-// lassen sich also in einem Request zuordnen. application/json wird von
-// diesem Endpunkt abgelehnt. Response: `null` bei Status 200.
-async function assignItemsToFolder(folderId, itemIds) {
-  const ids = (Array.isArray(itemIds) ? itemIds : [itemIds])
-    .filter((id) => id != null && id !== "")
-    .map((id) => String(id));
-  if (ids.length === 0) return null;
-
-  // Der Body wird von Hand gebaut statt per URLSearchParams: das nackte
-  // `add`-Flag lässt sich damit nicht ausdrücken (set(k, "") wird immer
-  // als `k=` serialisiert).
-  const formBody = `add&station=${encodeURIComponent(STATION)}&$doc=${encodeURIComponent(JSON.stringify(ids))}`;
-
-  // station steckt bereits im Body (so macht es auch der offizielle
-  // Client), deshalb withStation: false — sonst stünde es doppelt im
-  // Request.
-  return apiRequest("POST", `/api/v1/folders/${encodeURIComponent(folderId)}/items`, {
-    formBody,
-    withStation: false,
-  });
-}
-
-// POST /api/v1/folders/<folderId>/items mit `delete`-Flag — VERIFIZIERT
-// per Wireshark-Mitschnitt des offiziellen Clients:
-//
-//   delete&station=1&$doc=["2639"]
-//
-// Gegenstück zu assignItemsToFolder(): entfernt die Items *aus diesem
-// einen Ordner*, ohne sie zu löschen — die Zuordnung zu anderen Ordnern
-// bleibt bestehen. `delete` ist wie `add` ein NACKTES Flag ohne Wert.
-// Response: `null` bei Status 200.
-async function removeItemFromFolder(folderId, itemIds) {
-  const ids = (Array.isArray(itemIds) ? itemIds : [itemIds])
-    .filter((id) => id != null && id !== "")
-    .map((id) => String(id));
-  if (ids.length === 0) return null;
-
-  // Handgebauter Body wie in assignItemsToFolder(): das nackte
-  // `delete`-Flag lässt sich mit URLSearchParams nicht ausdrücken.
-  const formBody = `delete&station=${encodeURIComponent(STATION)}&$doc=${encodeURIComponent(JSON.stringify(ids))}`;
-
-  return apiRequest("POST", `/api/v1/folders/${encodeURIComponent(folderId)}/items`, {
-    formBody,
-    withStation: false,
-  });
-}
-
-// PUT /api/v1/items/<itemId>/folders — VERIFIZIERT per
-// Wireshark-Mitschnitt des offiziellen Clients:
-//
-//   station=1&$doc=["5","189","7"]
-//
-// Setzt die KOMPLETTE Ordner-Zugehörigkeit eines Items in einem Request
-// und ersetzt die bisherige Zuordnung vollständig. Kein Operations-Flag
-// (anders als bei POST /folders/<id>/items) — der Endpunkt kennt nur
-// "ersetzen". Ein leeres Array entfernt das Item aus allen Ordnern.
-//
-// Das ist die sauberste Operation für Ordner-Zugehörigkeit: idempotent
-// und ohne Zwischenzustand, in dem das Item in zu vielen oder zu wenigen
-// Ordnern liegt.
-async function setItemFolders(itemId, folderIds) {
-  const ids = (Array.isArray(folderIds) ? folderIds : [folderIds])
-    .filter((id) => id != null && id !== "")
-    .map((id) => String(id));
-
-  const formBody = `station=${encodeURIComponent(STATION)}&$doc=${encodeURIComponent(JSON.stringify(ids))}`;
-
-  return apiRequest("PUT", `/api/v1/items/${encodeURIComponent(itemId)}/folders`, {
-    formBody,
-    withStation: false,
-  });
-}
-
-// Spiegelt sqlRepository.js's moveItemToFolder(id, folderId): dort löscht
-// writeFolder() *alle* item_folders-Zeilen des Items und legt genau eine
-// neue an (bzw. keine, wenn folderId null ist). Die Signatur hat bewusst
-// keine sourceFolderId — auch der Aufruf aus routes/library.js und dem
-// Frontend (Drag & Drop auf einen Ordner) kennt nur das Ziel.
-//
-// Deshalb wird hier PUT /api/v1/items/<id>/folders (setItemFolders)
-// verwendet und NICHT das ebenfalls verifizierte `movefrom`-Flag von
-// POST /folders/<id>/items:
-//
-//   - `movefrom=<quelle>` verschiebt nur aus EINEM Quellordner. Liegt das
-//     Item in mehreren Ordnern, bliebe es in den übrigen liegen — das
-//     widerspricht der Semantik des SQL-Pendants, das die Zuordnung
-//     komplett ersetzt. Ein Nachbauen über getItemFolders() + je einen
-//     Request pro Quellordner wäre zudem nicht atomar: bricht es in der
-//     Mitte ab, liegt das Item in einer beliebigen Teilmenge der Ordner.
-//   - PUT /items/<id>/folders setzt die Zugehörigkeit in einem einzigen,
-//     idempotenten Request — kein Zwischenzustand, kein Vorab-Lesen.
-//
-// folderId == null entfernt das Item aus allen Ordnern (leeres $doc),
-// analog zu writeFolder(wdb, id, null).
-async function moveItemToFolder(id, folderId) {
-  const item = await getItemById(id);
-  if (!item) return null;
-
-  await setItemFolders(id, folderId == null || folderId === "" ? [] : [folderId]);
-
-  return getItemById(id);
-}
-
-// DELETE /api/v1/items/<id>?station=1 — VERIFIZIERT live gegen den
-// mAirListDB Server (siehe docs/MAIRLISTDB-API.md): Response ist `null`
-// bei Status 200.
-async function deleteItem(id) {
-  try {
-    await apiRequest("DELETE", `/api/v1/items/${encodeURIComponent(id)}`);
-    return true;
-  } catch (err) {
-    if (err instanceof ApiNotFoundError) return false;
-    throw err;
-  }
-}
-
-async function getItemRestrictions(itemId) {
-  return apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/restrictions`);
-}
-
-// Maps the API's history entries (PascalCase: Time, Duration, Studio,
-// ListenersStart, ListenersStop, PlaybackID) to the { playedAt, show,
-// moderator } shape the frontend's history tab actually reads (see
-// ItemEditor.jsx's history table: entry.playedAt/entry.show/entry.moderator).
-// sqlRepository.js's getItemHistory() returns { slot, date, hour } instead,
-// which that same table doesn't read — a pre-existing mismatch in the
-// sqlite path, left alone here (out of scope, and sqlRepository.js must not
-// be touched). Time is an ISO timestamp ("2026-04-30T22:31:19") and maps
-// directly to playedAt. The API has no per-entry show/moderator field —
-// Studio is the closest concept but isn't an "airing show"/host either, so
-// both stay null rather than guessing; the table already renders "-" for
-// falsy values.
-function mapApiHistoryEntry(entry) {
-  if (!entry?.Time) return null;
-  return { playedAt: entry.Time, show: null, moderator: null };
-}
-
-async function getItemHistory(itemId) {
-  const data = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/history`);
-  if (!Array.isArray(data)) return [];
-  return data.map(mapApiHistoryEntry).filter(Boolean);
-}
-
-// ---- audio streaming ----
-//
-// Storages/Audio-Dateien (see docs/MAIRLISTDB-API.md): audio bytes live at
-// GET /api/v1/storages/<storageId>/files/<filename>?quality=default|low.
-// mapApiItemToInternal() doesn't populate storageId (the API has no such
-// field on the item itself) — instead the full "/storages/<id>/files/<name>"
-// path is stored in relativePath (from the API's Filename field). Parse it
-// back out here rather than relying on item.storageId.
-const STORAGE_FILE_PATH_RE = /^\/storages\/([^/]+)\/files\/(.+)$/;
-
-function resolveStorageFile(item) {
-  if (!item) return null;
-  if (item.storageId != null && item.relativePath) {
-    return { storageId: item.storageId, filename: item.relativePath };
-  }
-  const match = STORAGE_FILE_PATH_RE.exec(item.relativePath || "");
-  if (!match) return null;
-  return { storageId: match[1], filename: match[2] };
-}
-
-// Builds the mAirListDB Server URL for an item's audio file. Does not embed
-// credentials in the URL — callers that need to authenticate (i.e.
-// getAudioStream below) add the Basic Auth header themselves. Not meant to
-// be handed to the browser directly, since the DBServer requires auth this
-// URL alone doesn't carry.
-function getAudioStreamUrl(item, quality = "default") {
-  const file = resolveStorageFile(item);
-  if (!file) return null;
-  const path = `/api/v1/storages/${encodeURIComponent(file.storageId)}/files/${encodeURIComponent(file.filename)}`;
-  return `${BASE_URL}${path}?quality=${encodeURIComponent(quality)}`;
-}
-
-// Fetches the audio file from the mAirListDB Server (Basic Auth) and returns
-// { buffer, contentType }, for our own server to proxy through to the
-// browser — keeps DBServer credentials out of the frontend.
-async function getAudioStream(item, quality = "default") {
-  const file = resolveStorageFile(item);
-  if (!file) return null;
-
-  const path = `/api/v1/storages/${encodeURIComponent(file.storageId)}/files/${encodeURIComponent(file.filename)}`;
-  const url = `${BASE_URL}${path}?quality=${encodeURIComponent(quality)}`;
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  let response;
-  try {
-    response = await fetch(url, {
-      headers: { Authorization: authHeader() },
-      signal: controller.signal,
-    });
-  } catch (err) {
-    throw new ApiUnreachableError(BASE_URL, err);
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  if (response.status === 404) {
-    throw new ApiNotFoundError(path);
-  }
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`mAirListDB Server: GET ${path} failed with ${response.status}${text ? `: ${text}` : ""}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  return {
-    buffer: Buffer.from(arrayBuffer),
-    contentType: response.headers.get("content-type") || "application/octet-stream",
-  };
-}
-
-// ---- playlists ----
-
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
-// secondsToClock() lives in shared.js (identical to sqlRepository.js's
-// resequenceEntries() cursor formatting).
-
-async function getPlaylistHour(year, month, day, hour) {
-  const path = `/api/v1/playlists/${year}/${pad2(month)}/${pad2(day)}/${pad2(hour)}/0`;
-  const data = await apiRequest("GET", path);
-  return data;
-}
-
-async function getPlaylistAttributes(year, month, day, hour) {
-  const path = `/api/v1/playlists/${year}/${pad2(month)}/${pad2(day)}/${pad2(hour)}/0/attributes`;
-  return apiRequest("GET", path);
-}
-
-// playlistHourId is this file's name for shared.js's playlistId() (same
-// "YYYY-MM-DD-HH" format sqlRepository.js uses).
-const playlistHourId = playlistId;
-
-// Mirrors sqlRepository.js's getPlaylistsByDate(date): one entry per hour
-// of the day (0-23), each flagged hasEntries. The API has no single
-// per-day endpoint (only per-hour, see docs/MAIRLISTDB-API.md), so this
-// loops getPlaylistHour() across all 24 hours — safe to fire concurrently
-// since apiRequest() already serializes through the shared concurrency
-// queue (MAX_CONCURRENT, default 3).
-async function getPlaylistsByDate(date) {
-  const [year, month, day] = date.split("-").map(Number);
-
-  const hours = await Promise.all(
-    Array.from({ length: 24 }, (_, hour) => getPlaylistHour(year, month, day, hour))
-  );
-
-  return hours.map((data, hour) => ({
-    id: playlistHourId(date, hour),
-    date,
-    hour,
-    hasEntries: Array.isArray(data?.Items) && data.Items.length > 0,
-  }));
-}
-
-// parsePlaylistId() lives in shared.js (identical to sqlRepository.js's
-// copy).
-
-// Mirrors sqlRepository.js's getPlaylistById(id) -> { id, date, hour,
-// entries: [{ position, itemId, scheduledStart, overrides, item }] }.
-// `overrides` has no API counterpart (the API's PlaylistItemAttributes
-// only appears on Container sub-items, not top-level slots — see
-// docs/MAIRLISTDB-API.md) and stays undefined here.
-//
-// Contrary to what an earlier reading of the docs assumed, each entry in
-// Items[] is NOT a { Class: "Playlist", Time: {...}, Item: {...} }
-// wrapper — it IS the item itself, flat (Title/Artist/Duration/Class
-// etc. directly on the entry), confirmed against a live server response.
-// entry.Item ?? entry stays defensive in case some contexts do wrap it.
-//
-// Container items (Class: "Container", e.g. ad blocks) are mapped as a
-// single playlist entry via mapApiItemToInternal (which already sets
-// containerType from Class) — their nested Items list isn't flattened
-// into separate entries. See docs/FEATURES.md: nested Container
-// sub-items aren't editable/expandable yet in api-mode.
-//
-// Entries carry no per-slot start time as a rule — only some (e.g.
-// Class: "Dummy" hour-start placeholders) have an explicit FixTime.
-// scheduledStart is therefore computed cumulatively from the hour's
-// start plus prior entries' durations (mirrors sqlRepository.js's
-// resequenceEntries), using FixTime only where the API sets it.
-async function getPlaylistById(id) {
-  const parsed = parsePlaylistId(id);
-  if (!parsed) return null;
-  const { date, hour } = parsed;
-  const [year, month, day] = date.split("-").map(Number);
-
-  const data = await getPlaylistHour(year, month, day, hour);
-  const apiItems = Array.isArray(data?.Items) ? data.Items : [];
-
-  let cursorSeconds = hour * 3600;
-  const entries = apiItems.map((entry, index) => {
-    const apiItem = entry.Item ?? entry;
-    const item = mapApiItemToInternal(apiItem, null);
-
-    const scheduledStart = entry.FixTime || secondsToClock(cursorSeconds);
-    cursorSeconds += item ? item.duration : 0;
-
-    return {
-      position: index + 1,
-      itemId: item ? item.id : null,
-      scheduledStart,
-      overrides: undefined,
-      item,
-    };
-  });
-
-  return { id, date, hour, entries };
-}
-
-// `items` is the full replacement list of RAW API entries for the hour
-// (the same flat, un-normalized objects getPlaylistHour()'s Items[]
-// contains — NOT internal { time, item } pairs) — not a diff. Loads the
-// current hour first only to carry its VersionInfo through to the PUT
-// (see docs: unverified whether the server requires this for conflict
-// detection, sent along out of caution). Returns the new version number
-// reported by the server; does not attempt to detect or resolve version
-// conflicts (also unverified — see docs/MAIRLISTDB-API.md offene Punkte).
-//
-// Deliberately takes raw entries rather than internal { time, item }
-// pairs run through mapInternalItemToApi(): Class: "Dummy" slots (hour-
-// start markers etc.) have no DatabaseID and carry fields
-// (Timing/State/Customized/FixTimeFrame/FixTime) that the internal item
-// shape can't represent — reconstructing them from mapInternalItemToApi
-// would corrupt or drop them. Callers (reorderPlaylist/insertPlaylistItem/
-// removePlaylistItem/savePlaylistItemOverrides below) therefore read the
-// raw Items[] array, splice/reorder it in place, and pass the result
-// straight back here — only entries actually being inserted are built
-// fresh via mapInternalItemToApi(); everything else round-trips untouched.
-async function writeHour(year, month, day, hour, rawEntries) {
-  const path = `/api/v1/playlists/${year}/${pad2(month)}/${pad2(day)}/${pad2(hour)}/0`;
-  const current = await apiRequest("GET", path);
-
-  const body = {
-    Items: rawEntries || [],
-    VersionInfo: current?.VersionInfo,
-  };
-
-  const result = await apiRequest("PUT", path, { body });
-  return result?.Version ?? null;
-}
-
-// ---- playlist write operations (read-modify-write on raw Items[]) ----
-//
-// The API only exposes whole-hour reads/writes (no per-slot insert/
-// remove/reorder endpoint), so each of these re-fetches the hour's raw
-// entries, mutates the array in memory, writes the full array back, then
-// re-reads via getPlaylistById() to return the normalized shape (mirrors
-// sqlRepository.js's own read-modify-write via writeHour there).
-//
-// `position` throughout is 1-based and matches getPlaylistById()'s
-// `entries[].position` (= raw array index + 1).
-
-async function getRawPlaylistItems(year, month, day, hour) {
-  const data = await getPlaylistHour(year, month, day, hour);
-  return Array.isArray(data?.Items) ? data.Items : [];
-}
-
-async function reorderPlaylist(id, order) {
-  const parsed = parsePlaylistId(id);
-  if (!parsed) return null;
-  const { date, hour } = parsed;
-  const [year, month, day] = date.split("-").map(Number);
-
-  const rawItems = await getRawPlaylistItems(year, month, day, hour);
-  if (!Array.isArray(order) || order.length !== rawItems.length) return null;
-
-  const byPosition = new Map(rawItems.map((entry, index) => [index + 1, entry]));
-  const reordered = order.map((pos) => byPosition.get(Number(pos)));
-  if (reordered.some((e) => !e)) return null;
-
-  await writeHour(year, month, day, hour, reordered);
-  return getPlaylistById(id);
-}
-
-async function insertPlaylistItem(id, { itemId, afterPosition }) {
-  const parsed = parsePlaylistId(id);
-  if (!parsed) return null;
-  const { date, hour } = parsed;
-  const [year, month, day] = date.split("-").map(Number);
-
-  const item = await getItemById(itemId);
-  if (!item) return null;
-
-  const rawItems = await getRawPlaylistItems(year, month, day, hour);
-  const insertAt = afterPosition == null ? rawItems.length : Number(afterPosition);
-
-  const newRawEntry = mapInternalItemToApi(item);
-  const next = [...rawItems];
-  next.splice(insertAt, 0, newRawEntry);
-
-  await writeHour(year, month, day, hour, next);
-  return getPlaylistById(id);
-}
-
-async function removePlaylistItem(id, position) {
-  const parsed = parsePlaylistId(id);
-  if (!parsed) return null;
-  const { date, hour } = parsed;
-  const [year, month, day] = date.split("-").map(Number);
-
-  const rawItems = await getRawPlaylistItems(year, month, day, hour);
-  const index = Number(position) - 1;
-  if (index < 0 || index >= rawItems.length) return null;
-
-  const next = [...rawItems];
-  next.splice(index, 1);
-
-  await writeHour(year, month, day, hour, next);
-  return getPlaylistById(id);
-}
-
-// The API's per-slot volatile overrides (PlaylistItemAttributes) are only
-// documented on Container sub-items, not top-level slots (see
-// docs/MAIRLISTDB-API.md) — there is no verified top-level counterpart to
-// write to. Best-effort: merge cue overrides directly into the raw
-// entry's own Markers (the one per-slot field that's known to exist and
-// round-trip), leave everything else on the raw entry untouched. Other
-// override kinds (attributes, etc.) have no known target field and are
-// silently dropped rather than guessed at.
-async function savePlaylistItemOverrides(id, position, overrides) {
-  const parsed = parsePlaylistId(id);
-  if (!parsed) return null;
-  const { date, hour } = parsed;
-  const [year, month, day] = date.split("-").map(Number);
-
-  const rawItems = await getRawPlaylistItems(year, month, day, hour);
-  const index = Number(position) - 1;
-  if (index < 0 || index >= rawItems.length) return null;
-
-  const next = [...rawItems];
-  const entry = { ...next[index] };
-  if (overrides?.cue) {
-    entry.Markers = { ...(entry.Markers || {}), ...mapMarkersToApi(overrides.cue) };
-  }
-  next[index] = entry;
-
-  await writeHour(year, month, day, hour, next);
-  return getPlaylistById(id);
-}
+const apiClient = require("./apiClient");
+const apiItems = require("./apiItems");
+const apiFolders = require("./apiFolders");
+const apiPlaylists = require("./apiPlaylists");
+const apiAudio = require("./apiAudio");
+
+const { apiRequest, ApiNotFoundError, ApiUnreachableError, warnOnceUnexpectedShape, notImplemented, emptyStub } = apiClient;
+const { getFolders } = apiFolders;
+const { getItemsByFolder } = apiItems;
+const { getPlaylistsByDate, getPlaylistById } = apiPlaylists;
 
 // ---- permissions / capabilities ----
 // No station scoping documented for these two endpoints.
@@ -990,271 +57,19 @@ async function getCapabilities() {
   return apiRequest("GET", "/api/v1/capabilities", { withStation: false });
 }
 
-async function getConfig() {
-  return apiRequest("GET", "/api/v1/config");
-}
-
-// ---- attribute keys (from /api/v1/config's StandardAttributes XML) ----
+// ---- folders + items composed ----
 //
-// The API has no dedicated attribute-schema endpoint, but /api/v1/config's
-// StandardAttributes field carries exactly this information as an XML
-// string (see docs/MAIRLISTDB-API.md): one <StandardAttribute Name="..."
-// Kind="DropDown|Check"?> per attribute, each optionally with a nested
-// <Values><Value>...</Value></Values> list.
+// getFolderChildren(id) needs both getFolders() (apiFolders.js) and
+// getItemsByFolder() (apiItems.js). It stays here rather than in either of
+// those two modules: apiItems.js already needs apiFolders.js's getFolders()
+// (for getItemFolders()), so putting getFolderChildren in apiFolders.js
+// would need apiFolders.js to import apiItems.js back — a circular
+// require, which Node resolves inconsistently depending on which module
+// is required first (verified: the second module in the cycle sees an
+// incomplete, still-being-populated exports object from the first). The
+// facade sits above both, so it can compose them without that risk.
 //
-// Deliberately regex-based rather than a real XML parser: the project has
-// no XML dependency yet (grepped package.json — none present), and this
-// format is narrow and stable (attribute-defining tags only, no nesting
-// beyond one Values level, no namespaces/CDATA/entities to worry about).
-// Pulling in a parser dependency for one field wasn't worth it without
-// checking with the user first; a small targeted extraction is safer than
-// guessing at a library choice.
-const STANDARD_ATTRIBUTE_RE = /<StandardAttribute\s+Name="([^"]*)"[^>]*?(\/>|>([\s\S]*?)<\/StandardAttribute>)/g;
-const VALUE_RE = /<Value>([^<]*)<\/Value>/g;
-
-function parseStandardAttributesXml(xml) {
-  if (!xml) return [];
-  const result = [];
-  let match;
-  STANDARD_ATTRIBUTE_RE.lastIndex = 0;
-  while ((match = STANDARD_ATTRIBUTE_RE.exec(xml))) {
-    const name = match[1];
-    const inner = match[3] || "";
-    const values = [];
-    let valueMatch;
-    VALUE_RE.lastIndex = 0;
-    while ((valueMatch = VALUE_RE.exec(inner))) {
-      values.push(valueMatch[1]);
-    }
-    if (name) result.push({ key: name, values });
-  }
-  return result;
-}
-
-// Mirrors sqlRepository.js's getAttributeKeys() -> [{ key, values }]. Unlike
-// the SQL version (which derives `values` from actually-observed item
-// attribute values), `values` here comes from the config schema's
-// Kind="DropDown"/"Check" <Values> list where present — free-text
-// attributes (no Kind) have no enumerable values and get values: [].
-async function getAttributeKeys() {
-  const config = await getConfig();
-  return parseStandardAttributesXml(config?.StandardAttributes);
-}
-
-// Same StandardAttributes XML as getAttributeKeys, but reparsed to keep the
-// Kind attribute (dropped by parseStandardAttributesXml) and mapped to the
-// { key, label, type, options } shape sqlRepository.js's getAttributeDefinitions()
-// returns (ATTRIBUTE_DEFINITIONS in mockData.js), which the Item Editor's
-// Attribute tab expects: DropDown -> select, Check -> checkbox, no Kind ->
-// free-text.
-function mapStandardAttributeKind(kind) {
-  if (kind === "DropDown") return "select";
-  if (kind === "Check") return "checkbox";
-  return "text";
-}
-
-function parseStandardAttributeDefinitionsXml(xml) {
-  if (!xml) return [];
-  const result = [];
-  let match;
-  STANDARD_ATTRIBUTE_RE.lastIndex = 0;
-  while ((match = STANDARD_ATTRIBUTE_RE.exec(xml))) {
-    const name = match[1];
-    if (!name) continue;
-    const attrsStr = match[0];
-    const kindMatch = /\bKind="([^"]*)"/.exec(attrsStr.slice(0, attrsStr.indexOf(">") + 1));
-    const kind = kindMatch ? kindMatch[1] : null;
-    const inner = match[3] || "";
-    const values = [];
-    let valueMatch;
-    VALUE_RE.lastIndex = 0;
-    while ((valueMatch = VALUE_RE.exec(inner))) {
-      values.push(valueMatch[1]);
-    }
-    const type = mapStandardAttributeKind(kind);
-    result.push({
-      key: name,
-      label: name,
-      type,
-      ...(type === "select" || type === "checkbox" ? { options: values } : {}),
-    });
-  }
-  return result;
-}
-
-async function getAttributeDefinitions() {
-  const config = await getConfig();
-  return parseStandardAttributeDefinitionsXml(config?.StandardAttributes);
-}
-
-// ---- artists / titles (distinct-value search) ----
-//
-// docs/MAIRLISTDB-API.md documents these as `?artists&time=...&station=1` /
-// `?titles&time=...&station=1` — `artists`/`titles` is a bare flag (no
-// "=value"), which URLSearchParams cannot express (see apiRequest's
-// `rawFlags`). Two fix attempts so far both still returned full item
-// objects instead of a distinct name list against a live server:
-//   1. sending `time=` as an empty string (malformed value)
-//   2. omitting `time` entirely
-// `rawFlags` now sends `artists`/`titles` as true bare flags (no previous
-// attempt did this — both still went through URLSearchParams as `key=`),
-// but the real `time` format is still unconfirmed. This is a known open
-// point — see "Offene Punkte" in docs/MAIRLISTDB-API.md. Not a blocker:
-// artists/titles search is a nice-to-have, not core functionality.
-
-// Frontend expects a plain array here (Playlist.jsx/DatabaseManager.jsx
-// set it straight into an `artists` state array and iterate it in
-// LibraryTree's ListSection). Falling through to the raw unexpected
-// payload (an object, per the note above) instead of an array broke
-// that iteration in api-mode — same class of bug as the getStorages/
-// getItemTypes/etc. stubs above, fixed the same way: empty array
-// instead of a non-array value, with a one-time warning.
-function warnOnceUnexpectedShape(name) {
-  const key = `${name}:unexpected-shape`;
-  if (!warnedOnce.has(key)) {
-    warnedOnce.add(key);
-    console.warn(`[apiRepository] ${name}(): unerwartetes Antwortformat vom Server, liefert leeres Array`);
-  }
-}
-
-async function getArtists(searchTerm) {
-  const data = await apiRequest("GET", "/api/v1/items", {
-    rawFlags: ["artists"],
-    query: searchTerm ? { q: searchTerm } : {},
-  });
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.Artists)) return data.Artists;
-  // Unexpected shape (likely still full item objects) — `time` format
-  // remains unconfirmed, see comment above. Must not return a non-array
-  // here; callers rely on Array methods (map/length) without guarding.
-  warnOnceUnexpectedShape("getArtists");
-  return [];
-}
-
-async function getTitles(searchTerm) {
-  const data = await apiRequest("GET", "/api/v1/items", {
-    rawFlags: ["titles"],
-    query: searchTerm ? { q: searchTerm } : {},
-  });
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.Titles)) return data.Titles;
-  // Unexpected shape — see getArtists above.
-  warnOnceUnexpectedShape("getTitles");
-  return [];
-}
-
-// ---- not yet implemented via the mAirListDB Server API ----
-//
-// These have no counterpart in the API (folders are a flat parent-lookup
-// via getFolders(parentId), not a tree/CRUD API; storages, item search,
-// dashboard/log aggregation, and the mock-style playlist-by-date/id
-// lookups have no matching endpoint at all). Named stubs (rather than a
-// generic proxy) so each throws with the actual function name, and so
-// library.js can call `repo.<name>()` the same way regardless of
-// DATA_SOURCE.
-function notImplemented(name) {
-  return () => {
-    throw new Error(`Diese Funktion ist im api-Modus noch nicht verfügbar: ${name}`);
-  };
-}
-
-// Builds the same nested { id, name, parentId, children } tree shape as
-// sqlRepository.js's getFolderTree(), from getFolders()'s flat list (which
-// already normalizes parentId to null for root, matching rowToFolder there).
-async function getFolderTree() {
-  const all = await getFolders();
-  const byParent = (parentId) =>
-    all
-      .filter((f) => f.parentId === parentId)
-      .map((f) => ({ ...f, children: byParent(f.id) }));
-  return byParent(null);
-}
-
-// No single-folder endpoint in the API (see docs/MAIRLISTDB-API.md) —
-// getFolders() already fetches the complete 155-folder tree in one
-// request, so look the id up in that flat list rather than adding a
-// second round-trip.
-async function getFolderById(id) {
-  const all = await getFolders();
-  return all.find((f) => String(f.id) === String(id)) ?? null;
-}
-// Folder CRUD — VERIFIZIERT live gegen den mAirListDB Server (siehe
-// docs/MAIRLISTDB-API.md):
-//   POST   /api/v1/folders?station=1        Body: { Name, Parent } -> { Parent, ID, Name }
-//   PUT    /api/v1/folders/<id>?station=1   Body: { Name, Parent } -> null (dient sowohl
-//          Umbenennen als auch Verschieben, je nachdem welches Feld sich ändert)
-//   DELETE /api/v1/folders/<id>?station=1   -> null
-// `Parent` ist bei Top-Level-Ordnern der String "root" (siehe rowToFolder),
-// intern wird das als parentId: null repräsentiert — beim Schreiben also
-// zurückkonvertieren.
-function parentIdToApi(parentId) {
-  return parentId == null ? "root" : String(parentId);
-}
-
-async function createFolder(name, parentId) {
-  const data = await apiRequest("POST", "/api/v1/folders", {
-    body: { Name: name, Parent: parentIdToApi(parentId) },
-  });
-  return rowToFolder(data);
-}
-
-async function renameFolder(id, newName) {
-  const current = await getFolderById(id);
-  if (!current) return null;
-  await apiRequest("PUT", `/api/v1/folders/${encodeURIComponent(id)}`, {
-    body: { Name: newName, Parent: parentIdToApi(current.parentId) },
-  });
-  return getFolderById(id);
-}
-
-async function moveFolder(id, newParentId) {
-  const current = await getFolderById(id);
-  if (!current) return null;
-  await apiRequest("PUT", `/api/v1/folders/${encodeURIComponent(id)}`, {
-    body: { Name: current.name, Parent: parentIdToApi(newParentId) },
-  });
-  return getFolderById(id);
-}
-
-async function deleteFolder(id) {
-  await apiRequest("DELETE", `/api/v1/folders/${encodeURIComponent(id)}`);
-  return "ok";
-}
-
-// The functions below are loaded alongside getFolderTree() by the
-// frontend (Playlist.jsx, DatabaseManager.jsx), sometimes inside the same
-// Promise.all as the tree fetch — if any of them threw (as
-// notImplemented() did), the whole batch rejected and the sidebar tree
-// never rendered even though /api/tree itself had already succeeded.
-// Returning an empty result of the *correct shape* (matching
-// sqlRepository.js's return type for the same function — array vs.
-// object — exactly, since the frontend spreads/iterates these) keeps
-// that batch resolving; these have no equivalent single-shot endpoint in
-// the mAirListDB Server API (see docs/MAIRLISTDB-API.md), so an empty
-// result is the honest answer rather than a guess.
-// Deliberately synchronous (not async/Promise-returning): the routes that
-// call these (GET /api/storages, /api/types, /api/attributes, /api/items,
-// /api/folders/:id/children in server/routes/library.js) do
-// `res.json(repo.getX())` without awaiting, matching sqlRepository.js's
-// synchronous functions of the same name. An async stub here would hand
-// res.json() an unresolved Promise (serializes to `{}`), which is what
-// broke DatabaseManager.jsx's `[...items]` spread in api-mode — items
-// arrived as `{}` instead of `[]`, and `{}` isn't iterable.
-const warnedOnce = new Set();
-function emptyStub(name, emptyValue) {
-  return () => {
-    if (!warnedOnce.has(name)) {
-      warnedOnce.add(name);
-      console.warn(`[apiRepository] ${name}() ist im api-Modus noch nicht implementiert, liefert leeren Wert`);
-    }
-    // Return a fresh deep copy each call so callers can't mutate shared
-    // state (emptyValue's array-valued properties, e.g. { folders: [],
-    // items: [] }, would otherwise be the same array instance every call).
-    return structuredClone(emptyValue);
-  };
-}
-
-// sqlRepository.js: getFolderChildren(id) -> { folders: [], items: [] }.
+// sqlRepository.js's getFolderChildren(id) -> { folders: [], items: [] }.
 // Direct (non-recursive) subfolders come from filtering the same
 // getFolders() list getFolderById() uses; items come from the already
 // existing getItemsByFolder(id).
@@ -1264,6 +79,9 @@ async function getFolderChildren(id) {
   const items = await getItemsByFolder(id);
   return { folders, items };
 }
+
+// ---- storages ----
+//
 // No /api/v1/storages endpoint has been observed in traffic (unlike
 // /api/v1/folders, /items, /playlists — see docs/MAIRLISTDB-API.md), and
 // there is no live server available in this environment to probe it
@@ -1272,8 +90,6 @@ async function getFolderChildren(id) {
 // and falls back to the same honest empty-array stub as before on a 404 —
 // self-verifying the first time this actually runs against the live
 // server, without ever guessing at a response shape that turns out wrong.
-// Response shape is unverified: tries both the `{ value: [...] }` wrapper
-// (like /api/v1/folders) and a bare array (like /api/v1/items), mapping
 // Verified live response shape (see docs/MAIRLISTDB-API.md): a `/folders`-
 // style { value: [...], Count } wrapper, entries shaped like
 // { ID, Name, Description, DefaultLocation, ItemCount }. Mapped down to
@@ -1301,53 +117,6 @@ async function getStorages() {
 const createStorage = notImplemented("createStorage");
 const updateStorage = notImplemented("updateStorage");
 const deleteStorage = notImplemented("deleteStorage");
-
-// No /api/v1/itemtypes (or similar) endpoint documented or observed, and
-// /api/v1/config has no item-type field either (only StandardAttributes,
-// used by getAttributeKeys above). sqlRepository.js's getItemTypes() derives
-// its list from `SELECT DISTINCT type, COUNT(*) ... GROUP BY type` over the
-// full items table — the API has no equivalent whole-library scan (GET
-// /api/v1/items always requires folder=<id> or ids=<id,...>, see docs), so
-// getting real counts is impossible without walking all ~155 folders.
-//
-// Instead of an empty stub, this returns a hardcoded list built from a live
-// query of the actual database (items 700-830 plus several folders). Keys
-// are lowercased via typeToCode() to match the format item.type already
-// uses (see mapApiItemToInternal above) and what updateItem's Type
-// round-trip expects (`safe.type.charAt(0).toUpperCase() + ...`).
-//
-// TODO: Diese Typ-Liste ist unvollständig. Verifiziert wurden nur
-// die 7 Typen, die im aktuellen Bestand vorkommen (Music, Jingle,
-// Sweeper, Bed, Promo, Voice, Dummy). Der mAirList-Client kennt
-// weitere Typen (Nachrichten, Werbung, Wetter, Verkehr, Beitrag,
-// Trailer, Sponsor-Jingle, Station-ID, Instrumental, Sendung,
-// Stream, Container, Playlist, Befehl, Cartwall-Seite,
-// Unterbrechung, Stille, Fehler, Andere, Benutzerdefiniert 1-3).
-// Deren englische DB-Werte sind NICHT verifiziert. Um sie zu
-// ermitteln: im mAirList-Client ein Testitem auf den jeweiligen
-// Typ setzen, speichern, dann per API GET /api/v1/items/<id> den
-// Type-Wert auslesen (oder per Wireshark den PUT mitschneiden).
-// Sobald bekannt, hier ergänzen.
-const VERIFIED_ITEM_TYPES = [
-  { db: "Music", label: "Musik" },
-  { db: "Jingle", label: "Jingle" },
-  { db: "Sweeper", label: "Sweeper" },
-  { db: "Bed", label: "Bett" },
-  { db: "Promo", label: "Promo" },
-  { db: "Voice", label: "Moderation" },
-  { db: "Dummy", label: "Platzhalter" },
-];
-function getItemTypes() {
-  return VERIFIED_ITEM_TYPES.map((t) => ({
-    key: typeToCode(t.db),
-    label: t.label,
-    hasItems: true,
-    note: "",
-  }));
-}
-
-const getCuePoints = notImplemented("getCuePoints");
-const uploadFile = notImplemented("uploadFile");
 const resolveAudioPath = notImplemented("resolveAudioPath");
 
 // No /api/v1/log(s) endpoint documented or observed — the only playout-
@@ -1382,8 +151,9 @@ async function getDashboardStats() {
 // getTodayPlaylist() -> today's playlist entries across all hours with
 // entries, resolved against items. Unlike the other stubs on this page,
 // this one is fully implementable: getPlaylistsByDate/getPlaylistById are
-// both already working API-backed functions (see above), so this just
-// composes them the same way sqlRepository.js's getTodayPlaylist() does.
+// both already working API-backed functions (apiPlaylists.js), so this
+// just composes them the same way sqlRepository.js's getTodayPlaylist()
+// does.
 async function getTodayPlaylist() {
   const today = new Date().toISOString().slice(0, 10);
   const days = await getPlaylistsByDate(today);
@@ -1400,57 +170,57 @@ async function getTodayPlaylist() {
 module.exports = {
   ApiNotFoundError,
   ApiUnreachableError,
-  mapApiItemToInternal,
-  mapInternalItemToApi,
-  getFolders,
-  getItemsByFolder,
-  getItemById,
-  getItemsByIds,
-  getItemFolders,
-  getItemRestrictions,
-  getItemHistory,
-  getAudioStreamUrl,
-  getAudioStream,
-  updateItem,
-  createItem,
-  deleteItem,
-  assignItemsToFolder,
-  removeItemFromFolder,
-  setItemFolders,
-  getPlaylistHour,
-  getPlaylistAttributes,
-  writeHour,
+  mapApiItemToInternal: apiItems.mapApiItemToInternal,
+  mapInternalItemToApi: apiItems.mapInternalItemToApi,
+  getFolders: apiFolders.getFolders,
+  getItemsByFolder: apiItems.getItemsByFolder,
+  getItemById: apiItems.getItemById,
+  getItemsByIds: apiItems.getItemsByIds,
+  getItemFolders: apiItems.getItemFolders,
+  getItemRestrictions: apiItems.getItemRestrictions,
+  getItemHistory: apiItems.getItemHistory,
+  getAudioStreamUrl: apiAudio.getAudioStreamUrl,
+  getAudioStream: apiAudio.getAudioStream,
+  updateItem: apiItems.updateItem,
+  createItem: apiItems.createItem,
+  deleteItem: apiItems.deleteItem,
+  assignItemsToFolder: apiItems.assignItemsToFolder,
+  removeItemFromFolder: apiItems.removeItemFromFolder,
+  setItemFolders: apiItems.setItemFolders,
+  getPlaylistHour: apiPlaylists.getPlaylistHour,
+  getPlaylistAttributes: apiPlaylists.getPlaylistAttributes,
+  writeHour: apiPlaylists.writeHour,
   getPermissions,
   getCapabilities,
-  getConfig,
-  getArtists,
-  getTitles,
-  getFolderTree,
-  getFolderById,
+  getConfig: apiItems.getConfig,
+  getArtists: apiItems.getArtists,
+  getTitles: apiItems.getTitles,
+  getFolderTree: apiFolders.getFolderTree,
+  getFolderById: apiFolders.getFolderById,
   getFolderChildren,
-  createFolder,
-  renameFolder,
-  moveFolder,
-  deleteFolder,
+  createFolder: apiFolders.createFolder,
+  renameFolder: apiFolders.renameFolder,
+  moveFolder: apiFolders.moveFolder,
+  deleteFolder: apiFolders.deleteFolder,
   getStorages,
   createStorage,
   updateStorage,
   deleteStorage,
-  getItemTypes,
-  getAttributeKeys,
-  getItems,
-  searchItems,
-  getCuePoints,
-  getAttributeDefinitions,
-  moveItemToFolder,
-  uploadFile,
+  getItemTypes: apiItems.getItemTypes,
+  getAttributeKeys: apiItems.getAttributeKeys,
+  getItems: apiItems.getItems,
+  searchItems: apiItems.searchItems,
+  getCuePoints: apiItems.getCuePoints,
+  getAttributeDefinitions: apiItems.getAttributeDefinitions,
+  moveItemToFolder: apiItems.moveItemToFolder,
+  uploadFile: apiItems.uploadFile,
   resolveAudioPath,
-  getPlaylistsByDate,
-  getPlaylistById,
-  reorderPlaylist,
-  insertPlaylistItem,
-  removePlaylistItem,
-  savePlaylistItemOverrides,
+  getPlaylistsByDate: apiPlaylists.getPlaylistsByDate,
+  getPlaylistById: apiPlaylists.getPlaylistById,
+  reorderPlaylist: apiPlaylists.reorderPlaylist,
+  insertPlaylistItem: apiPlaylists.insertPlaylistItem,
+  removePlaylistItem: apiPlaylists.removePlaylistItem,
+  savePlaylistItemOverrides: apiPlaylists.savePlaylistItemOverrides,
   getLogs,
   getDashboardStats,
   getRecentLogs,

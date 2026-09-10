@@ -62,7 +62,7 @@ async function main() {
   await run("getItemTypes", async () => {
     const types = await repo.getItemTypes();
     if (!Array.isArray(types)) throw new Error("expected an array");
-    if (types.length !== 7) throw new Error(`expected 7 verified types, got ${types.length}`);
+    if (types.length !== 25) throw new Error(`expected 25 verified types, got ${types.length}`);
     for (const t of types) {
       if (typeof t.key !== "string" || !t.key) throw new Error("expected non-empty type.key");
       if (typeof t.label !== "string" || !t.label) throw new Error("expected non-empty type.label");

@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import {
   getItemById, updateItem, getItemHistory, getAttributeDefinitions,
-  getPlaylistById, savePlaylistItemOverrides, getAudioUrl,
+  getPlaylistById, savePlaylistItemOverrides, getAudioUrl, getItemTypes,
 } from "../lib/api";
 import { aggregateHistory, formatDate as formatHistoryDate } from "../lib/historyStats";
 import { useAuth } from "../lib/AuthContext";
@@ -53,19 +53,9 @@ function diffOverrides(globalItem, edited) {
 
 // --- Shared constants (mirror the backend) ---
 
-// TODO: Diese Typ-Liste ist unvollständig. Verifiziert wurden nur
-// die 7 Typen, die im aktuellen Bestand vorkommen (Music, Jingle,
-// Sweeper, Bed, Promo, Voice, Dummy). Der mAirList-Client kennt
-// weitere Typen (Nachrichten, Werbung, Wetter, Verkehr, Beitrag,
-// Trailer, Sponsor-Jingle, Station-ID, Instrumental, Sendung,
-// Stream, Container, Playlist, Befehl, Cartwall-Seite,
-// Unterbrechung, Stille, Fehler, Andere, Benutzerdefiniert 1-3).
-// Deren englische DB-Werte sind NICHT verifiziert. Um sie zu
-// ermitteln: im mAirList-Client ein Testitem auf den jeweiligen
-// Typ setzen, speichern, dann per API GET /api/v1/items/<id> den
-// Type-Wert auslesen (oder per Wireshark den PUT mitschneiden).
-// Sobald bekannt, hier ergänzen.
-const ITEM_TYPES = [
+// Fallback only, used until getItemTypes() resolves (or if it fails) so the
+// dropdown is never empty. The backend (/api/types) is the source of truth.
+const FALLBACK_ITEM_TYPES = [
   { key: "music", label: "Musik" },
   { key: "jingle", label: "Jingle" },
   { key: "sweeper", label: "Sweeper" },
@@ -257,7 +247,7 @@ function CueCard({ point, value, duration, onChange, onSetMarker, onJump, onClea
 
 // --- Tab panels ---
 
-function GeneralTab({ item, update }) {
+function GeneralTab({ item, update, itemTypes }) {
   const isContainer = item.type === "container";
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
@@ -273,8 +263,8 @@ function GeneralTab({ item, update }) {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Field label="Type">
             <select className={inputClass} value={item.type} onChange={(e) => update("type", e.target.value)}>
-              {ITEM_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-              {item.type && !ITEM_TYPES.some((t) => t.key === item.type) && (
+              {itemTypes.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+              {item.type && !itemTypes.some((t) => t.key === item.type) && (
                 <option key={item.type} value={item.type}>{item.type}</option>
               )}
             </select>
@@ -1265,8 +1255,17 @@ export default function ItemEditor({ internalId, playlistContext, onBack, onNavi
   const [savingScope, setSavingScope] = useState(null); // "hour" | "database" | null
   const [saveError, setSaveError] = useState(null);
   const [hasOverrides, setHasOverrides] = useState(false);
+  const [itemTypes, setItemTypes] = useState(FALLBACK_ITEM_TYPES);
 
   const saving = savingScope != null;
+
+  useEffect(() => {
+    let cancelled = false;
+    getItemTypes()
+      .then((types) => { if (!cancelled && Array.isArray(types) && types.length > 0) setItemTypes(types); })
+      .catch(() => {}); // keep FALLBACK_ITEM_TYPES
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1457,7 +1456,7 @@ export default function ItemEditor({ internalId, playlistContext, onBack, onNavi
           )}
           {!loading && !error && item && (
             <>
-              {tab === "general" && <GeneralTab item={item} update={update} />}
+              {tab === "general" && <GeneralTab item={item} update={update} itemTypes={itemTypes} />}
               {tab === "playback" && <PlaybackTab item={item} update={update} />}
               {tab === "attributes" && <AttributesTab item={item} setItem={setItem} />}
               {tab === "scheduling" && <PlaceholderTab icon={Clock} title="Sendeplanung" note="Rotationen, Zeitfenster und Scheduling Regeln. Kommt in einer späteren Phase." />}

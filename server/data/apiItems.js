@@ -55,10 +55,20 @@ function mapApiItemToInternal(apiItem, folderId = null) {
   // Container items (Class ending in Container/ContainerMarker) carry their
   // contained elements in their own Items[] — mapped one level deep (a
   // sub-item's own sub-items, if any, are dropped) so the playlist can show
-  // what's inside a container without recursing indefinitely.
-  const subItems = Array.isArray(apiItem.Items)
-    ? apiItem.Items.map((subItem) => mapApiItemToInternal(subItem.Item ?? subItem, folderId)).filter(Boolean)
-    : [];
+  // what's inside a container without recursing indefinitely. Playlist
+  // entries (embedded in an hour) use the flat `Items[]` shape (VERIFIZIERT,
+  // see "Response: gefüllte Stunde"); a standalone GET /items/<id> on a
+  // Hook-/AutoHookContainer is unverified but, per PUT/GET symmetry (see
+  // "Hook-Container-Inhalt setzen"), likely echoes back under
+  // `Playlist.Items` instead — checked as a fallback here.
+  const rawSubItems = Array.isArray(apiItem.Items)
+    ? apiItem.Items
+    : Array.isArray(apiItem.Playlist?.Items)
+      ? apiItem.Playlist.Items
+      : [];
+  const subItems = rawSubItems
+    .map((subItem) => mapApiItemToInternal(subItem.Item ?? subItem, folderId))
+    .filter(Boolean);
 
   return {
     id: hasDatabaseId ? String(apiItem.DatabaseID) : null,
@@ -310,9 +320,13 @@ async function createItem(data = {}) {
     ...data,
     containerType: data.containerType ?? null,
   });
-  if (!apiItem.Filename) {
+  // Container-Items (Hook-/AutoHookContainer etc.) haben keine eigene Datei —
+  // Filename ist laut Doku ("Container erstellen und bearbeiten") dort kein
+  // Pflichtfeld, nur für normale File-Items.
+  if (!isContainerClass(apiItem.Class) && !apiItem.Filename) {
     throw new Error("createItem: relativePath (Filename) ist erforderlich");
   }
+  if (apiItem.Filename === undefined) delete apiItem.Filename;
 
   const newId = await apiRequest("POST", "/api/v1/items", { body: apiItem });
 
@@ -458,6 +472,46 @@ async function deleteItem(id) {
     if (err instanceof ApiNotFoundError) return false;
     throw err;
   }
+}
+
+// PUT /api/v1/items/<id> mit Comment + Playlist.Items — VERIFIZIERT per
+// Wireshark-Mitschnitt (siehe docs/MAIRLISTDB-API.md, "Hook-Container-Inhalt
+// setzen"). Gilt nur für Hook-Container/AutoHookContainer: deren Inhalt
+// liegt unter Playlist.Items als flache Liste vollständiger Item-Objekte
+// (NICHT unter Items wie beim Nachrichten-Container, siehe dortige
+// Gegenüberstellung in der Doku).
+//
+// Der aktuelle Container-Zustand wird zuerst per GET geholt, damit
+// Class/Type/InnerFadeDuration/Options unverändert im PUT-Body mitgehen —
+// nur Comment und Playlist.Items werden ersetzt. Jedes itemId wird per
+// getItemById aufgelöst und über mapInternalItemToApi in ein vollständiges
+// API-Item-Objekt gemappt (gleiches Mapping wie beim normalen Item-PUT/POST),
+// nicht nur als bloße ID referenziert.
+async function updateContainerContents(containerId, itemIds) {
+  const current = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(containerId)}`);
+  if (!current) return null;
+
+  const ids = (Array.isArray(itemIds) ? itemIds : [])
+    .filter((id) => id != null && id !== "")
+    .map((id) => String(id));
+
+  const items = [];
+  for (const id of ids) {
+    const internalItem = await getItemById(id);
+    if (internalItem) items.push(mapInternalItemToApi(internalItem));
+  }
+
+  const comment = items.map((apiItem) => apiItem.Title || "").join("\n");
+
+  const merged = {
+    ...current,
+    Comment: comment,
+    Playlist: { Items: items },
+  };
+
+  await apiRequest("PUT", `/api/v1/items/${encodeURIComponent(containerId)}`, { body: merged });
+
+  return getItemById(containerId);
 }
 
 async function getItemRestrictions(itemId) {
@@ -696,6 +750,7 @@ module.exports = {
   searchItems,
   getItemFolders,
   updateItem,
+  updateContainerContents,
   createItem,
   assignItemsToFolder,
   removeItemFromFolder,

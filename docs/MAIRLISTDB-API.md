@@ -645,6 +645,12 @@ $doc={
 - ⚠️ Der eigentliche Inhalt liegt unter **`Playlist.Items`**, nicht
   direkt unter `Items` (siehe Gegenüberstellung unten).
 
+**Implementiert:** `apiItems.js`s `updateContainerContents(containerId,
+itemIds)` setzt genau dieses Format um (Route: `PUT
+/api/items/:id/container-contents` in `server/routes/library.js`,
+Frontend-Bearbeitung in `Playlist.jsx`) — nur für Hook-Container und
+automatische Hook-Container, siehe `docs/FEATURES.md`.
+
 ### Regionen-Container erstellen/aktualisieren
 
 ```

@@ -137,6 +137,13 @@ function optionalObject(value, label) {
   return requireObject(value, label);
 }
 
+// Array von IDs (z.B. Container-Inhalt neu setzen). Jedes Element geht
+// durch requireId, ein leeres Array ist erlaubt (Container leeren).
+function requireIdArray(value, label = "ids") {
+  if (!Array.isArray(value)) throw new ValidationError(`${label} muss ein Array sein`);
+  return value.map((id, i) => requireId(id, `${label}[${i}]`));
+}
+
 // Verpackt einen Handler so, dass ein ValidationError als 400 mit
 // verstaendlicher Meldung beantwortet wird, statt als 500 im Error-Handler
 // zu landen. Alles andere geht wie gehabt an next().
@@ -167,5 +174,6 @@ module.exports = {
   optionalText,
   requireObject,
   optionalObject,
+  requireIdArray,
   wrapValidation,
 };

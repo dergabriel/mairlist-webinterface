@@ -128,6 +128,10 @@ export function moveItemToFolder(id, folderId) {
   return put(`/items/${id}/folder`, { folderId });
 }
 
+export function updateContainerContents(id, itemIds) {
+  return put(`/items/${id}/container-contents`, { itemIds });
+}
+
 export function deleteItem(id) {
   return request(`/items/${id}`, { method: "DELETE" });
 }

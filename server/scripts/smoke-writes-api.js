@@ -475,6 +475,78 @@ async function main() {
     }
   });
 
+  // ---- updateContainerContents: create a Hook-Container, add two test
+  // items, remove one, verify order/remaining item, then delete the
+  // container. ----
+
+  await run("updateContainerContents (Hook-Container add/remove/reorder)", async () => {
+    const template = await repo.getItemById(itemId);
+    if (!template || !template.relativePath) {
+      throw new Error(`item ${itemId} not found or has no relativePath — pick a different SMOKE_ITEM_ID`);
+    }
+
+    let container = null;
+    let itemA = null;
+    let itemB = null;
+
+    try {
+      container = await repo.createItem({
+        title: "ZZZ-SmokeTest-HookContainer",
+        type: "container",
+        containerType: "HookContainer",
+      });
+      check("Hook-Container created", !!container && container.id != null, JSON.stringify(container));
+
+      itemA = await repo.createItem({
+        title: "ZZZ-SmokeTest-ContainerItemA",
+        type: "music",
+        relativePath: template.relativePath,
+      });
+      itemB = await repo.createItem({
+        title: "ZZZ-SmokeTest-ContainerItemB",
+        type: "music",
+        relativePath: template.relativePath,
+      });
+      check(
+        "two test items created for container content",
+        !!itemA && itemA.id != null && !!itemB && itemB.id != null,
+        `A=${itemA && itemA.id} B=${itemB && itemB.id}`
+      );
+
+      const withBoth = await repo.updateContainerContents(container.id, [itemA.id, itemB.id]);
+      check(
+        "updateContainerContents sets both items in order",
+        withBoth &&
+          withBoth.subItems?.length === 2 &&
+          String(withBoth.subItems[0].internalId) === String(itemA.internalId) &&
+          String(withBoth.subItems[1].internalId) === String(itemB.internalId),
+        JSON.stringify(withBoth?.subItems)
+      );
+
+      const withOnlyB = await repo.updateContainerContents(container.id, [itemB.id]);
+      check(
+        "updateContainerContents removes item A, keeps item B",
+        withOnlyB &&
+          withOnlyB.subItems?.length === 1 &&
+          String(withOnlyB.subItems[0].internalId) === String(itemB.internalId),
+        JSON.stringify(withOnlyB?.subItems)
+      );
+
+      const reloaded = await repo.getItemById(container.id);
+      check(
+        "container contents persist after reload",
+        reloaded &&
+          reloaded.subItems?.length === 1 &&
+          String(reloaded.subItems[0].internalId) === String(itemB.internalId),
+        JSON.stringify(reloaded?.subItems)
+      );
+    } finally {
+      if (container) await repo.deleteItem(container.id);
+      if (itemA) await repo.deleteItem(itemA.id);
+      if (itemB) await repo.deleteItem(itemB.id);
+    }
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail > 0 ? 1 : 0);
 }

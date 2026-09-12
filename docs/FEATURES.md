@@ -159,10 +159,32 @@ einzelner Playlist-Eintrag geführt, tragen aber jetzt zusätzlich ihre
 verschachtelte `Items`-Liste (eine Ebene tief) als `item.subItems` mit
 — `mapApiItemToInternal` in `apiItems.js` mappt sie rekursiv. Im
 Frontend (`Playlist.jsx`) lässt sich eine Container-Zeile über einen
-Aufklapp-Pfeil öffnen und zeigt die Sub-Items dann als eingerückte,
-schreibgeschützte Zeilen darunter an — sie sind nicht einzeln
-editierbar oder verschiebbar. Ein Container ohne eigene Sub-Items zeigt
-beim Aufklappen einen Hinweistext statt eines Fehlers.
+Aufklapp-Pfeil öffnen und zeigt die Sub-Items dann als eingerückte
+Zeilen darunter an. Ein Container ohne eigene Sub-Items zeigt beim
+Aufklappen einen Hinweistext statt eines Fehlers.
+
+**Hook-Container-Inhalt bearbeitbar (api-Modus):** Für Hook-Container
+und automatische Hook-Container (`Class: "HookContainer"` /
+`"AutoHookContainer"`) zeigt die aufgeklappte Container-Zeile
+zusätzlich einen "Bearbeiten"-Button. Im Bearbeitungsmodus lassen sich
+Sub-Items entfernen (X pro Zeile), per Drag&Drop umsortieren und über
+ein Suchfeld (nutzt `searchItems()`) neue Elemente hinzufügen.
+"Speichern" ruft `PUT /api/items/:id/container-contents` (Body:
+`{ itemIds: [...] }`, Reihenfolge = gewünschte Reihenfolge) auf, das im
+Backend auf `apiItems.js`s `updateContainerContents()` geht: lädt den
+aktuellen Container-Zustand (damit Class/Type/InnerFadeDuration/Options
+erhalten bleiben), löst jede itemId zum vollständigen Item-Objekt auf
+und schreibt `Playlist.Items` + einen aus den Titeln zusammengebauten
+`Comment` zurück (siehe `docs/MAIRLISTDB-API.md`, "Hook-Container-Inhalt
+setzen"). Nach dem Speichern wird nur der betroffene Playlist-Eintrag
+lokal ersetzt, kein Reload der ganzen Stunde.
+
+Nur im api-Modus verfügbar (`DATA_SOURCE=api`) — der Bearbeiten-Button
+erscheint im mock/sqlite-Modus gar nicht erst, die Route antwortet dort
+mit einer klaren Fehlermeldung statt eines Fake-Erfolgs. Regionen- und
+Nachrichten-Container bleiben vorerst schreibgeschützt (andere
+Inhalts-Struktur, siehe "Gegenüberstellung" in
+`docs/MAIRLISTDB-API.md`).
 
 **Bewusst leer statt Fehler** (`getLogs`, `getRecentLogs`): Diese
 Funktionen liefern im api-Modus ein leeres Array statt eines Fehlers.
@@ -491,6 +513,9 @@ mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper
 | Kontextmenü pro Eintrag: Nach oben, Nach unten, Bearbeiten, Löschen | ✅ |
 | Strg+Klick Mehrfachauswahl für Mix Editor Aufruf | ✅ |
 | Playlist-Overrides: Änderungen aus dem Mix Editor und Item Editor werden als volatile Overrides pro Playlist-Eintrag gespeichert (`xmldata` Feld in der echten DB), getrennt vom globalen Item-Stand | ✅ |
+| Container-Inhalt aufklappbar anzeigen (Sub-Items) | ✅ |
+| Hook-Container-Inhalt bearbeiten (hinzufügen/entfernen/umsortieren) | ✅ (nur api-Modus) |
+| Regionen-/Nachrichten-Container-Inhalt bearbeiten | ⬜ |
 | Fix-Zeiten: Item startet zur festen Uhrzeit | ⬜ |
 | Checkpoint: "Prevent auto float around this item" (z.B. volle Stunde) | ⬜ |
 | Konflikt-Erkennung: Warnung wenn zwei Nutzer dieselbe Playlist bearbeiten | ⬜ Phase Mehrbenutzer |

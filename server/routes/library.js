@@ -18,7 +18,7 @@ const { getListenerCount } = require("../lib/listenerSource");
 const {
   requireId, optionalId, requireDate, optionalDate, requirePlaylistId,
   optionalCount, requirePosition, requireText, optionalText,
-  requireObject, optionalObject, wrapValidation,
+  requireObject, optionalObject, requireIdArray, wrapValidation,
 } = require("../lib/validate");
 
 router.use(requireAuth);
@@ -319,6 +319,24 @@ router.put("/items/:id/folder", requireScope("library.write"), wrapValidation(as
   // folderId darf null sein: das nimmt das Item aus jedem Ordner heraus.
   const folderId = body.folderId === null ? null : optionalId(body.folderId, "folderId");
   const item = await repo.moveItemToFolder(requireId(req.params.id, "itemId"), folderId);
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  res.json(item);
+}));
+
+// PUT /api/items/:id/container-contents -> replace a Hook-/AutoHookContainer's
+// contents. Body: { itemIds: [...] } (order = desired order in the container).
+// Only implemented for DATA_SOURCE=api (apiRepository); mock/sqlite return a
+// clear "not available" error instead of pretending to succeed.
+router.put("/items/:id/container-contents", requireScope("library.write"), wrapValidation(async (req, res) => {
+  const itemId = requireId(req.params.id, "itemId");
+  const body = requireObject(req.body);
+  const itemIds = requireIdArray(body.itemIds, "itemIds");
+
+  if (process.env.DATA_SOURCE !== "api" || typeof repo.updateContainerContents !== "function") {
+    return res.status(400).json({ error: "Container-Bearbeitung ist im aktuellen Modus nicht verfügbar" });
+  }
+
+  const item = await repo.updateContainerContents(itemId, itemIds);
   if (!item) return res.status(404).json({ error: "Item not found" });
   res.json(item);
 }));

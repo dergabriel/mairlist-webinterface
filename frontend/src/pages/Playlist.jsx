@@ -9,7 +9,7 @@ import {
   getPlaylistsByDate, getPlaylistById, reorderPlaylist,
   insertPlaylistItem, removePlaylistItem, searchItems,
   getTree, getItems, getStorages, getArtists, getItemTypes, getAttributeKeys,
-  getFolderChildren,
+  getFolderChildren, getDashboard, updateContainerContents,
 } from "../lib/api";
 import { useAppData } from "../lib/AppDataContext";
 import { useAuth } from "../lib/AuthContext";
@@ -334,17 +334,210 @@ function ContextMenu({ x, y, onEdit, onDelete, onMoveUp, onMoveDown, onClose }) 
   );
 }
 
+// Only Hook-/AutoHookContainer content is editable in this step (see
+// docs/MAIRLISTDB-API.md's "Gegenüberstellung" — News-/Region-Container use
+// different, not-yet-supported write shapes). containerType carries the raw
+// Class string (HookContainer/AutoHookContainer/...), set by
+// mapApiItemToInternal / isContainerClass.
+const HOOK_CONTAINER_RE = /^(Hook|AutoHook)Container$/;
+
+function isHookContainerItem(item) {
+  return HOOK_CONTAINER_RE.test(item?.containerType || "");
+}
+
+// --- Container content editor (inline, inside an expanded container row) ---
+// Self-contained: its own drag&drop/search/save state, deliberately not
+// wired into the main playlist's drag&drop (PlaylistTable's dragPosition/
+// dragOverPosition) to avoid cross-talk between the two reorder contexts.
+
+function ContainerEditor({ containerItem, onSaved, onCancel }) {
+  const [rows, setRows] = useState(() => containerItem.subItems || []);
+  const [dragIndex, setDragIndex] = useState(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+  useEffect(() => {
+    if (!query.trim()) {
+      setResults([]);
+      return;
+    }
+    setSearching(true);
+    const handle = setTimeout(() => {
+      searchItems(query, ["title", "artist"])
+        .then(setResults)
+        .catch(() => setResults([]))
+        .finally(() => setSearching(false));
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [query]);
+
+  const removeRow = (index) => {
+    setRows((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const addItem = (item) => {
+    setRows((prev) => [...prev, item]);
+    setQuery("");
+    setResults([]);
+  };
+
+  const handleDrop = (targetIndex) => {
+    if (dragIndex == null || dragIndex === targetIndex) {
+      setDragIndex(null);
+      setDragOverIndex(null);
+      return;
+    }
+    setRows((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(dragIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await updateContainerContents(
+        containerItem.internalId,
+        rows.map((r) => r.internalId)
+      );
+      onSaved(updated);
+    } catch (err) {
+      setSaveError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <tr className="border-b border-zinc-800/60 bg-zinc-900/30">
+      <td />
+      <td colSpan={8} className="py-3 pl-10 pr-4">
+        <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3">
+          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+            Container-Inhalt bearbeiten
+          </div>
+
+          {rows.length === 0 && (
+            <div className="py-2 text-xs italic text-zinc-600">Keine Elemente</div>
+          )}
+
+          <ul className="divide-y divide-zinc-800/60">
+            {rows.map((row, index) => (
+              <li
+                key={`${row.internalId}-${index}`}
+                draggable
+                onDragStart={() => setDragIndex(index)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOverIndex(index);
+                }}
+                onDragLeave={() => setDragOverIndex((i) => (i === index ? null : i))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  handleDrop(index);
+                }}
+                onDragEnd={() => {
+                  setDragIndex(null);
+                  setDragOverIndex(null);
+                }}
+                className={`flex items-center gap-2 py-1.5 text-sm ${
+                  dragOverIndex === index ? "border-t-2 border-t-orange-500" : ""
+                }`}
+              >
+                <GripVertical size={13} className="shrink-0 cursor-grab text-zinc-600 active:cursor-grabbing" />
+                <span className="w-10 shrink-0 text-zinc-600">{row.internalId ?? "-"}</span>
+                <TypeIcon type={row.type} />
+                <span className="flex-1 truncate text-zinc-200">{row.title || "-"}</span>
+                <span className="text-zinc-500">{row.artist || ""}</span>
+                <span className="w-12 shrink-0 text-right text-zinc-500">{formatLength(row.duration || 0)}</span>
+                <button
+                  onClick={() => removeRow(index)}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
+                  title="Entfernen"
+                >
+                  <X size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          <div className="relative mt-3">
+            <div className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5">
+              <Search size={13} className="shrink-0 text-zinc-500" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Element suchen und hinzufügen…"
+                className="flex-1 bg-transparent text-sm text-zinc-200 placeholder-zinc-600 outline-none"
+              />
+            </div>
+            {query.trim() && (
+              <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-48 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-900 shadow-xl">
+                {searching && (
+                  <div className="px-3 py-2 text-xs text-zinc-600">Suche…</div>
+                )}
+                {!searching && results.length === 0 && (
+                  <div className="px-3 py-2 text-xs text-zinc-600">Keine Treffer</div>
+                )}
+                {!searching && results.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => addItem(item)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+                  >
+                    <TypeIcon type={item.type} />
+                    <span className="flex-1 truncate">{item.title}</span>
+                    <span className="text-xs text-zinc-500">{item.artist}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-3 flex items-center justify-end gap-2">
+            {saveError && <span className="mr-auto text-xs text-red-500">Speichern fehlgeschlagen: {saveError}</span>}
+            <button
+              onClick={onCancel}
+              disabled={saving}
+              className="rounded-md border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
+            >
+              Abbrechen
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
+            >
+              {saving ? "Speichert…" : "Speichern"}
+            </button>
+          </div>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 // --- Playlist table (main area) ---
 
 function PlaylistTable({
   playlist, loading, error,
   selectedPositions, onSelect, onEditItem,
-  onReorder, onDelete,
+  onReorder, onDelete, isApiMode, onContainerSaved,
 }) {
   const [dragPosition, setDragPosition] = useState(null);
   const [dragOverPosition, setDragOverPosition] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
   const [expandedPositions, setExpandedPositions] = useState(() => new Set());
+  const [editingPosition, setEditingPosition] = useState(null);
 
   const toggleExpanded = (position) => {
     setExpandedPositions((prev) => {
@@ -439,6 +632,8 @@ function PlaylistTable({
               const isContainer = isContainerItem(entry.item);
               const isExpanded = isContainer && expandedPositions.has(entry.position);
               const subItems = entry.item?.subItems || [];
+              const isEditable = isApiMode && isHookContainerItem(entry.item);
+              const isEditing = isEditable && editingPosition === entry.position;
               return (
                 <Fragment key={entry.position}>
                 <tr
@@ -521,14 +716,37 @@ function PlaylistTable({
                     {entry.item ? formatLength(entry.item.duration) : "-"}
                   </td>
                 </tr>
-                {isExpanded && subItems.length === 0 && (
+                {isExpanded && isEditing && (
+                  <ContainerEditor
+                    containerItem={entry.item}
+                    onCancel={() => setEditingPosition(null)}
+                    onSaved={(updatedItem) => {
+                      setEditingPosition(null);
+                      onContainerSaved?.(entry.position, updatedItem);
+                    }}
+                  />
+                )}
+                {isExpanded && !isEditing && isEditable && (
+                  <tr className="border-b border-zinc-800/60 bg-zinc-900/20">
+                    <td colSpan={9} className="py-1.5 pl-12 pr-3">
+                      <button
+                        onClick={() => setEditingPosition(entry.position)}
+                        className="flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+                      >
+                        <Pencil size={12} />
+                        <span>Bearbeiten</span>
+                      </button>
+                    </td>
+                  </tr>
+                )}
+                {isExpanded && !isEditing && subItems.length === 0 && (
                   <tr className="border-b border-zinc-800/60 bg-zinc-900/20">
                     <td colSpan={9} className="py-2 pl-12 pr-3 text-xs italic text-zinc-600">
                       Keine Sub-Elemente
                     </td>
                   </tr>
                 )}
-                {isExpanded && subItems.map((subItem, subIndex) => (
+                {isExpanded && !isEditing && subItems.map((subItem, subIndex) => (
                   <tr
                     key={`${entry.position}-${subIndex}`}
                     className="border-b border-zinc-800/60 bg-zinc-900/20 text-zinc-400"
@@ -816,6 +1034,13 @@ export default function Playlist({ onEditItem, onNavigate }) {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  const [isApiMode, setIsApiMode] = useState(false);
+
+  useEffect(() => {
+    getDashboard()
+      .then((data) => setIsApiMode(data?.system?.dataSource === "api"))
+      .catch(() => setIsApiMode(false));
+  }, []);
 
   const hoursWithData = useMemo(
     () => new Set(hourSummaries.filter((s) => s.hasEntries).map((s) => s.hour)),
@@ -946,6 +1171,20 @@ export default function Playlist({ onEditItem, onNavigate }) {
     }
   };
 
+  // After a container's contents are saved, patch just that entry's item in
+  // place — cheaper than reloading the whole hour, and consistent with how
+  // other mutations here (reorder/insert/remove) already return the updated
+  // playlist without a full reload.
+  const handleContainerSaved = (position, updatedItem) => {
+    if (!playlist) return;
+    setPlaylist((prev) => ({
+      ...prev,
+      entries: prev.entries.map((e) =>
+        e.position === position ? { ...e, item: updatedItem } : e
+      ),
+    }));
+  };
+
   const handleInsertButton = () => {
     document.getElementById("playlist-search-input")?.focus();
   };
@@ -1016,6 +1255,8 @@ export default function Playlist({ onEditItem, onNavigate }) {
               onEditItem={onEditItem}
               onReorder={applyReorder}
               onDelete={handleDelete}
+              isApiMode={isApiMode}
+              onContainerSaved={handleContainerSaved}
             />
 
             <div className="h-[220px] shrink-0 border-t border-zinc-800 bg-zinc-900/30">

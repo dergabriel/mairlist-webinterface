@@ -323,6 +323,25 @@ Playlist-PUT schickt er `BaseTime` statt `VersionInfo` — `VersionInfo`
 ist beim Schreiben also offenbar optional. Details in
 [`docs/MAIRLISTDB-API.md`](MAIRLISTDB-API.md).
 
+**Container-Schreibformate jetzt bekannt (dritter Wireshark-Mitschnitt)
+— nur dokumentiert, noch nicht implementiert:** Wie sich alle vier
+Container-Arten (Hook-Container, automatischer Hook-Container,
+Regionen-Container, Nachrichten-Container) über die normalen
+`POST`/`PUT /api/v1/items...`-Endpunkte anlegen und befüllen lassen, ist
+jetzt vollständig verifiziert (Details:
+[`docs/MAIRLISTDB-API.md` – Container erstellen und
+bearbeiten](MAIRLISTDB-API.md#container-erstellen-und-bearbeiten--verifiziert)).
+Das ist die Grundlage für eine mögliche künftige Container-
+Bearbeitungsfunktion im Frontend (Playlist zeigt Container-Inhalte
+bisher nur schreibgeschützt an, siehe "Container-Items" oben) — bewusst
+noch nicht umgesetzt. Zwei Fallstricke dabei: der Nachrichten-Container
+hat `Type:"News"` statt `Type:"Container"` auch beim Schreiben (nicht
+nur beim Lesen), und Hook-Container (`Playlist.Items`) und
+Nachrichten-Container (`Items` mit `Role`-Feld) verwenden zwei
+unterschiedliche, leicht verwechselbare Inhalts-Feldnamen. Offen bleibt
+der eigentliche Nachrichteninhalt (nicht die Opener/Bumper/Closer-
+Verpackung) sowie dass externe URLs als `Filename` nicht funktionieren.
+
 **Bewusst noch nicht implementiert** (werfen einen klaren "im
 api-Modus noch nicht verfügbar"-Fehler statt zu crashen oder falsche
 Daten zu liefern):

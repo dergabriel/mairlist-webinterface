@@ -594,6 +594,146 @@ zurückgegeben und der Fehler geloggt.
 
 - **Response bei Erfolg:** `null`, Status 200.
 
+## Container erstellen und bearbeiten – VERIFIZIERT
+
+Per Wireshark-Mitschnitt des echten mAirList-Clients entschlüsselt: alle
+vier Container-Arten (siehe "Container: eigenes Konzept" oben) lassen
+sich über die normalen Item-Endpunkte (`POST`/`PUT /api/v1/items...`)
+anlegen und befüllen — es gibt keine eigenen Container-Endpunkte. Der
+Trick liegt jeweils im `Class`-Feld und im gewählten Inhalts-Feldnamen.
+
+### Hook-Container erstellen
+
+```
+POST /api/v1/items
+$doc={"InnerFadeDuration":1,"Title":"Hook-Container","Type":"Container","Class":"HookContainer","Options":["NoLogging"]}
+```
+
+Response wie bei jedem `POST /items`: eine nackte ID als String, z. B.
+`"2664"`.
+
+### Automatischer Hook-Container erstellen
+
+```
+POST /api/v1/items
+$doc={"InnerFadeDuration":1,"Title":"Automatischer Hook-Container","Type":"Container","Class":"AutoHookContainer","Options":["NoLogging"]}
+```
+
+### Auto-Hook-Container-Marker (Platzhalter)
+
+```
+POST /api/v1/items
+$doc={"Title":"Automatischer Hook Container - Markierung","Type":"Dummy","Class":"AutoHookContainerMarker"}
+```
+
+Wird als Platzhalter in die Playlist eingefügt, an der Stelle, an der
+der automatische Container später mit echtem Inhalt befüllt wird.
+Selbst inhaltslos (kein `Items`/`Playlist`-Feld nötig).
+
+### Hook-Container-Inhalt setzen (PUT)
+
+```
+PUT /api/v1/items/<id>
+$doc={
+  "Comment": "TITEL1\nTITEL2\nTITEL3\n",
+  "Playlist": { "Items": [ {vollständiges Item-Objekt}, ... ] }
+}
+```
+
+- **`Comment`** ist eine Textzusammenfassung der enthaltenen Titel
+  (durch Zeilenumbruch getrennt), wird vom Client automatisch gepflegt.
+- ⚠️ Der eigentliche Inhalt liegt unter **`Playlist.Items`**, nicht
+  direkt unter `Items` (siehe Gegenüberstellung unten).
+
+### Regionen-Container erstellen/aktualisieren
+
+```
+POST /api/v1/items  bzw.  PUT /api/v1/items/<id>
+$doc={
+  "Duration": 14.627,
+  "Title": "Regionen-Container",
+  "Type": "Container",
+  "Class": "RegionContainer",
+  "Content": {
+    "1": { "Items": [ { "Playlist": {"Items":[...]}, "Class":"Container", "Type":"Container", "Duration":..., "ID":"{GUID}", "Title":"Container", "State":"Normal" } ] },
+    "2": { "Items": [ ... ] }
+  }
+}
+```
+
+⚠️ `Content` ist ein **Objekt** mit numerischen String-Keys (`"1"`,
+`"2"`, …) pro Region, **kein Array**. Zwei Verschachtelungsebenen:
+`Content["1"].Items[0].Playlist.Items[...]` enthält die tatsächlichen
+Titel für Region 1. Regionsnamen selbst kommen aus der
+Server-Konfiguration, nicht aus diesem Feld.
+
+### Nachrichten-Container erstellen (leer)
+
+```
+POST /api/v1/items
+$doc={"Items":[],"Title":"Nachrichten","Type":"News","Class":"NewsContainer"}
+```
+
+> ⚠️ **Dieselbe Falle wie beim Lesen (siehe "Container: eigenes
+> Konzept" oben), hier beim Anlegen/Schreiben:** `Type` ist `"News"`,
+> **NICHT** `"Container"` — der Nachrichten-Container tarnt sich beim
+> Schreiben genauso als normale Nachrichtenmeldung wie beim Lesen. Nur
+> `Class: "NewsContainer"` verrät den Container-Charakter. Wer per
+> `POST` einen Container anlegen will, darf sich also nicht von
+> `Type: "Container"` leiten lassen, sondern muss `Class` explizit
+> setzen.
+
+### Nachrichten-Container-Verpackung setzen (PUT)
+
+```
+PUT /api/v1/items/<id>
+$doc={
+  "Duration": 22.959,
+  "Items": [
+    { "Role": "Opener",   "Item": {vollständiges Item-Objekt} },
+    { "Role": "MusicBed", "Item": {Type:"Bed", Timing:"Excluded", ...} },
+    { "Role": "Bumper",   "Item": {Type:"Jingle", ...} },
+    { "Role": "Closer",   "Item": {vollständiges Item-Objekt} }
+  ]
+}
+```
+
+⚠️ Hier heißt das Feld **`Items`** (anders als beim Hook-Container!),
+und jeder Eintrag hat ein **`Role`-Feld** statt einer reinen Liste. Das
+ist die Verpackung (Opener/Musikbett/Trenner/Closer), **NICHT** der
+eigentliche Nachrichteninhalt. Der Nachrichteninhalt selbst (Inhalt-Tab
+im UI, die tatsächlichen Meldungen) wurde in diesem Mitschnitt nicht
+befüllt — noch offen, siehe "Offene Punkte" unten.
+
+#### Gegenüberstellung: zwei verschiedene Inhalts-Feldnamen — leicht zu verwechseln
+
+| Container-Art | Feldname für Inhalt | Struktur je Eintrag |
+|---|---|---|
+| Hook-Container | `Playlist.Items` | vollständiges Item-Objekt, reine Liste |
+| Nachrichten-Container | `Items` | `{ "Role": "...", "Item": {...} }` — Rolle + Item, keine reine Liste |
+
+Beide Container-Arten haben zwar ein Top-Level-Feld, das mit "Items" zu
+tun hat, meinen damit aber strukturell komplett unterschiedliche Dinge.
+`Playlist.Items` beim Hook-Container ist eine flache Liste von Items;
+`Items` beim Nachrichten-Container ist eine Liste von
+Rolle/Item-Paaren für die Verpackung. Code, der einen Container befüllt,
+darf diese beiden Formate nicht verwechseln oder generisch behandeln.
+
+### Container löschen
+
+```
+DELETE /api/v1/items/<id>?station=1
+```
+
+Kein Unterschied zu normalen Items (siehe DELETE oben).
+
+### Randnotiz: externe URL als Filename funktioniert nicht
+
+Ein Versuch, ein Item mit einer externen HTTP-URL (z. B. `laut.fm`) als
+`Filename` anzulegen, schlug fehl (`"Invalid filename"`). `Class:"File"`
+erwartet einen lokalen Storage-Pfad, keine beliebige URL — offener
+Punkt, falls Streaming-Quellen künftig relevant werden.
+
 ## Storages / Audio-Dateien
 
 | Methode | Pfad | Beschreibung |
@@ -1005,6 +1145,18 @@ aus tatsächlich beobachteten Item-Werten.
 
 ## Offene Punkte / noch zu verifizieren
 
+- [x] **Container-Schreibformate** (Hook-Container, automatischer
+      Hook-Container, Regionen-Container, Nachrichten-Container-
+      Verpackung) – VERIFIZIERT per Wireshark, siehe "Container
+      erstellen und bearbeiten" oben
+- [ ] **Nachrichten-Container-Inhalt** (die tatsächlichen Meldungen im
+      Inhalt-Tab des UI, nicht die Opener/MusicBed/Bumper/Closer-
+      Verpackung) – im Mitschnitt nicht befüllt, Format unbekannt
+- [ ] **Externe URL als `Filename`** (z. B. Streaming-Quelle wie
+      `laut.fm`) – schlägt fehl (`"Invalid filename"`), `Class:"File"`
+      erwartet einen lokalen Storage-Pfad. Falls Streaming-Quellen
+      künftig relevant werden, muss geklärt werden, ob ein anderer
+      `Type`/`Class`-Wert dafür vorgesehen ist
 - [x] **PUT-Body für `/api/v1/items/<id>`** – verifiziert, siehe oben
 - [x] **Such-Endpunkt für Items** – VERIFIZIERT per Wireshark:
       `GET /api/v1/items?search=<begriff>&fields=All&limit=50&station=1`,

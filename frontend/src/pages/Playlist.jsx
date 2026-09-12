@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { Fragment, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   ListMusic,
-  ChevronLeft, ChevronRight, RefreshCw, Pencil, AlertTriangle, Save, Sliders,
+  ChevronLeft, ChevronRight, ChevronDown, RefreshCw, Pencil, AlertTriangle, Save, Sliders,
   Plus, Trash2, CalendarDays, GripVertical, Search, Music, Megaphone, Box, X,
   ArrowUp, ArrowDown, CircleDot, Wand2, Mic, Download, Upload, Layers,
 } from "lucide-react";
@@ -344,6 +344,16 @@ function PlaylistTable({
   const [dragPosition, setDragPosition] = useState(null);
   const [dragOverPosition, setDragOverPosition] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
+  const [expandedPositions, setExpandedPositions] = useState(() => new Set());
+
+  const toggleExpanded = (position) => {
+    setExpandedPositions((prev) => {
+      const next = new Set(prev);
+      if (next.has(position)) next.delete(position);
+      else next.add(position);
+      return next;
+    });
+  };
 
   const totalDuration = useMemo(() => {
     if (!playlist) return 0;
@@ -426,9 +436,12 @@ function PlaylistTable({
             {playlist.entries.map((entry) => {
               const isSelected = selectedPositions.has(entry.position);
               const isDragOver = dragOverPosition === entry.position;
+              const isContainer = isContainerItem(entry.item);
+              const isExpanded = isContainer && expandedPositions.has(entry.position);
+              const subItems = entry.item?.subItems || [];
               return (
+                <Fragment key={entry.position}>
                 <tr
-                  key={entry.position}
                   onClick={(e) => onSelect(entry.position, e)}
                   onDoubleClick={() =>
                     entry.item &&
@@ -461,7 +474,23 @@ function PlaylistTable({
                   } ${isDragOver ? "border-t-2 border-t-orange-500" : ""}`}
                 >
                   <td className="px-2 py-2.5 text-zinc-600">
-                    <GripVertical size={14} className="cursor-grab active:cursor-grabbing" />
+                    <div className="flex items-center gap-1">
+                      {isContainer ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleExpanded(entry.position);
+                          }}
+                          className="flex h-4 w-4 shrink-0 items-center justify-center text-zinc-500 hover:text-zinc-200"
+                          title={isExpanded ? "Einklappen" : "Aufklappen"}
+                        >
+                          {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                        </button>
+                      ) : (
+                        <span className="w-4 shrink-0" />
+                      )}
+                      <GripVertical size={14} className="cursor-grab active:cursor-grabbing" />
+                    </div>
                   </td>
                   <td className="px-2 py-2.5 text-zinc-600">{entry.position}</td>
                   <td className="px-3 py-2.5 text-zinc-500">{entry.scheduledStart}</td>
@@ -492,6 +521,39 @@ function PlaylistTable({
                     {entry.item ? formatLength(entry.item.duration) : "-"}
                   </td>
                 </tr>
+                {isExpanded && subItems.length === 0 && (
+                  <tr className="border-b border-zinc-800/60 bg-zinc-900/20">
+                    <td colSpan={9} className="py-2 pl-12 pr-3 text-xs italic text-zinc-600">
+                      Keine Sub-Elemente
+                    </td>
+                  </tr>
+                )}
+                {isExpanded && subItems.map((subItem, subIndex) => (
+                  <tr
+                    key={`${entry.position}-${subIndex}`}
+                    className="border-b border-zinc-800/60 bg-zinc-900/20 text-zinc-400"
+                  >
+                    <td className="px-2 py-2 text-zinc-700" />
+                    <td className="px-2 py-2" />
+                    <td className="px-3 py-2 text-zinc-600">-</td>
+                    <td className="px-3 py-2">{subItem.internalId ?? "-"}</td>
+                    <td className="px-3 py-2">{subItem.externalId ?? "-"}</td>
+                    <td className="border-l-2 border-l-zinc-700 py-2 pl-6 pr-3">
+                      <span className="inline-flex items-center gap-1.5">
+                        {isContainerItem(subItem) && (
+                          <Layers size={12} className="shrink-0 text-violet-400" />
+                        )}
+                        {subItem.title || "–"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">{subItem.artist || "-"}</td>
+                    <td className="px-3 py-2">
+                      <TypeIcon type={subItem.type} />
+                    </td>
+                    <td className="px-3 py-2">{formatLength(subItem.duration)}</td>
+                  </tr>
+                ))}
+                </Fragment>
               );
             })}
             {playlist.entries.length === 0 && (

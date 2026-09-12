@@ -52,6 +52,14 @@ function mapApiItemToInternal(apiItem, folderId = null) {
   // "undefined"/NaN that String()/Number() would otherwise produce.
   const hasDatabaseId = apiItem.DatabaseID !== undefined && apiItem.DatabaseID !== null;
 
+  // Container items (Class ending in Container/ContainerMarker) carry their
+  // contained elements in their own Items[] — mapped one level deep (a
+  // sub-item's own sub-items, if any, are dropped) so the playlist can show
+  // what's inside a container without recursing indefinitely.
+  const subItems = Array.isArray(apiItem.Items)
+    ? apiItem.Items.map((subItem) => mapApiItemToInternal(subItem.Item ?? subItem, folderId)).filter(Boolean)
+    : [];
+
   return {
     id: hasDatabaseId ? String(apiItem.DatabaseID) : null,
     internalId: hasDatabaseId ? Number(apiItem.DatabaseID) : null,
@@ -78,6 +86,7 @@ function mapApiItemToInternal(apiItem, folderId = null) {
       segueMode: "normal",
     },
     attributes: apiItem.Attributes || {},
+    subItems,
     updatedAt: new Date().toISOString(),
     playHistory: [],
   };

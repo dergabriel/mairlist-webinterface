@@ -59,8 +59,9 @@ async function getPlaylistsByDate(date) {
 // Container items (Class: "Container", e.g. ad blocks) are mapped as a
 // single playlist entry via mapApiItemToInternal (which already sets
 // containerType from Class) — their nested Items list isn't flattened
-// into separate entries. See docs/FEATURES.md: nested Container
-// sub-items aren't editable/expandable yet in api-mode.
+// into separate entries, but mapApiItemToInternal does carry it along as
+// item.subItems (one level deep) for the frontend to render expanded.
+// See docs/FEATURES.md.
 //
 // Entries carry no per-slot start time as a rule — only some (e.g.
 // Class: "Dummy" hour-start placeholders) have an explicit FixTime.

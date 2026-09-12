@@ -152,15 +152,17 @@ internen Item-Objekt gebaut, alles andere läuft unverändert durch.
 round-trip-fähige Pro-Slot-Feld); andere Override-Arten haben kein
 bekanntes Zielfeld in der API und werden verworfen statt geraten.
 
-**Einschränkung — Container-Items (Werbeblöcke) in `getPlaylistById`:**
-Playlist-Einträge vom API-Typ `Class: "Container"` (z. B. Werbeblöcke
-mit verschachtelten Items, siehe `docs/MAIRLISTDB-API.md`) werden als
-ein einzelner Playlist-Eintrag angezeigt; ihre verschachtelte
-`Items`-Liste wird von `apiRepository.js` (noch) nicht aufgeklappt —
-Sub-Items eines Werbeblocks sind im api-Modus also sichtbar als ein
-Container-Eintrag, aber nicht einzeln aufklapp- oder bearbeitbar. Ein
-Container ohne eigene Sub-Items führt zu keinem Fehler, sondern zeigt
-schlicht keine Sub-Items an.
+**Container-Items (Werbeblöcke) in `getPlaylistById`:** Playlist-Einträge
+vom API-Typ `Class: "Container"` (z. B. Werbeblöcke mit verschachtelten
+Items, siehe `docs/MAIRLISTDB-API.md`) werden weiterhin als ein
+einzelner Playlist-Eintrag geführt, tragen aber jetzt zusätzlich ihre
+verschachtelte `Items`-Liste (eine Ebene tief) als `item.subItems` mit
+— `mapApiItemToInternal` in `apiItems.js` mappt sie rekursiv. Im
+Frontend (`Playlist.jsx`) lässt sich eine Container-Zeile über einen
+Aufklapp-Pfeil öffnen und zeigt die Sub-Items dann als eingerückte,
+schreibgeschützte Zeilen darunter an — sie sind nicht einzeln
+editierbar oder verschiebbar. Ein Container ohne eigene Sub-Items zeigt
+beim Aufklappen einen Hinweistext statt eines Fehlers.
 
 **Bewusst leer statt Fehler** (`getLogs`, `getRecentLogs`): Diese
 Funktionen liefern im api-Modus ein leeres Array statt eines Fehlers.

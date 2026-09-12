@@ -528,10 +528,18 @@ function ContainerEditor({ containerItem, onSaved, onCancel }) {
 
 // --- Playlist table (main area) ---
 
+// Drag payload MIME type used to recognize an "insert from the library
+// panel" drop (as opposed to an internal row-reorder drag, which carries no
+// dataTransfer payload at all — see the row's own onDragStart below). Kept
+// as a real dataTransfer type (not a side-channel ref) so the browser shows
+// the correct drop-allowed cursor and onDragOver can check
+// e.dataTransfer.types without needing the dragged item's data yet.
+const LIBRARY_ITEM_DRAG_TYPE = "application/x-mairlist-item-id";
+
 function PlaylistTable({
   playlist, loading, error,
   selectedPositions, onSelect, onEditItem,
-  onReorder, onDelete, isApiMode, onContainerSaved,
+  onReorder, onDelete, isApiMode, onContainerSaved, onInsertItem,
 }) {
   const [dragPosition, setDragPosition] = useState(null);
   const [dragOverPosition, setDragOverPosition] = useState(null);
@@ -564,7 +572,26 @@ function PlaylistTable({
     onReorder(next);
   };
 
-  const handleDrop = (targetPosition) => {
+  const handleDrop = (targetPosition, e) => {
+    // A drop carrying the library-item MIME type is an "insert from the
+    // library panel below" drop, not an internal row reorder — dragPosition
+    // stays null for that case (its onDragStart never fires; the drag
+    // originates in LibraryPanel instead). Handled as its own branch so it
+    // can't be swallowed by the `dragPosition == null` bail-out below.
+    if (e?.dataTransfer?.types?.includes(LIBRARY_ITEM_DRAG_TYPE)) {
+      setDragOverPosition(null);
+      const raw = e.dataTransfer.getData(LIBRARY_ITEM_DRAG_TYPE);
+      if (raw) {
+        try {
+          const item = JSON.parse(raw);
+          onInsertItem?.(item, targetPosition);
+        } catch {
+          // malformed payload — ignore, nothing to insert
+        }
+      }
+      return;
+    }
+
     if (dragPosition == null || dragPosition === targetPosition || !playlist) {
       setDragPosition(null);
       setDragOverPosition(null);
@@ -656,7 +683,7 @@ function PlaylistTable({
                   onDragLeave={() => setDragOverPosition((p) => (p === entry.position ? null : p))}
                   onDrop={(e) => {
                     e.preventDefault();
-                    handleDrop(entry.position);
+                    handleDrop(entry.position, e);
                   }}
                   onDragEnd={() => {
                     setDragPosition(null);
@@ -775,7 +802,15 @@ function PlaylistTable({
               );
             })}
             {playlist.entries.length === 0 && (
-              <tr>
+              <tr
+                onDragOver={(e) => {
+                  if (e.dataTransfer.types.includes(LIBRARY_ITEM_DRAG_TYPE)) e.preventDefault();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  handleDrop(1, e);
+                }}
+              >
                 <td colSpan={9} className="px-4 py-16 text-center text-sm text-zinc-600">
                   Keine Einträge in dieser Stunde
                 </td>
@@ -968,15 +1003,31 @@ function LibraryPanel({ onInsert, insertDisabled }) {
               {!searchLoading && !searchError && !treeLoading && !folderItemsLoading && visibleItems.map((item) => (
                 <tr
                   key={item.id}
+                  draggable={!insertDisabled}
+                  onDragStart={(e) => {
+                    if (insertDisabled) return;
+                    // Full item JSON (not just the id) so the drop target
+                    // (PlaylistTable) can insert it without an extra lookup
+                    // round-trip — see LIBRARY_ITEM_DRAG_TYPE.
+                    e.dataTransfer.setData(LIBRARY_ITEM_DRAG_TYPE, JSON.stringify(item));
+                    e.dataTransfer.effectAllowed = "copy";
+                  }}
                   onDoubleClick={() => !insertDisabled && onInsert(item)}
-                  title={insertDisabled ? undefined : "Doppelklick zum Einfügen"}
+                  title={insertDisabled ? undefined : "Doppelklick oder Ziehen zum Einfügen"}
                   className={`border-b border-zinc-800/60 transition-colors ${
                     insertDisabled ? "text-zinc-600" : "cursor-pointer hover:bg-zinc-900/50"
                   }`}
                 >
                   <td className="px-4 py-2 text-zinc-500">{item.internalId}</td>
                   <td className="px-4 py-2 text-zinc-600">{item.externalId ?? "-"}</td>
-                  <td className="px-4 py-2 text-zinc-100">{item.title}</td>
+                  <td className="px-4 py-2 text-zinc-100">
+                    <span className="inline-flex items-center gap-1.5">
+                      {isContainerItem(item) && (
+                        <Layers size={13} className="shrink-0 text-violet-400" title="Container" />
+                      )}
+                      {item.title}
+                    </span>
+                  </td>
                   <td className="px-4 py-2 text-zinc-500">{item.artist || "-"}</td>
                   <td className="px-4 py-2">
                     <TypeIcon type={item.type} />
@@ -1158,12 +1209,16 @@ export default function Playlist({ onEditItem, onNavigate }) {
     onNavigate?.("mixeditor", { items, playlistId: playlist.id, hour: activeHour });
   };
 
-  const handleInsertResult = async (item) => {
+  // dropPosition comes from a library-panel drag&drop onto a specific
+  // playlist row (see PlaylistTable's onInsertItem); double-click insertion
+  // (LibraryPanel's onInsert) omits it and falls back to the current
+  // selection, as before.
+  const handleInsertResult = async (item, dropPosition) => {
     if (!playlist) return;
     try {
       const updated = await insertPlaylistItem(playlist.id, {
         itemId: item.id,
-        afterPosition: selectedPosition ?? playlist.entries.length,
+        afterPosition: dropPosition ?? selectedPosition ?? playlist.entries.length,
       });
       setPlaylist(updated);
     } catch (err) {
@@ -1257,6 +1312,7 @@ export default function Playlist({ onEditItem, onNavigate }) {
               onDelete={handleDelete}
               isApiMode={isApiMode}
               onContainerSaved={handleContainerSaved}
+              onInsertItem={handleInsertResult}
             />
 
             <div className="h-[220px] shrink-0 border-t border-zinc-800 bg-zinc-900/30">

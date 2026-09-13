@@ -3,7 +3,7 @@ import {
   Database, Folder, FolderOpen, ChevronDown,
   RefreshCw, Plus, Search, Pencil, Trash2, ArrowUpDown,
   AlertTriangle, X, Upload, HardDrive, Settings2,
-  FolderPlus, FolderInput, Users, Tag,
+  FolderPlus, FolderInput, Users, Tag, Layers,
 } from "lucide-react";
 import {
   getTree, getItems, getStorages, createItem, deleteItem, uploadFile,
@@ -18,6 +18,7 @@ import {
   findFolder, TreeRow, ListSection, AttributesSection,
 } from "../components/treeUtils";
 import Sidebar from "../components/Sidebar";
+import { isContainerItem, containerKindLabel } from "../lib/itemRowStyle";
 
 // --- Helpers ---
 
@@ -1533,12 +1534,20 @@ export default function MairListDB({ onEditItem, onNavigate }) {
                   </td>
                   <td className="px-4 py-3 text-zinc-500">{item.id}</td>
                   <td className="px-4 py-3">
-                    <span className="text-zinc-100">{item.title}</span>
+                    <span className="inline-flex items-center gap-1.5">
+                      {isContainerItem(item) && (
+                        <Layers
+                          size={13}
+                          className="shrink-0 text-violet-400"
+                          title="Container (enthält weiteren Inhalt)"
+                        />
+                      )}
+                      <span className="text-zinc-100">{item.title}</span>
+                    </span>
                     {item.artist && <span className="text-zinc-500">{"  ·  " + item.artist}</span>}
                   </td>
                   <td className="px-4 py-3 text-zinc-400">
-                    {capitalize(item.type)}
-                    {item.containerType && <span className="text-zinc-600">{` (${capitalize(item.containerType)})`}</span>}
+                    {isContainerItem(item) ? containerKindLabel(item) : capitalize(item.type)}
                   </td>
                   <td className="px-4 py-3 text-zinc-400">{formatLength(item.duration)}</td>
                   <td className="px-4 py-3 text-zinc-500">{formatDate(item.updatedAt)}</td>

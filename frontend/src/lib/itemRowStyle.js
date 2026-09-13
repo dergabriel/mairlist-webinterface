@@ -17,6 +17,19 @@ export function isContainerItem(item) {
   return (item.type || "").toLowerCase() === "container";
 }
 
+// Speaking label for a container's kind, derived from containerType (the
+// raw Class string, e.g. HookContainer/AutoHookContainer/RegionContainer/
+// NewsContainer/Container) — never from `type`, which lies for disguised
+// containers (a NewsContainer reports type "news").
+export function containerKindLabel(item) {
+  const cls = (item?.containerType || "").toLowerCase();
+  if (cls.includes("autohook")) return "Auto-Hook-Container";
+  if (cls.includes("hook")) return "Hook-Container";
+  if (cls.includes("region")) return "Regionen-Container";
+  if (cls.includes("news")) return "Nachrichten-Container";
+  return "Container";
+}
+
 // Background applied to a container row, keyed by its containerType where
 // that hints at a familiar type family (news/regio => amber, like News),
 // falling back to a generic container tint otherwise.

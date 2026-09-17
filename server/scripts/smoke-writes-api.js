@@ -615,6 +615,52 @@ async function main() {
     }
   });
 
+  // ---- uploadFile: upload a tiny throwaway file into a throwaway folder,
+  // verify the created item lands in that folder, then clean both up. ----
+  //
+  // The storage to upload into is picked from getStorages() (first one
+  // found) rather than hardcoded, since storage IDs aren't stable across
+  // installations. No real audio content needed — the server accepts
+  // whatever bytes are sent under the file part; a minimal buffer is
+  // enough to exercise the multipart upload path and item creation.
+
+  await run("uploadFile (create in folder, verify, clean up)", async () => {
+    const storages = await repo.getStorages();
+    const storage = Array.isArray(storages) ? storages[0] : null;
+    if (!storage) throw new Error("no storage found via getStorages() — cannot test uploadFile");
+
+    const folderName = `ZZZ-SmokeTest-${Date.now()}-upload`;
+    let folder = null;
+    let uploaded = null;
+
+    try {
+      folder = await repo.createFolder(folderName, null);
+      check("createFolder (upload target) returns a folder with an ID", !!folder && folder.id != null);
+
+      const buffer = Buffer.from("ZZZ-SmokeTest-Upload-Placeholder");
+      uploaded = await repo.uploadFile(storage.id, buffer, "ZZZ-SmokeTest-Upload.mp3", "audio/mpeg", folder.id);
+      check("uploadFile returns an item with an ID", !!uploaded && uploaded.id != null, JSON.stringify(uploaded));
+
+      const inFolder = await repo.getItemsByFolder(folder.id);
+      check(
+        "uploaded item is findable via getItemsByFolder",
+        Array.isArray(inFolder) && inFolder.some((i) => String(i.id) === String(uploaded && uploaded.id)),
+        `folder ${folder && folder.id} contains ids [${(inFolder || []).map((i) => i.id).join(", ")}]`
+      );
+    } finally {
+      if (uploaded) {
+        await repo.deleteItem(uploaded.id);
+        const afterDelete = await repo.getItemById(uploaded.id);
+        check("uploaded item deleted again", afterDelete === null, JSON.stringify(afterDelete));
+      }
+      if (folder) {
+        await repo.deleteFolder(folder.id);
+        const afterDelete = await repo.getFolderById(folder.id);
+        check("deleteFolder removes the upload test folder", !afterDelete, JSON.stringify(afterDelete));
+      }
+    }
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail > 0 ? 1 : 0);
 }

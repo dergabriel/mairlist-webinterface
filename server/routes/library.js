@@ -367,23 +367,33 @@ router.put("/items/:id/region-container-contents", requireScope("library.write")
 }));
 
 // POST /api/upload -> upload an audio file (multipart/form-data), copy it into
-// the chosen storage, and create a matching item. Fields: file, storageId, title?
+// the chosen storage, and create a matching item. Fields: file, storageId, title?,
+// folderId? (api-Modus: Ziel-Ordner wird direkt beim Upload mitgeschickt, siehe
+// apiItems.js's uploadFile; sqlite/mock kennen kein folderId-Feld hier und
+// ignorieren es weiterhin).
 router.post("/upload", requireScope("library.write"), (req, res, next) => {
-  upload.single("file")(req, res, (err) => {
+  upload.single("file")(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: "Keine Datei übermittelt" });
 
-    let storageId, title;
+    let storageId, title, folderId;
     try {
       const body = requireObject(req.body, "Formulardaten");
       storageId = requireId(body.storageId, "storageId");
       title = optionalText(body.title, "title");
+      folderId = optionalId(body.folderId, "folderId");
     } catch (e) {
       return res.status(400).json({ error: e.message });
     }
 
     try {
-      const item = repo.uploadFile(storageId, req.file.originalname, req.file.buffer, title);
+      // apiItems.js's uploadFile hat eine andere Signatur als
+      // sqlRepository.js/repository.js (Reihenfolge + folderId statt title,
+      // siehe dortige Kommentare) — deshalb hier verzweigt statt
+      // repo.uploadFile() einheitlich mit denselben Argumenten aufzurufen.
+      const item = process.env.DATA_SOURCE === "api"
+        ? await apiRepo.uploadFile(storageId, req.file.buffer, req.file.originalname, req.file.mimetype, folderId)
+        : repo.uploadFile(storageId, req.file.originalname, req.file.buffer, title);
       if (!item) return res.status(400).json({ error: "Unbekannter Storage" });
       res.status(201).json(item);
     } catch (e) { next(e); }

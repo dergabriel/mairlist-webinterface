@@ -6,7 +6,7 @@
 // distinct-value search — everything keyed off /api/v1/items and the
 // item shape itself.
 
-const { apiRequest, STATION, ApiNotFoundError, warnedOnce, warnOnceUnexpectedShape, notImplemented } = require("./apiClient");
+const { apiRequest, BASE_URL, STATION, REQUEST_TIMEOUT_MS, authHeader, ApiNotFoundError, ApiUnreachableError, warnedOnce, warnOnceUnexpectedShape, notImplemented } = require("./apiClient");
 const { CUE_TO_DB, DB_TO_CUE, typeToCode } = require("./shared");
 const { getFolders } = require("./apiFolders");
 const { resolveStorageFile } = require("./apiAudio");
@@ -584,7 +584,13 @@ async function updateRegionContainerContents(containerId, regionItemIds) {
 }
 
 async function getItemRestrictions(itemId) {
-  return apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/restrictions`);
+  const data = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/restrictions`);
+
+  return {
+    notBefore: data?.NotBefore || null,
+    notAfter: data?.NotAfter || null,
+    hours: (data?.Hours && data.Hours.length === 168) ? data.Hours : "1".repeat(168),
+  };
 }
 
 // Maps the API's history entries (PascalCase: Time, Duration, Studio,
@@ -804,8 +810,104 @@ function getItemTypes() {
   }));
 }
 
+// POST /api/v1/storages/<storageId>/files – VERIFIZIERT per gezieltem
+// Wireshark-Mitschnitt (siehe docs/MAIRLISTDB-API.md, "Datei hochladen").
+// Der multipart-Body braucht NEBEN dem file-Part vier Textfelder, sonst
+// antwortet der Server mit "Filename was not specified":
+//
+//   1. file      (Binärdaten, filename=<name> im Content-Disposition)
+//   2. filename  Zieldateiname als String
+//   3. folder    Ziel-Ordner-ID als String
+//   4. replaceID leer (kein Ersetzen einer bestehenden Datei)
+//   5. overwritePolicy "Rename" (Namenskonflikt -> umbenennen statt
+//      überschreiben oder abzulehnen)
+//
+// Reihenfolge der Parts entspricht dem Mitschnitt. Response bei Erfolg ist
+// bereits das vollständige neue Item-Objekt (kein separates POST /items
+// oder POST /folders/<id>/items nötig) — durch mapApiItemToInternal
+// geschickt und direkt zurückgegeben.
+//
+// Eigener fetch() statt apiRequest(): braucht einen multipart-Body mit
+// selbst gesetzter Content-Type-Boundary statt JSON, bleibt damit aber
+// (wie apiAudio.js's binäre Requests) außerhalb von apiRequest()s
+// Concurrency-Limiter/Retry-Logik — Uploads sind seltene, große Requests,
+// keine der Item/Ordner/Playlist-Anfragen, die die "database is locked"-
+// Kontention treffen.
+function buildMultipartBody(fileBuffer, originalFilename, mimeType, folderId) {
+  const boundary = `----WebinterfaceUpload${Date.now()}${Math.random().toString(16).slice(2)}`;
+  const CRLF = "\r\n";
+
+  const textField = (name, value) =>
+    `--${boundary}${CRLF}` +
+    `Content-Disposition: form-data; name="${name}"${CRLF}` +
+    `Content-Type: text/plain; charset="UTF-8"${CRLF}` +
+    `Content-Transfer-Encoding: binary${CRLF}${CRLF}` +
+    `${value}${CRLF}`;
+
+  const filePartHeader =
+    `--${boundary}${CRLF}` +
+    `Content-Disposition: form-data; name="file"; filename="${originalFilename}"${CRLF}` +
+    `Content-Type: ${mimeType || "application/octet-stream"}${CRLF}` +
+    `Content-Transfer-Encoding: binary${CRLF}${CRLF}`;
+
+  const parts = [
+    Buffer.from(filePartHeader, "utf8"),
+    fileBuffer,
+    Buffer.from(CRLF, "utf8"),
+    Buffer.from(textField("filename", originalFilename), "utf8"),
+    Buffer.from(textField("folder", String(folderId ?? "")), "utf8"),
+    Buffer.from(textField("replaceID", ""), "utf8"),
+    Buffer.from(textField("overwritePolicy", "Rename"), "utf8"),
+    Buffer.from(`--${boundary}--${CRLF}`, "utf8"),
+  ];
+
+  return { body: Buffer.concat(parts), boundary };
+}
+
+async function uploadFile(storageId, fileBuffer, originalFilename, mimeType, folderId) {
+  const { body, boundary } = buildMultipartBody(fileBuffer, originalFilename, mimeType, folderId);
+
+  const path = `/api/v1/storages/${encodeURIComponent(storageId)}/files`;
+  const url = `${BASE_URL}${path}?station=${encodeURIComponent(STATION)}`;
+
+  const controller = new AbortController();
+  // Audiodateien können mehrere MB/hundert MB groß sein (multer erlaubt bis
+  // 500 MB, siehe library.js) — der übliche REQUEST_TIMEOUT_MS (10s, für
+  // JSON-Requests gedacht) reicht dafür nicht. Eigener, deutlich höherer
+  // Timeout statt des apiClient-Standardwerts.
+  const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: authHeader(),
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    throw new ApiUnreachableError(BASE_URL, err);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (response.status === 404) {
+    throw new ApiNotFoundError(path);
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`mAirListDB Server: POST ${path} failed with ${response.status}${text ? `: ${text}` : ""}`);
+  }
+
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  return mapApiItemToInternal(data);
+}
+
 const getCuePoints = notImplemented("getCuePoints");
-const uploadFile = notImplemented("uploadFile");
 
 module.exports = {
   mapMarkersToInternal,

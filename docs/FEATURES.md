@@ -394,8 +394,19 @@ Daten zu liefern):
 |---|---|
 | Storage-Verwaltung: `createStorage`, `updateStorage`, `deleteStorage` | ⬜ |
 | `getAttributeDefinitions`, `getCuePoints` | ⬜ |
-| `uploadFile`, `resolveAudioPath` | ⬜ |
+| `resolveAudioPath` | ⬜ |
 | `getLogs`, `getRecentLogs` | ⬜ kein Logs-Endpunkt gefunden, liefern `[]` statt Fehler (siehe oben) |
+
+**`uploadFile` — VERIFIZIERT und implementiert:** `POST
+/api/v1/storages/<storageId>/files` braucht neben dem `file`-Part vier
+weitere Textfelder (`filename`, `folder`, `replaceID`, `overwritePolicy`),
+sonst antwortet der Server mit `"Filename was not specified"`. Verifiziert
+per zweitem, gezieltem Wireshark-Mitschnitt (Details:
+[`docs/MAIRLISTDB-API.md` – Datei
+hochladen](MAIRLISTDB-API.md#post-apiv1storagesstorageidfiles--datei-hochladen--verifiziert)).
+Die Response ist bereits das vollständige neue Item — legt Ordner-Zuordnung
+gleich mit an, kein separater `createItem()`/`assignItemsToFolder()`-Call
+nötig.
 
 ---
 

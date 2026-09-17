@@ -273,11 +273,11 @@ immer der komplette Body mit beiden Feldern gesendet.
 
 ### Item-Typen (`Type`-Feld) – VERIFIZIERT (24 von 27)
 
-Es gibt keinen `/api/v1/itemtypes`-Endpunkt (siehe "Offene Punkte"
-unten). Die folgende Zuordnung Client-Anzeige ↔ DB-Wert wurde per
-Live-Abfrage gegen die echte Datenbank ermittelt (Testitems je Typ im
-mAirList-Client angelegt, per `GET /api/v1/items/<id>` den `Type`-Wert
-ausgelesen):
+### Item-Typen (`Type`-Feld) – VERIFIZIERT (404 Not Found)
+
+Ein Endpunkt `GET /api/v1/itemtypes` **existiert nicht** (Server antwortet mit `HTTP 404 Not Found`). Es gibt somit keine serverseitige Liste der verfügbaren Item-Typen. Die Typzuordnung im Client basiert zwingend auf der nachfolgenden Zuordnungstabelle.
+
+Die Werte wurden per Live-Abfrage ermittelt (Testitems je Typ im mAirList-Client angelegt und per `GET /api/v1/items/<id>` ausgelesen):
 
 | Deutsch (Client-Anzeige) | DB-Wert (`Type`) |
 |---|---|
@@ -479,33 +479,30 @@ bewusst leerer Stub, weil kein Such-Endpunkt bekannt war.
 
 ### PUT `/api/v1/items/<id>` – VERIFIZIERT
 
-Der Body ist **exakt symmetrisch zum GET-Format**: das komplette
-Item-Objekt (wie von GET zurückgegeben) wird mit geänderten Werten per
-PUT zurückgeschickt. Verifiziert per PowerShell (`Invoke-RestMethod`):
-Item gelesen, `Markers.FadeOut` geändert, unverändertes JSON per PUT
-gesendet, anschließend per GET bestätigt dass der neue Wert
-tatsächlich persistiert wurde.
+Der Body ist **exakt symmetrisch zum GET-Format**: Das komplette Item-Objekt (wie von `GET /api/v1/items/<id>` geliefert) wird mit geänderten Werten per PUT zurückgeschickt. Verifiziert per PowerShell (`Invoke-RestMethod`): Item gelesen, `Markers.FadeOut` geändert, unverändertes JSON per PUT gesendet, anschließend per GET bestätigt, dass der neue Wert tatsächlich persistiert wurde.
 
-- **Content-Type:** `application/json` (funktioniert nachweislich). Der
-  **offizielle Client nutzt hier allerdings ebenfalls
-  `application/x-www-form-urlencoded` mit `$doc`** (Wireshark-Mitschnitt,
-  siehe "POST-Endpunkte (form-urlencoded)"). Der Server akzeptiert also
-  beides; `apiRepository.js`s `updateItem()` bleibt bei JSON.
-- **Response bei Erfolg:** `null` (leerer Body, Status 200)
-- Es reicht, das komplette vom GET erhaltene Objekt zu nehmen, einzelne
-  Felder zu ändern und unverändert zurückzuschicken – keine Teil-Updates
-  nötig, kein separates "Diff"-Format
+- **Content-Type:** `application/json` (funktioniert nachweislich für Eigenentwicklungen)[cite: 1].
+- **Client-Standard:** Der offizielle Client nutzt alternativ `application/x-www-form-urlencoded` mit `$doc` (Wireshark-Mitschnitt)[cite: 1]. Der Server akzeptiert beides; `apiRepository.js`s `updateItem()` bleibt bei JSON[cite: 1].
+- **Response bei Erfolg:** `null` (leerer Body, Status `200 OK`)[cite: 1].
+- **Update-Verhalten:** Es reicht, das komplette vom GET erhaltene Objekt zu nehmen, einzelne Felder zu ändern und unverändert zurückzuschicken – keine Teil-Updates nötig, kein separates "Diff"-Format[cite: 1].
 
-**Body-Variante des offiziellen Clients (Wireshark, form-urlencoded):**
+**Body-Variante (Standard JSON):**
 
+```json
+{
+  "DatabaseID": "92",
+  "Title": "Track Name",
+  "Artist": "Artist Name",
+  "Type": "Music",
+  "Class": "File",
+  "Filename": "/storages/1/files/track.mp3",
+  "Markers": {
+    "CueIn": 0,
+    "CueOut": 210.5,
+    "FadeOut": 205.0
+  }
+}
 ```
-station=1&$doc={...vollständiges Item-JSON...}
-```
-
-Beide Wege funktionieren nachweislich: `application/json` (unsere
-Variante, seit Wochen im Einsatz) und `application/x-www-form-urlencoded`
-mit `$doc` (die Client-Variante). Kein Handlungsbedarf in
-`apiRepository.js`.
 
 #### Schreibbare Felder im PUT-Body – VERIFIZIERT
 
@@ -1047,23 +1044,71 @@ mehreren, bliebe es in den übrigen liegen. Ein Nachbauen über
 atomar. `PUT /items/<id>/folders` erledigt dasselbe in einem einzigen,
 idempotenten Request.
 
-### POST `/api/v1/storages/<storageId>/files` – Datei hochladen
+### POST `/api/v1/storages/<storageId>/files` – Datei hochladen – VERIFIZIERT
 
-- **Content-Type:** `multipart/form-data; boundary=--------<zeitstempel>`
-- Ein Part:
+VERIFIZIERT per zweitem, gezieltem Wireshark-Mitschnitt: Der erste
+Mitschnitt hatte nur den `file`-Part erfasst, das ergab beim Nachbau
+`"Filename was not specified"`. Der Server erwartet daneben zwingend vier
+weitere Textfelder im multipart-Body.
+
+- **Content-Type:** `multipart/form-data; boundary=...`
+- **Reihenfolge der Parts** (wie im Mitschnitt beobachtet):
+  1. `file` – Binärdaten:
+     ```
+     Content-Disposition: form-data; name="file"; filename="stille.mp3"
+     Content-Type: audio/x-mpg
+     Content-Transfer-Encoding: binary
+     <Binärinhalt>
+     ```
+  2. `filename` – Zieldateiname als String, z. B. `stille.mp3`
+  3. `folder` – Ziel-Ordner-ID als String, z. B. `17`
+  4. `replaceID` – leer im Normalfall (neue Datei, kein Ersetzen). Vermuteter
+     Zweck: eine bestehende Item-ID hier ersetzt statt umbenennt eine
+     Datei bei Namenskonflikt — nicht separat verifiziert
+  5. `overwritePolicy` – `Rename` (Namenskonflikt: neue Datei wird
+     umbenannt statt zu überschreiben oder abzulehnen; passt zur
+     `ImportOverwritePolicy`-Einstellung aus `/api/v1/config`)
+
+  Jedes Textfeld:
   ```
-  Content-Disposition: form-data; name="file"; filename="Nebula (Robot Koch Remix).mp3"
-  Content-Type: audio/x-mpg
+  Content-Disposition: form-data; name="<feldname>"
+  Content-Type: text/plain; charset="UTF-8"
   Content-Transfer-Encoding: binary
+
+  <wert>
   ```
-- Feldname ist `file`, der Dateiname steht im `filename`-Attribut.
 
-### Ablauf beim Item-Anlegen im offiziellen Client
+- **Response bei Erfolg:** Status 200, `application/json`. Der Body ist
+  bereits ein vollständiges, neu angelegtes Item-Objekt:
 
-1. `POST /api/v1/storages/<id>/files` – Datei hochladen (multipart)
-2. `POST /api/v1/items` – Datensatz anlegen, gibt die neue ID zurück
-3. `POST /api/v1/folders/<id>/items` mit `add&station=1&$doc=["<neueId>"]`
-   – Item dem Ordner zuordnen
+  ```json
+  {
+    "Artist": "...",
+    "Database": "mAirListDB:{GUID}",
+    "DatabaseID": "2689",
+    "Title": "...",
+    "Filename": "/storages/1/files/....mp3",
+    "Class": "File"
+  }
+  ```
+
+  `Artist`/`Title` werden automatisch aus dem Dateinamen extrahiert
+  (vermutlich nach dem Schema `<Artist> - <Title>.mp3`, Trennung am
+  letzten `" - "` — noch nicht mit weiteren Testfällen abgesichert).
+
+- **Wichtig:** Der Upload legt automatisch ein vollständiges Item an —
+  **kein** separater `POST /api/v1/items` nötig. Das `folder`-Feld ordnet
+  das Item direkt dem Ordner zu — **kein** separater
+  `POST /api/v1/folders/<id>/items` nötig.
+- Bei Namenskonflikt (Datei existiert bereits) und `overwritePolicy=Rename`
+  hängt der Server automatisch eine Nummer an (z. B. `... (1).mp3`) —
+  per echtem Test gegen eine bereits vorhandene Datei verifiziert.
+
+Umgesetzt als `uploadFile(storageId, fileBuffer, originalFilename,
+mimeType, folderId)` in `apiItems.js`: baut den multipart-Body in obiger
+Reihenfolge zusammen, setzt `overwritePolicy` fest auf `"Rename"` und
+lässt `replaceID` leer. Die Response wird direkt durch
+`mapApiItemToInternal` geschickt und zurückgegeben.
 
 ## Voice Tracking – kein eigener Endpunkt
 
@@ -1230,6 +1275,15 @@ aus tatsächlich beobachteten Item-Werten.
 - [x] **Body-Format aller POST-Endpunkte** – VERIFIZIERT: nicht JSON,
       sondern `application/x-www-form-urlencoded` mit `$doc`-Parameter
       (Datei-Upload: `multipart/form-data`), siehe eigener Abschnitt
+- [x] **`POST /api/v1/storages/<storageId>/files` (Datei-Upload)** –
+      VERIFIZIERT per zweitem, gezieltem Wireshark-Mitschnitt: neben dem
+      `file`-Part sind vier Textfelder (`filename`, `folder`, `replaceID`,
+      `overwritePolicy`) zwingend erforderlich, siehe eigener Abschnitt.
+      Umgesetzt als `uploadFile()` in `apiItems.js` — legt Item und
+      Ordner-Zuordnung in einem Request an, kein separates `createItem()`/
+      `assignItemsToFolder()` nötig. Offen: Zweck von `replaceID` bei
+      gesetztem Wert (vermutlich Ersetzen statt Umbenennen), nicht
+      abschließend verifiziert
 - [x] Ordner-Erstellung/Umbenennen/Verschieben/Löschen (`EditFolders`-
       Capability) – VERIFIZIERT: `POST`/`PUT`/`DELETE /api/v1/folders...`,
       siehe "Folders (Ordnerbaum)" oben

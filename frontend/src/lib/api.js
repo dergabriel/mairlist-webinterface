@@ -136,6 +136,10 @@ export function updateRegionContainerContents(id, regions) {
   return put(`/items/${id}/region-container-contents`, { regions });
 }
 
+export function updateNewsContainerPackaging(id, roles) {
+  return put(`/items/${id}/news-container-packaging`, roles);
+}
+
 export function deleteItem(id) {
   return request(`/items/${id}`, { method: "DELETE" });
 }

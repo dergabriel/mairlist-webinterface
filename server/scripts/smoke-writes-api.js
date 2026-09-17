@@ -615,6 +615,63 @@ async function main() {
     }
   });
 
+  // ---- updateNewsContainerPackaging: create a News-Container, set the
+  // Opener role, verify it persists, then delete. ----
+
+  await run("updateNewsContainerPackaging (News-Container Opener role)", async () => {
+    const template = await repo.getItemById(itemId);
+    if (!template || !template.relativePath) {
+      throw new Error(`item ${itemId} not found or has no relativePath — pick a different SMOKE_ITEM_ID`);
+    }
+
+    let container = null;
+    let opener = null;
+
+    try {
+      container = await repo.createItem({
+        title: "ZZZ-SmokeTest-NewsContainer",
+        type: "news",
+        containerType: "NewsContainer",
+      });
+      check("News-Container created", !!container && container.id != null, JSON.stringify(container));
+
+      opener = await repo.createItem({
+        title: "ZZZ-SmokeTest-NewsOpener",
+        type: "music",
+        relativePath: template.relativePath,
+      });
+      check("opener test item created", !!opener && opener.id != null, JSON.stringify(opener));
+
+      const withOpener = await repo.updateNewsContainerPackaging(container.id, { Opener: opener.id });
+      check(
+        "updateNewsContainerPackaging sets the Opener role",
+        withOpener &&
+          withOpener.newsRoles?.Opener &&
+          String(withOpener.newsRoles.Opener.internalId) === String(opener.internalId),
+        JSON.stringify(withOpener?.newsRoles)
+      );
+      check(
+        "updateNewsContainerPackaging leaves Title/Type/Class unchanged",
+        withOpener &&
+          withOpener.title === "ZZZ-SmokeTest-NewsContainer" &&
+          withOpener.containerType === "NewsContainer",
+        `title=${withOpener?.title} containerType=${withOpener?.containerType}`
+      );
+
+      const reloaded = await repo.getItemById(container.id);
+      check(
+        "News-Container packaging persists after reload",
+        reloaded &&
+          reloaded.newsRoles?.Opener &&
+          String(reloaded.newsRoles.Opener.internalId) === String(opener.internalId),
+        JSON.stringify(reloaded?.newsRoles)
+      );
+    } finally {
+      if (container) await repo.deleteItem(container.id);
+      if (opener) await repo.deleteItem(opener.id);
+    }
+  });
+
   // ---- uploadFile: upload a tiny throwaway file into a throwaway folder,
   // verify the created item lands in that folder, then clean both up. ----
   //

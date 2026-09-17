@@ -161,6 +161,27 @@ function requireRegionsMap(value, label = "regions") {
   return result;
 }
 
+const NEWS_CONTAINER_ROLES = ["Opener", "MusicBed", "Bumper", "Closer"];
+
+// Nachrichten-Container-Verpackung: { Opener: itemId|null, MusicBed:
+// itemId|null, Bumper: itemId|null, Closer: itemId|null } — jedes Feld ist
+// entweder null (Rolle leeren) oder eine nicht-leere ID. Unbekannte Keys
+// werden abgelehnt statt stillschweigend ignoriert.
+function requireNewsRolesMap(value, label = "roles") {
+  const obj = requireObject(value, label);
+  const result = {};
+  for (const role of NEWS_CONTAINER_ROLES) {
+    if (!(role in obj)) continue;
+    const raw = obj[role];
+    result[role] = raw === null ? null : requireId(raw, `${label}.${role}`);
+  }
+  const unknownKeys = Object.keys(obj).filter((k) => !NEWS_CONTAINER_ROLES.includes(k));
+  if (unknownKeys.length > 0) {
+    throw new ValidationError(`${label}: unbekannte Rolle(n) ${unknownKeys.join(", ")}`);
+  }
+  return result;
+}
+
 // Verpackt einen Handler so, dass ein ValidationError als 400 mit
 // verstaendlicher Meldung beantwortet wird, statt als 500 im Error-Handler
 // zu landen. Alles andere geht wie gehabt an next().
@@ -193,5 +214,6 @@ module.exports = {
   optionalObject,
   requireIdArray,
   requireRegionsMap,
+  requireNewsRolesMap,
   wrapValidation,
 };

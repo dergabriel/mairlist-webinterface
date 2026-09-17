@@ -208,6 +208,31 @@ aktualisieren"). Komfortfunktionen wie "gleiche Länge für alle
 Regionen" (wie im mAirList-Client) sind bewusst nicht nachgebaut —
 Regionen werden laut Rückmeldung praktisch nicht genutzt.
 
+**Nachrichten-Container-Verpackung bearbeitbar (api-Modus):** Für
+Nachrichten-Container (`Class: "NewsContainer"`) zeigt die aufgeklappte
+Container-Zeile ebenfalls einen "Bearbeiten"-Button, aber mit vier festen
+Zeilen (Opener, Musikbett, Trenner, Closer) statt einer Liste — keine
+Reihenfolge, keine Drag&Drop-Umsortierung, da die Rollen fest sind. Pro
+Rolle zeigt die Zeile das aktuell zugewiesene Element (falls vorhanden)
+mit "Ändern"/Entfernen-Buttons, oder einen "Auswählen"-Button, der ein
+Suchfeld (`searchItems()`) öffnet. "Speichern" ruft
+`PUT /api/items/:id/news-container-packaging` (Body: `{ Opener: itemId|null,
+MusicBed: itemId|null, Bumper: itemId|null, Closer: itemId|null }`) auf,
+das im Backend auf `apiItems.js`s `updateNewsContainerPackaging()` geht:
+löst jede gesetzte Rolle zum vollständigen Item-Objekt auf (geteilte
+Hilfsfunktion `resolveItemsForContainer`) und schreibt `{Title, Type: "News",
+Class: "NewsContainer", Items: [{Role, Item}, ...]}` zurück — anders als bei
+den anderen beiden Container-Editoren **kein** voller Merge des aktuellen
+Zustands, siehe `docs/MAIRLISTDB-API.md`, "Nachrichten-Container-Verpackung
+setzen" für die genaue Begründung. Eine nicht gesetzte Rolle wird im
+`Items`-Array weggelassen.
+
+⚠️ Nur die Verpackung ist bearbeitbar. Der eigentliche Nachrichteninhalt
+(Inhalt-Tab im mAirList-Client, die tatsächlichen Meldungen) hat ein
+unverifiziertes Schreibformat und bleibt in diesem Schritt bewusst außen
+vor — der Editor zeigt dafür einen Hinweistext. Siehe
+`docs/MAIRLISTDB-API.md`s "Offene Punkte" für Details.
+
 **Bewusst leer statt Fehler** (`getLogs`, `getRecentLogs`): Diese
 Funktionen liefern im api-Modus ein leeres Array statt eines Fehlers.
 Grund: Das Frontend (`Playlist.jsx`, `DatabaseManager.jsx`) lädt den
@@ -549,7 +574,8 @@ mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper
 | Container-Inhalt aufklappbar anzeigen (Sub-Items) | ✅ |
 | Hook-Container-Inhalt bearbeiten (hinzufügen/entfernen/umsortieren) | ✅ (nur api-Modus) |
 | Regionen-Container-Inhalt bearbeiten (pro Region) | ✅ (nur api-Modus) |
-| Nachrichten-Container-Inhalt bearbeiten | ⬜ |
+| Nachrichten-Container-Verpackung bearbeiten (Opener/Musikbett/Trenner/Closer) | ✅ (nur api-Modus) |
+| Nachrichten-Container-Inhalt bearbeiten (die eigentlichen Meldungen) | ⬜ (Format unverifiziert) |
 | Fix-Zeiten: Item startet zur festen Uhrzeit | ⬜ |
 | Checkpoint: "Prevent auto float around this item" (z.B. volle Stunde) | ⬜ |
 | Konflikt-Erkennung: Warnung wenn zwei Nutzer dieselbe Playlist bearbeiten | ⬜ Phase Mehrbenutzer |

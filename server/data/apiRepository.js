@@ -184,6 +184,7 @@ module.exports = {
   updateItem: apiItems.updateItem,
   updateContainerContents: apiItems.updateContainerContents,
   updateRegionContainerContents: apiItems.updateRegionContainerContents,
+  updateNewsContainerPackaging: apiItems.updateNewsContainerPackaging,
   createItem: apiItems.createItem,
   deleteItem: apiItems.deleteItem,
   assignItemsToFolder: apiItems.assignItemsToFolder,

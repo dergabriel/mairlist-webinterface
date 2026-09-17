@@ -18,7 +18,7 @@ const { getListenerCount } = require("../lib/listenerSource");
 const {
   requireId, optionalId, requireDate, optionalDate, requirePlaylistId,
   optionalCount, requirePosition, requireText, optionalText,
-  requireObject, optionalObject, requireIdArray, requireRegionsMap, wrapValidation,
+  requireObject, optionalObject, requireIdArray, requireRegionsMap, requireNewsRolesMap, wrapValidation,
 } = require("../lib/validate");
 
 router.use(requireAuth);
@@ -362,6 +362,33 @@ router.put("/items/:id/region-container-contents", requireScope("library.write")
   }
 
   const item = await repo.updateRegionContainerContents(itemId, regions);
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  res.json(item);
+}));
+
+// PUT /api/items/:id/news-container-packaging -> replace a NewsContainer's
+// Opener/MusicBed/Bumper/Closer packaging. Body: { Opener: itemId|null,
+// MusicBed: itemId|null, Bumper: itemId|null, Closer: itemId|null }. Only
+// the packaging, NOT the actual news content (Inhalt-Tab) — see
+// docs/MAIRLISTDB-API.md's "Nachrichten-Container-Verpackung setzen".
+// Only implemented for DATA_SOURCE=api (apiRepository); mock/sqlite return a
+// clear "not available" error instead of pretending to succeed.
+router.put("/items/:id/news-container-packaging", requireScope("library.write"), wrapValidation(async (req, res) => {
+  const itemId = requireId(req.params.id, "itemId");
+  const body = requireObject(req.body);
+  const roles = requireNewsRolesMap(body, "roles");
+
+  if (process.env.DATA_SOURCE !== "api" || typeof repo.updateNewsContainerPackaging !== "function") {
+    return res.status(400).json({ error: "Container-Bearbeitung ist im aktuellen Modus nicht verfügbar" });
+  }
+
+  const current = await repo.getItemById(itemId);
+  if (!current) return res.status(404).json({ error: "Item not found" });
+  if (current.containerType !== "NewsContainer") {
+    return res.status(400).json({ error: "Item ist kein Nachrichten-Container" });
+  }
+
+  const item = await repo.updateNewsContainerPackaging(itemId, roles);
   if (!item) return res.status(404).json({ error: "Item not found" });
   res.json(item);
 }));

@@ -88,6 +88,21 @@ function mapApiItemToInternal(apiItem, folderId = null) {
       )
     : null;
 
+  // Nachrichten-Container-Verpackung: apiItem.Items ist hier eine Liste von
+  // { Role, Item } (NICHT die flache Items-Liste anderer Container, siehe
+  // "Gegenüberstellung" in docs/MAIRLISTDB-API.md), Role in
+  // Opener/MusicBed/Bumper/Closer. Nur für NewsContainer befüllt, sonst
+  // null — rawSubItems oben verarbeitet dieselben Einträge bereits generisch
+  // (subItem.Item ?? subItem) für die schreibgeschützte Sub-Item-Anzeige,
+  // newsRoles ergänzt das um die Rollenzuordnung fürs Bearbeiten.
+  const newsRoles = apiItem.Class === "NewsContainer" && Array.isArray(apiItem.Items)
+    ? Object.fromEntries(
+        apiItem.Items
+          .filter((entry) => entry?.Role && entry?.Item)
+          .map((entry) => [entry.Role, mapApiItemToInternal(entry.Item, folderId)])
+      )
+    : null;
+
   return {
     id: hasDatabaseId ? String(apiItem.DatabaseID) : null,
     internalId: hasDatabaseId ? Number(apiItem.DatabaseID) : null,
@@ -116,6 +131,7 @@ function mapApiItemToInternal(apiItem, folderId = null) {
     attributes: apiItem.Attributes || {},
     subItems,
     regions,
+    newsRoles,
     updatedAt: new Date().toISOString(),
     playHistory: [],
   };
@@ -583,6 +599,46 @@ async function updateRegionContainerContents(containerId, regionItemIds) {
   return getItemById(containerId);
 }
 
+// PUT /api/v1/items/<id> mit Items (Role+Item-Paare) — VERIFIZIERT per
+// Wireshark-Mitschnitt (siehe docs/MAIRLISTDB-API.md, "Nachrichten-
+// Container-Verpackung setzen"). Anders als beim Hook-Container
+// (Playlist.Items, flache Liste) und beim Regionen-Container (Content,
+// verschachtelt) heißt das Feld hier "Items" und jeder Eintrag trägt ein
+// Role-Feld statt einer reinen Liste. Nur die Verpackung
+// (Opener/MusicBed/Bumper/Closer) — der eigentliche Nachrichteninhalt
+// (Inhalt-Tab) ist unverifiziert und wird hier nicht angefasst.
+//
+// roleAssignments: { Opener: itemId|null, MusicBed: itemId|null,
+// Bumper: itemId|null, Closer: itemId|null } — eine Rolle mit null/nicht
+// gesetzt wird im Items-Array weggelassen (keine leere Rolle mitschicken).
+// Title/Type/Class kommen aus dem aktuell geladenen Container-Zustand und
+// werden bei jedem PUT erneut mitgeschickt (siehe Verifikationsnotiz).
+const NEWS_CONTAINER_ROLES = ["Opener", "MusicBed", "Bumper", "Closer"];
+
+async function updateNewsContainerPackaging(containerId, roleAssignments) {
+  const current = await getItemById(containerId);
+  if (!current) return null;
+
+  const items = [];
+  for (const role of NEWS_CONTAINER_ROLES) {
+    const itemId = (roleAssignments || {})[role];
+    if (itemId == null || itemId === "") continue;
+    const [resolved] = await resolveItemsForContainer([itemId]);
+    if (resolved) items.push({ Role: role, Item: resolved });
+  }
+
+  const body = {
+    Title: current.title ?? "",
+    Type: "News",
+    Class: "NewsContainer",
+    Items: items,
+  };
+
+  await apiRequest("PUT", `/api/v1/items/${encodeURIComponent(containerId)}`, { body });
+
+  return getItemById(containerId);
+}
+
 async function getItemRestrictions(itemId) {
   const data = await apiRequest("GET", `/api/v1/items/${encodeURIComponent(itemId)}/restrictions`);
 
@@ -923,6 +979,7 @@ module.exports = {
   updateItem,
   updateContainerContents,
   updateRegionContainerContents,
+  updateNewsContainerPackaging,
   createItem,
   assignItemsToFolder,
   removeItemFromFolder,

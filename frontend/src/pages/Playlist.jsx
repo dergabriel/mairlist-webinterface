@@ -10,6 +10,7 @@ import {
   insertPlaylistItem, removePlaylistItem, searchItems,
   getTree, getItems, getStorages, getArtists, getItemTypes, getAttributeKeys,
   getFolderChildren, getDashboard, updateContainerContents, updateRegionContainerContents,
+  updateNewsContainerPackaging,
 } from "../lib/api";
 import { useAppData } from "../lib/AppDataContext";
 import { useAuth } from "../lib/AuthContext";
@@ -334,11 +335,12 @@ function ContextMenu({ x, y, onEdit, onDelete, onMoveUp, onMoveDown, onClose }) 
   );
 }
 
-// Hook-/AutoHookContainer and RegionContainer content is editable (see
-// docs/MAIRLISTDB-API.md's "Gegenüberstellung" — News-Container uses a
-// different, not-yet-supported write shape). containerType carries the raw
-// Class string (HookContainer/AutoHookContainer/RegionContainer/...), set by
-// mapApiItemToInternal / isContainerClass.
+// Hook-/AutoHookContainer, RegionContainer and NewsContainer packaging are
+// editable (see docs/MAIRLISTDB-API.md's "Gegenüberstellung" — the News-
+// Container's actual content, the Inhalt-Tab, is a different, unverified
+// write shape and stays out of scope). containerType carries the raw Class
+// string (HookContainer/AutoHookContainer/RegionContainer/NewsContainer/...),
+// set by mapApiItemToInternal / isContainerClass.
 const HOOK_CONTAINER_RE = /^(Hook|AutoHook)Container$/;
 
 function isHookContainerItem(item) {
@@ -349,8 +351,12 @@ function isRegionContainerItem(item) {
   return item?.containerType === "RegionContainer";
 }
 
+function isNewsContainerItem(item) {
+  return item?.containerType === "NewsContainer";
+}
+
 function isEditableContainerItem(item) {
-  return isHookContainerItem(item) || isRegionContainerItem(item);
+  return isHookContainerItem(item) || isRegionContainerItem(item) || isNewsContainerItem(item);
 }
 
 // --- Shared draggable item-row list, used by both the Hook-Container editor
@@ -645,6 +651,198 @@ function RegionContainerEditor({ containerItem, onSaved, onCancel }) {
   );
 }
 
+// --- News-Container packaging editor (inline) — four fixed role rows
+// (Opener/MusicBed/Bumper/Closer), no ordering/drag&drop needed since roles
+// are fixed slots, not a list. Only the packaging is editable — the actual
+// news content (Inhalt-Tab) is a separate, unverified write shape (see
+// docs/MAIRLISTDB-API.md's "Nachrichten-Container-Verpackung setzen") and
+// stays out of scope here. ---
+
+const NEWS_ROLES = [
+  { key: "Opener", label: "Opener" },
+  { key: "MusicBed", label: "Musikbett" },
+  { key: "Bumper", label: "Trenner" },
+  { key: "Closer", label: "Closer" },
+];
+
+function RolePicker({ onPick, onCancel }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    if (!query.trim()) {
+      setResults([]);
+      return;
+    }
+    setSearching(true);
+    const handle = setTimeout(() => {
+      searchItems(query, ["title", "artist"])
+        .then(setResults)
+        .catch(() => setResults([]))
+        .finally(() => setSearching(false));
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [query]);
+
+  return (
+    <div className="relative flex-1">
+      <div className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5">
+        <Search size={13} className="shrink-0 text-zinc-500" />
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Element suchen…"
+          className="flex-1 bg-transparent text-sm text-zinc-200 placeholder-zinc-600 outline-none"
+        />
+        <button
+          onClick={onCancel}
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+          title="Abbrechen"
+        >
+          <X size={12} />
+        </button>
+      </div>
+      {query.trim() && (
+        <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-48 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-900 shadow-xl">
+          {searching && (
+            <div className="px-3 py-2 text-xs text-zinc-600">Suche…</div>
+          )}
+          {!searching && results.length === 0 && (
+            <div className="px-3 py-2 text-xs text-zinc-600">Keine Treffer</div>
+          )}
+          {!searching && results.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => onPick(item)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+            >
+              <TypeIcon type={item.type} />
+              <span className="flex-1 truncate">{item.title}</span>
+              <span className="text-xs text-zinc-500">{item.artist}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NewsContainerEditor({ containerItem, onSaved, onCancel }) {
+  const [roleItems, setRoleItems] = useState(() => ({ ...(containerItem.newsRoles || {}) }));
+  const [pickingRole, setPickingRole] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+  const setRole = (role, item) => {
+    setRoleItems((prev) => ({ ...prev, [role]: item }));
+    setPickingRole(null);
+  };
+
+  const clearRole = (role) => {
+    setRoleItems((prev) => ({ ...prev, [role]: null }));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const payload = Object.fromEntries(
+        NEWS_ROLES.map(({ key }) => [key, roleItems[key]?.internalId ?? null])
+      );
+      const updated = await updateNewsContainerPackaging(containerItem.internalId, payload);
+      onSaved(updated);
+    } catch (err) {
+      setSaveError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <tr className="border-b border-zinc-800/60 bg-zinc-900/30">
+      <td />
+      <td colSpan={8} className="py-3 pl-10 pr-4">
+        <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3">
+          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+            Nachrichten-Container-Verpackung bearbeiten
+          </div>
+
+          <div className="mb-3 rounded-md border border-zinc-800/60 bg-zinc-900/40 px-2.5 py-1.5 text-xs text-zinc-500">
+            Nur die Verpackung (Opener/Musikbett/Trenner/Closer) ist hier
+            bearbeitbar. Der eigentliche Nachrichteninhalt lässt sich aktuell
+            nicht über das Webinterface bearbeiten.
+          </div>
+
+          <ul className="divide-y divide-zinc-800/60">
+            {NEWS_ROLES.map(({ key, label }) => {
+              const item = roleItems[key];
+              const isPicking = pickingRole === key;
+              return (
+                <li key={key} className="flex items-center gap-2 py-1.5 text-sm">
+                  <span className="w-20 shrink-0 text-zinc-500">{label}</span>
+                  {isPicking ? (
+                    <RolePicker onPick={(picked) => setRole(key, picked)} onCancel={() => setPickingRole(null)} />
+                  ) : item ? (
+                    <>
+                      <TypeIcon type={item.type} />
+                      <span className="flex-1 truncate text-zinc-200">{item.title || "-"}</span>
+                      <span className="text-zinc-500">{item.artist || ""}</span>
+                      <span className="w-12 shrink-0 text-right text-zinc-500">{formatLength(item.duration || 0)}</span>
+                      <button
+                        onClick={() => setPickingRole(key)}
+                        className="rounded-md border border-zinc-800 px-2 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800"
+                      >
+                        Ändern
+                      </button>
+                      <button
+                        onClick={() => clearRole(key)}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
+                        title="Entfernen"
+                      >
+                        <X size={13} />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="flex-1 text-xs italic text-zinc-600">Nicht gesetzt</span>
+                      <button
+                        onClick={() => setPickingRole(key)}
+                        className="rounded-md border border-zinc-800 px-2 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800"
+                      >
+                        Auswählen
+                      </button>
+                    </>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          <div className="mt-3 flex items-center justify-end gap-2">
+            {saveError && <span className="mr-auto text-xs text-red-500">Speichern fehlgeschlagen: {saveError}</span>}
+            <button
+              onClick={onCancel}
+              disabled={saving}
+              className="rounded-md border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
+            >
+              Abbrechen
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
+            >
+              {saving ? "Speichert…" : "Speichern"}
+            </button>
+          </div>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 // --- Playlist table (main area) ---
 
 // Drag payload MIME type used to recognize an "insert from the library
@@ -872,7 +1070,17 @@ function PlaylistTable({
                     }}
                   />
                 )}
-                {isExpanded && isEditing && !isRegionContainerItem(entry.item) && (
+                {isExpanded && isEditing && isNewsContainerItem(entry.item) && (
+                  <NewsContainerEditor
+                    containerItem={entry.item}
+                    onCancel={() => setEditingPosition(null)}
+                    onSaved={(updatedItem) => {
+                      setEditingPosition(null);
+                      onContainerSaved?.(entry.position, updatedItem);
+                    }}
+                  />
+                )}
+                {isExpanded && isEditing && !isRegionContainerItem(entry.item) && !isNewsContainerItem(entry.item) && (
                   <ContainerEditor
                     containerItem={entry.item}
                     onCancel={() => setEditingPosition(null)}

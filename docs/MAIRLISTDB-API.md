@@ -730,6 +730,28 @@ tun hat, meinen damit aber strukturell komplett unterschiedliche Dinge.
 Rolle/Item-Paaren für die Verpackung. Code, der einen Container befüllt,
 darf diese beiden Formate nicht verwechseln oder generisch behandeln.
 
+**Implementiert:** `apiItems.js`s `updateNewsContainerPackaging(containerId,
+roleAssignments)` setzt genau dieses Verpackungs-Format um (Route: `PUT
+/api/items/:id/news-container-packaging` in `server/routes/library.js`,
+Frontend-Bearbeitung in `Playlist.jsx`, vier feste Rollen-Zeilen statt einer
+Liste) — siehe `docs/FEATURES.md`. Anders als bei den anderen beiden
+Container-Editoren wird der Container-Zustand **nicht** vollständig
+gemerged: der PUT-Body enthält bewusst nur `{Title, Type, Class, Items}`
+(Title aus dem aktuell geladenen Container, Type/Class fest auf
+`"News"`/`"NewsContainer"`), da dies das per Wireshark verifizierte Format
+ist. Eine nicht gesetzte Rolle (`null` oder fehlend) wird im `Items`-Array
+weggelassen — wie bei den anderen Containern ersetzt der Server den
+kompletten Zustand (kein Merge serverseitig), eine Rolle, die erhalten
+bleiben soll, muss also bei jedem PUT erneut mitgeschickt werden.
+
+⚠️ **Nachrichteninhalt weiterhin nicht editierbar:** Nur die Verpackung
+(Opener/MusicBed/Bumper/Closer) ist über das Webinterface bearbeitbar. Ein
+Versuch, den Inhalt analog zum Hook-Container über ein zusätzliches
+`Playlist.Items`-Feld neben `Items` zu setzen, wurde in diesem
+Durchgang **nicht ausprobiert** (kein Zugriff auf einen Live-Server zum
+Verifizieren) — das Format bleibt unbekannt, siehe "Offene Punkte" unten.
+Das Frontend zeigt dafür einen Hinweistext im Editor.
+
 ### Container löschen
 
 ```
@@ -1210,7 +1232,11 @@ aus tatsächlich beobachteten Item-Werten.
       erstellen und bearbeiten" oben
 - [ ] **Nachrichten-Container-Inhalt** (die tatsächlichen Meldungen im
       Inhalt-Tab des UI, nicht die Opener/MusicBed/Bumper/Closer-
-      Verpackung) – im Mitschnitt nicht befüllt, Format unbekannt
+      Verpackung) – im Mitschnitt nicht befüllt, Format unbekannt. Ein
+      Versuch mit einem zusätzlichen `Playlist.Items`-Feld (analog zum
+      Hook-Container) wurde in diesem Durchgang mangels Live-Server nicht
+      ausprobiert/verifiziert. Die Verpackung selbst (Opener/MusicBed/
+      Bumper/Closer) ist implementiert, siehe oben.
 - [ ] **Externe URL als `Filename`** (z. B. Streaming-Quelle wie
       `laut.fm`) – schlägt fehl (`"Invalid filename"`), `Class:"File"`
       erwartet einen lokalen Storage-Pfad. Falls Streaming-Quellen

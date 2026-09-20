@@ -10,6 +10,7 @@ import {
   getArtists, getItemTypes, getAttributeKeys, moveItemToFolder,
   createFolder, renameFolder, moveFolder, deleteFolder, getFolderChildren,
   createStorage, updateStorage, deleteStorage, getDashboard, searchItems,
+  getAllItemsPaged,
 } from "../lib/api";
 import { useAppData } from "../lib/AppDataContext";
 import { useAuth } from "../lib/AuthContext";
@@ -817,15 +818,23 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const [attributeKeys, setAttributeKeys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  // api-Modus hat keinen Endpunkt für eine ungefilterte Gesamtliste (siehe
-  // apiRepository.js getItems), deshalb wird "Alle Elemente" dort statt
-  // einer leeren Liste als deaktiviert mit Hinweis angezeigt.
+  // apiRepository.js's getItems() (ohne folderId) liefert im api-Modus []
+  // (siehe dortiger Kommentar) — "Alle Elemente" läuft dort stattdessen
+  // über getAllItemsPaged() (GET /api/items/all), seitenweise nachgeladen
+  // statt wie im mock/sqlite-Modus einmalig komplett im `items`-State.
   const [isApiMode, setIsApiMode] = useState(false);
 
   const [expanded, setExpanded] = useState(new Set([20, 30]));
   const [filterState, setFilterState] = useState(ALL_FILTER);
   const [folderItems, setFolderItems] = useState(null); // direct items of the selected folder, lazily loaded
   const [folderItemsLoading, setFolderItemsLoading] = useState(false);
+  // "Alle Elemente" im api-Modus: seitenweise nachgeladene Liste,
+  // unabhängig vom preloaded `items`-State (der dort leer bleibt).
+  const [allItemsPages, setAllItemsPages] = useState([]); // array of pages, flattened for display
+  const [allItemsLoading, setAllItemsLoading] = useState(false);
+  const [allItemsLoadingMore, setAllItemsLoadingMore] = useState(false);
+  const [allItemsHasMore, setAllItemsHasMore] = useState(false);
+  const [allItemsError, setAllItemsError] = useState(null);
   const [search, setSearch] = useState("");
   const [searchOptions, setSearchOptions] = useState({
     scope: "library", // "library" | "view"
@@ -916,6 +925,43 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     return () => { cancelled = true; };
   }, [filterState, getCached]);
 
+  // "Alle Elemente" im api-Modus: erste Seite laden, sobald der Knoten
+  // ausgewählt wird (nicht gecacht wie folder:${id} — die Liste wächst
+  // durch "Weitere laden" über die Sitzung und soll bei erneutem Anklicken
+  // desselben Knotens nicht auf Seite 1 zurückspringen).
+  useEffect(() => {
+    if (filterState.kind !== "all" || !isApiMode) return;
+    if (allItemsPages.length > 0 || allItemsLoading) return; // schon geladen/lädt
+    let cancelled = false;
+    setAllItemsLoading(true);
+    setAllItemsError(null);
+    getAllItemsPaged({ limit: 500, offset: 0 })
+      .then((data) => {
+        if (cancelled) return;
+        setAllItemsPages([data.items]);
+        setAllItemsHasMore(data.hasMore);
+      })
+      .catch((err) => { if (!cancelled) setAllItemsError(err.message); })
+      .finally(() => { if (!cancelled) setAllItemsLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterState, isApiMode]);
+
+  const allItemsFlat = useMemo(() => allItemsPages.flat(), [allItemsPages]);
+
+  const loadMoreAllItems = () => {
+    if (allItemsLoadingMore || !allItemsHasMore) return;
+    setAllItemsLoadingMore(true);
+    setAllItemsError(null);
+    getAllItemsPaged({ limit: 500, offset: allItemsFlat.length })
+      .then((data) => {
+        setAllItemsPages((prev) => [...prev, data.items]);
+        setAllItemsHasMore(data.hasMore);
+      })
+      .catch((err) => setAllItemsError(err.message))
+      .finally(() => setAllItemsLoadingMore(false));
+  };
+
   // Library-wide search runs against the server (/api/search), which
   // searches the whole library regardless of the currently open folder —
   // unlike "view" scope, which just filters the already-loaded tree-scoped
@@ -941,11 +987,22 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     return () => { cancelled = true; clearTimeout(handle); };
   }, [search, searchOptions.scope, searchOptions.fields]);
 
+  // "Alle Elemente" (api-Modus) hängt nicht am getCached-Mechanismus wie
+  // folder:${id} — nach jedem Schreibzugriff, der die Gesamtliste betreffen
+  // könnte (Anlegen/Löschen/Verschieben), wird sie verworfen und beim
+  // nächsten Anzeigen neu ab Seite 1 geladen.
+  const resetAllItems = () => {
+    setAllItemsPages([]);
+    setAllItemsHasMore(false);
+    setAllItemsError(null);
+  };
+
   const handleCreate = async (data) => {
     const created = await createItem(data);
     setShowNewItem(false);
     invalidate("items");
     invalidate("folder:*");
+    resetAllItems();
     await loadData();
     onEditItem?.(created.internalId);
   };
@@ -955,6 +1012,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     setShowUpload(false);
     invalidate("items");
     invalidate("folder:*");
+    resetAllItems();
     await loadData();
     onEditItem?.(created.internalId);
   };
@@ -964,6 +1022,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     setDeleteTarget(null);
     invalidate("items");
     invalidate("folder:*");
+    resetAllItems();
     await loadData();
   };
 
@@ -1081,12 +1140,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     }
   };
 
-  const rootFolder = {
-    id: "all", name: "Alle Elemente", special: true, children: [],
-    disabledHint: isApiMode
-      ? "Im api-Modus gibt es keinen Endpunkt für eine ungefilterte Gesamtliste."
-      : undefined,
-  };
+  const rootFolder = { id: "all", name: "Alle Elemente", special: true, children: [] };
 
   const toggle = (id) =>
     setExpanded((prev) => {
@@ -1097,7 +1151,6 @@ export default function MairListDB({ onEditItem, onNavigate }) {
 
   const selectFolder = (folderId) => {
     if (folderId === "all") {
-      if (isApiMode) return; // keine ungefilterte Gesamtliste im api-Modus verfügbar
       setFilterState(ALL_FILTER);
       return;
     }
@@ -1121,7 +1174,12 @@ export default function MairListDB({ onEditItem, onNavigate }) {
   const filteredByTree = useMemo(() => {
     let list = [...items];
 
-    if (filterState.kind === "folder") {
+    if (filterState.kind === "all" && isApiMode) {
+      // Preloaded `items` is empty in api-Modus (siehe apiRepository.js's
+      // getItems()) — die seitenweise nachgeladene Liste tritt hier an
+      // deren Stelle.
+      list = allItemsFlat;
+    } else if (filterState.kind === "folder") {
       // Direct items only, lazily fetched per folder (see effect above) —
       // no longer includes descendant items from the preloaded `items` array.
       list = folderItems || [];
@@ -1139,7 +1197,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
     // "all" means unfiltered.
 
     return list;
-  }, [items, tree, filterState, folderItems]);
+  }, [items, tree, filterState, folderItems, isApiMode, allItemsFlat]);
 
   const visibleItems = useMemo(() => {
     // Advanced search: scope "view" filters the already tree-filtered list
@@ -1505,24 +1563,24 @@ export default function MairListDB({ onEditItem, onNavigate }) {
               </tr>
             </thead>
             <tbody>
-              {(loading || folderItemsLoading || librarySearchLoading) && (
+              {(loading || folderItemsLoading || librarySearchLoading || allItemsLoading) && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center text-sm text-zinc-600">
                     Lade Elemente…
                   </td>
                 </tr>
               )}
-              {!loading && !folderItemsLoading && !librarySearchLoading && error && (
+              {!loading && !folderItemsLoading && !librarySearchLoading && !allItemsLoading && (error || allItemsError) && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center text-sm">
                     <div className="flex flex-col items-center gap-2 text-red-500">
                       <AlertTriangle size={20} />
-                      <span>Elemente konnten nicht geladen werden: {error}</span>
+                      <span>Elemente konnten nicht geladen werden: {error || allItemsError}</span>
                     </div>
                   </td>
                 </tr>
               )}
-              {!loading && !folderItemsLoading && !librarySearchLoading && !error && visibleItems.map((item) => (
+              {!loading && !folderItemsLoading && !librarySearchLoading && !allItemsLoading && !error && !allItemsError && visibleItems.map((item) => (
                 <tr
                   key={item.id}
                   draggable
@@ -1574,7 +1632,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
                   </td>
                 </tr>
               ))}
-              {!loading && !folderItemsLoading && !librarySearchLoading && !error && visibleItems.length === 0 && (
+              {!loading && !folderItemsLoading && !librarySearchLoading && !allItemsLoading && !error && !allItemsError && visibleItems.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-4 py-16 text-center text-sm text-zinc-600">
                     {search.trim() && searchOptions.scope === "library"
@@ -1585,6 +1643,19 @@ export default function MairListDB({ onEditItem, onNavigate }) {
               )}
             </tbody>
           </table>
+
+          {filterState.kind === "all" && isApiMode && !search.trim() && (allItemsHasMore || allItemsLoadingMore) && (
+            <div className="flex justify-center py-4">
+              <button
+                type="button"
+                onClick={loadMoreAllItems}
+                disabled={allItemsLoadingMore}
+                className="rounded-md border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {allItemsLoadingMore ? "Lädt weitere Elemente…" : "Weitere laden"}
+              </button>
+            </div>
+          )}
         </div>
       </main>
 

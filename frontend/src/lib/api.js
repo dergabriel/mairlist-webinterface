@@ -92,6 +92,13 @@ export function getItems({ type, artist, folderId, storageId, attributeKey, attr
   return request(`/items${qs({ type, artist, folderId, storageId, attributeKey, attributeValue })}`);
 }
 
+// "Alle Elemente" seitenweise, nur im api-Modus verfügbar (siehe
+// server/routes/library.js's GET /items/all). Antwort:
+// { items, hasMore, limit, offset }.
+export function getAllItemsPaged({ limit, offset } = {}) {
+  return request(`/items/all${qs({ limit, offset })}`);
+}
+
 export function getItemById(id) {
   return request(`/items/${id}`);
 }

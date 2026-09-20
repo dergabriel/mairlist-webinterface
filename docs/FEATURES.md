@@ -357,13 +357,35 @@ unabhängigen `webAuthDb`), `totalStorages` (Länge der
 `/api/v1/storages`-Liste) und `totalItems` (Summe aller `ItemCount`-Werte
 derselben Liste — kein Scan aller ~155 Ordner nötig).
 
-**`getItems(filters)` — nur mit `folderId`:** Die API hat keinen
-Endpunkt für eine ungefilterte Item-Liste über die gesamte Bibliothek
-(`GET /api/v1/items` verlangt immer `folder=<id>` oder `ids=<id,...>`,
-siehe `docs/MAIRLISTDB-API.md`). `apiRepository.js`s `getItems` liefert
-deshalb nur mit `folderId` echte Daten (baut auf `getItemsByFolder` auf,
-`type`/`artist`/`storageId`/`attributeKey`+`attributeValue` werden
-clientseitig nachgefiltert); ohne `folderId` liefert es `[]`.
+**`getItems(filters)` — nur mit `folderId`:** `GET /api/v1/items`
+verlangt für den ordner-gebundenen Aufruf weiterhin `folder=<id>` oder
+`ids=<id,...>` (siehe `docs/MAIRLISTDB-API.md`). `apiRepository.js`s
+`getItems` liefert deshalb nur mit `folderId` echte Daten (baut auf
+`getItemsByFolder` auf, `type`/`artist`/`storageId`/`attributeKey`+
+`attributeValue` werden clientseitig nachgefiltert); ohne `folderId`
+liefert es weiterhin `[]`.
+
+**"Alle Elemente" (`getAllItemsPaged`):** Per Live-Test bestätigt, dass
+`GET /api/v1/items?search=&fields=All&limit=<n>&station=1` auch mit
+**leerem** `search`-Wert funktioniert und eine breite, über die gesamte
+Bibliothek gestreute Liste liefert (nicht auf einen Ordner beschränkt) —
+verifiziert mit `limit=10`, echte Treffer aus verschiedenen Ordnern. Das
+ist die Grundlage für die "Alle Elemente"-Ansicht im api-Modus, ohne über
+alle ~155 Ordner iterieren zu müssen. `apiItems.js`s `getAllItemsPaged()`
+nutzt denselben Endpunkt, aber bewusst ohne den Empty-Query-Guard von
+`searchItems()` (der für die normale Suche sinnvoll bleibt und
+unangetastet ist). Serverseitiges `offset`/Pagination ist für diesen
+Endpunkt **weiterhin unverifiziert** (siehe "Noch offen" in
+`docs/MAIRLISTDB-API.md`) — `getAllItemsPaged()` schickt `offset` zwar
+mit, verlässt sich aber nicht darauf: `hasMore` ist nur eine Heuristik
+(`limit` Treffer zurück ⇒ vermutlich mehr vorhanden), das Frontend fragt
+bei "Weitere laden" schlicht die nächste Seite mit `offset =
+bisher geladene Anzahl` an. Obergrenze pro Seite: 500 (Default) bis 1000
+(`ALL_ITEMS_MAX_LIMIT`), um die Bibliothek nicht in einem Rutsch auf
+einmal zu laden. Route: `GET /api/items/all?limit=&offset=`, nur im
+api-Modus (mock/sqlite haben mit `GET /api/items` ohne `folderId` bereits
+eine funktionierende ungefilterte Gesamtliste und brauchen diese Route
+nicht).
 
 **Neu erschlossen durch den zweiten Wireshark-Mitschnitt (07.09.2026)** —
 alles drei ist verifiziert und damit umsetzbar, aber noch **nicht**

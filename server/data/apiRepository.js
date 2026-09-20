@@ -214,6 +214,7 @@ module.exports = {
   getAttributeKeys: apiItems.getAttributeKeys,
   getItems: apiItems.getItems,
   searchItems: apiItems.searchItems,
+  getAllItemsPaged: apiItems.getAllItemsPaged,
   getCuePoints: apiItems.getCuePoints,
   getAttributeDefinitions: apiItems.getAttributeDefinitions,
   moveItemToFolder: apiItems.moveItemToFolder,

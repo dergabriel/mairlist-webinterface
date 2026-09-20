@@ -174,6 +174,22 @@ router.get("/items", requireScope("library.read"), wrapValidation(async (req, re
   }));
 }));
 
+// GET /api/items/all?limit=&offset= -> "Alle Elemente" ohne Ordner-Filter,
+// seitenweise. Nur im api-Modus verfügbar: mock/sqlite haben mit
+// GET /api/items (ohne folderId) bereits eine funktionierende ungefilterte
+// Gesamtliste (repository.js/sqlRepository.js's getItems() scannt dort die
+// komplette Tabelle) und brauchen diese Route nicht — deshalb kein
+// Doppel-Weg dafür. Muss VOR /items/:id stehen, sonst würde "all" als
+// itemId interpretiert.
+router.get("/items/all", requireScope("library.read"), wrapValidation(async (req, res) => {
+  if (process.env.DATA_SOURCE !== "api" || typeof repo.getAllItemsPaged !== "function") {
+    return res.status(400).json({ error: "Diese Route ist nur im api-Modus verfügbar" });
+  }
+  const limit = optionalCount(req.query.limit, "limit", { fallback: 500, max: 1000 });
+  const offset = optionalCount(req.query.offset, "offset", { fallback: 0 });
+  res.json(await repo.getAllItemsPaged({ limit, offset }));
+}));
+
 // GET /api/items/:id
 router.get("/items/:id", requireScope("library.read"), wrapValidation(async (req, res) => {
   const item = await repo.getItemById(requireId(req.params.id, "itemId"));

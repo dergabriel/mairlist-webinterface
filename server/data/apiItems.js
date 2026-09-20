@@ -294,6 +294,63 @@ async function searchItems(query, opts = {}) {
   return result;
 }
 
+// GET /api/v1/items?search=&fields=All&limit=<n>&station=<n> — same
+// endpoint as searchItems(), but deliberately called with an EMPTY search
+// term. Per-Live-Test bestätigt (siehe DESIGN.md-Aufgabe "Alle Elemente"):
+// funktioniert auch mit leerem `search` und liefert eine breite, über die
+// gesamte Bibliothek gestreute Liste (nicht auf einen Ordner beschränkt) —
+// bestätigt mit limit=10, echte Ergebnisse aus verschiedenen Ordnern. Das
+// ist die Grundlage für "Alle Elemente" im api-Modus, ohne über alle ~155
+// Ordner iterieren zu müssen.
+//
+// searchItems() selbst bleibt unangetastet: ihr Empty-Query-Guard
+// (`if (!query || query.trim() === "") return [];`) ist für die normale
+// Suche sinnvoll (kein Client tippt "" und erwartet Treffer) und wird
+// hier bewusst NICHT entfernt — stattdessen eine eigene Funktion, die
+// bewusst mit leerem Suchbegriff arbeitet.
+//
+// offset/page: ob der Endpunkt serverseitiges Paging unterstützt, ist
+// unverifiziert (siehe "Noch offen" in docs/MAIRLISTDB-API.md zu diesem
+// Endpunkt) — hier bislang kein Zugriff auf einen echten Server, um es
+// gezielt durchzuprobieren. Defensiv beides versucht: `offset` wird als
+// Query-Parameter mitgeschickt (verhält sich der Server standardkonform,
+// wird er es honorieren); reagiert der Server NICHT darauf (liefert bei
+// jedem offset dieselben ersten `limit` Treffer), fällt der Aufrufer
+// (getFolderChildren-Route/Frontend) auf reines Client-Side-Paging über
+// eine einmalig geladene größere Liste zurück (siehe library.js-Route).
+// Ein zu hohes offset/limit auf einmal wird bewusst vermieden, um den
+// Server nicht mit einem unbegrenzten Full-Table-Scan zu belasten.
+const ALL_ITEMS_MAX_LIMIT = 1000;
+const ALL_ITEMS_DEFAULT_LIMIT = 500;
+
+async function getAllItemsPaged(opts = {}) {
+  const limit = Math.min(Math.max(Number(opts.limit) || ALL_ITEMS_DEFAULT_LIMIT, 1), ALL_ITEMS_MAX_LIMIT);
+  const offset = Math.max(Number(opts.offset) || 0, 0);
+
+  const query = { search: "", fields: "All", limit };
+  // Nur mitschicken, wenn tatsächlich angefragt (offset=0 explizit
+  // mitzuschicken wäre harmlos, aber unnötig — und falls der Server einen
+  // unbekannten Parameter mit einem Fehler statt Ignorieren quittiert,
+  // bleibt der erste Seitenaufruf (offset 0) davon unberührt).
+  if (offset > 0) query.offset = offset;
+
+  const data = await apiRequest("GET", "/api/v1/items", { query });
+  const list = Array.isArray(data) ? data : data?.Items || [];
+
+  return {
+    items: list.map((apiItem) => mapApiItemToInternal(apiItem, null)),
+    // Heuristik fürs "gibt es noch mehr?": kommt exakt `limit` zurück,
+    // könnte die Bibliothek noch weitere Treffer haben. Liefert der
+    // Server weniger als `limit`, ist das Ende sicher erreicht — ob
+    // `offset` serverseitig überhaupt greift, lässt sich daraus allein
+    // nicht ableiten (siehe Kommentar oben), deshalb ist das nur ein
+    // Hinweis fürs Frontend, keine Garantie.
+    hasMore: list.length >= limit,
+    limit,
+    offset,
+  };
+}
+
 // Response is a bare array of folder ID strings, e.g. ["8"] — not folder
 // objects (unlike the `Folders` array embedded in
 // /api/v1/items?folder=<id> responses). Resolve each ID against the full
@@ -1036,6 +1093,7 @@ module.exports = {
   getItemById,
   getItemsByIds,
   searchItems,
+  getAllItemsPaged,
   getItemFolders,
   updateItem,
   updateContainerContents,

@@ -473,6 +473,18 @@ eine ordnerübergreifende Item-Abfrage — bis dahin die Annahme, dass
 - **Noch offen:** ob `offset`/`page` für Pagination existieren, welche
   Werte `fields` sonst akzeptiert, und ob die Suche Wortanfang oder
   Teilstring matcht.
+- **Per Live-Test bestätigt:** funktioniert auch mit **leerem**
+  `search`-Wert (`search=`) und liefert dann eine breite, über die
+  gesamte Bibliothek gestreute Liste (nicht auf einen Ordner beschränkt)
+  — bestätigt mit `limit=10`, echte Treffer aus verschiedenen Ordnern.
+  Das ist die Grundlage für `getAllItemsPaged()` in `apiItems.js`
+  ("Alle Elemente" im api-Modus, siehe `docs/FEATURES.md`). Ob `offset`
+  dabei serverseitig etwas bewirkt, ist weiterhin **nicht** verifiziert
+  (kein Zugriff auf einen echten Server für einen gezielten Test mit
+  `offset=10` gegen `offset=0` bei gleichem `limit`) — `getAllItemsPaged()`
+  schickt `offset` defensiv mit, verlässt sich für "gibt es noch mehr?"
+  aber nur auf eine Heuristik (`limit` Treffer zurück ⇒ vermutlich mehr
+  vorhanden), nicht auf eine echte serverseitige Pagination-Garantie.
 
 Damit ist `searchItems()` in `apiRepository.js` umsetzbar — bisher ein
 bewusst leerer Stub, weil kein Such-Endpunkt bekannt war.

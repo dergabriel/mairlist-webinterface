@@ -393,6 +393,32 @@ router.put("/items/:id/news-container-packaging", requireScope("library.write"),
   res.json(item);
 }));
 
+// PUT /api/items/:id/news-container-content -> replace a NewsContainer's
+// actual news content (Content.Items) — the Inhalt-Tab, NOT the
+// Opener/MusicBed/Bumper/Closer packaging (see the packaging route above).
+// Body: { itemIds: [...] } (order = desired order in the container). Only
+// implemented for DATA_SOURCE=api (apiRepository); mock/sqlite return a
+// clear "not available" error instead of pretending to succeed.
+router.put("/items/:id/news-container-content", requireScope("library.write"), wrapValidation(async (req, res) => {
+  const itemId = requireId(req.params.id, "itemId");
+  const body = requireObject(req.body);
+  const itemIds = requireIdArray(body.itemIds, "itemIds");
+
+  if (process.env.DATA_SOURCE !== "api" || typeof repo.updateNewsContainerContent !== "function") {
+    return res.status(400).json({ error: "Container-Bearbeitung ist im aktuellen Modus nicht verfügbar" });
+  }
+
+  const current = await repo.getItemById(itemId);
+  if (!current) return res.status(404).json({ error: "Item not found" });
+  if (current.containerType !== "NewsContainer") {
+    return res.status(400).json({ error: "Item ist kein Nachrichten-Container" });
+  }
+
+  const item = await repo.updateNewsContainerContent(itemId, itemIds);
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  res.json(item);
+}));
+
 // POST /api/upload -> upload an audio file (multipart/form-data), copy it into
 // the chosen storage, and create a matching item. Fields: file, storageId, title?,
 // folderId? (api-Modus: Ziel-Ordner wird direkt beim Upload mitgeschickt, siehe

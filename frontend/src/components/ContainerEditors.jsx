@@ -8,7 +8,7 @@ import { useState, useEffect, useMemo } from "react";
 import { GripVertical, Search, X, Plus } from "lucide-react";
 import {
   searchItems, updateContainerContents, updateRegionContainerContents,
-  updateNewsContainerPackaging,
+  updateNewsContainerPackaging, updateNewsContainerContent,
 } from "../lib/api";
 import TypeIcon from "./TypeIcon";
 
@@ -348,12 +348,16 @@ export function RegionContainerEditor({ containerItem, onSaved, onCancel, bare }
   return <EditorShell bare={bare} body={body} />;
 }
 
-// --- News-Container packaging editor (inline or bare) — four fixed role
-// rows (Opener/MusicBed/Bumper/Closer), no ordering/drag&drop needed since
-// roles are fixed slots, not a list. Only the packaging is editable — the
-// actual news content (Inhalt-Tab) is a separate, unverified write shape
-// (see docs/MAIRLISTDB-API.md's "Nachrichten-Container-Verpackung setzen")
-// and stays out of scope here. ---
+// --- News-Container editor (inline or bare) — two parts: four fixed role
+// rows (Opener/MusicBed/Bumper/Closer, no ordering needed since roles are
+// fixed slots, not a list) plus the actual news content (Content.Items, a
+// draggable/reorderable list like the Hook-Container editor, via the shared
+// ItemRowList). Both parts live in the same API object but under separate
+// fields (Items vs. Content.Items, see docs/MAIRLISTDB-API.md's
+// "Nachrichten-Container-Inhalt setzen") and are saved together through one
+// button: packaging first, then content, each PUT preserving the other's
+// current state server-round-trip-side (see apiItems.js's
+// updateNewsContainerPackaging/updateNewsContainerContent). ---
 
 const NEWS_ROLES = [
   { key: "Opener", label: "Opener" },
@@ -428,6 +432,7 @@ function RolePicker({ onPick, onCancel }) {
 
 export function NewsContainerEditor({ containerItem, onSaved, onCancel, bare }) {
   const [roleItems, setRoleItems] = useState(() => ({ ...(containerItem.newsRoles || {}) }));
+  const [contentRows, setContentRows] = useState(() => containerItem.newsContent || []);
   const [pickingRole, setPickingRole] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -448,7 +453,15 @@ export function NewsContainerEditor({ containerItem, onSaved, onCancel, bare }) 
       const payload = Object.fromEntries(
         NEWS_ROLES.map(({ key }) => [key, roleItems[key]?.internalId ?? null])
       );
-      const updated = await updateNewsContainerPackaging(containerItem.internalId, payload);
+      // Zwei getrennte PUTs (Verpackung, Inhalt) — jeder übernimmt den
+      // jeweils anderen Teil serverseitig unverändert aus dem aktuellen
+      // Zustand (siehe apiItems.js), sodass die Reihenfolge hier keine
+      // Rolle spielt, solange beide nacheinander abgeschlossen werden.
+      await updateNewsContainerPackaging(containerItem.internalId, payload);
+      const updated = await updateNewsContainerContent(
+        containerItem.internalId,
+        contentRows.map((r) => r.internalId)
+      );
       onSaved(updated);
     } catch (err) {
       setSaveError(err.message);
@@ -461,12 +474,6 @@ export function NewsContainerEditor({ containerItem, onSaved, onCancel, bare }) 
     <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3">
       <div className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
         Nachrichten-Container-Verpackung bearbeiten
-      </div>
-
-      <div className="mb-3 rounded-md border border-zinc-800/60 bg-zinc-900/40 px-2.5 py-1.5 text-xs text-zinc-500">
-        Nur die Verpackung (Opener/Musikbett/Trenner/Closer) ist hier
-        bearbeitbar. Der eigentliche Nachrichteninhalt lässt sich aktuell
-        nicht über das Webinterface bearbeiten.
       </div>
 
       <ul className="divide-y divide-zinc-800/60">
@@ -513,6 +520,12 @@ export function NewsContainerEditor({ containerItem, onSaved, onCancel, bare }) 
           );
         })}
       </ul>
+
+      <div className="mb-2 mt-4 text-xs font-medium uppercase tracking-wide text-zinc-500">
+        Nachrichten-Container-Inhalt bearbeiten
+      </div>
+
+      <ItemRowList rows={contentRows} onChange={setContentRows} />
 
       <div className="mt-3 flex items-center justify-end gap-2">
         {saveError && <span className="mr-auto text-xs text-red-500">Speichern fehlgeschlagen: {saveError}</span>}

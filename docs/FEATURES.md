@@ -221,17 +221,25 @@ MusicBed: itemId|null, Bumper: itemId|null, Closer: itemId|null }`) auf,
 das im Backend auf `apiItems.js`s `updateNewsContainerPackaging()` geht:
 löst jede gesetzte Rolle zum vollständigen Item-Objekt auf (geteilte
 Hilfsfunktion `resolveItemsForContainer`) und schreibt `{Title, Type: "News",
-Class: "NewsContainer", Items: [{Role, Item}, ...]}` zurück — anders als bei
-den anderen beiden Container-Editoren **kein** voller Merge des aktuellen
-Zustands, siehe `docs/MAIRLISTDB-API.md`, "Nachrichten-Container-Verpackung
-setzen" für die genaue Begründung. Eine nicht gesetzte Rolle wird im
-`Items`-Array weggelassen.
+Class: "NewsContainer", Items: [{Role, Item}, ...], Content: {Items: [...]}}`
+zurück. Eine nicht gesetzte Rolle wird im `Items`-Array weggelassen.
 
-⚠️ Nur die Verpackung ist bearbeitbar. Der eigentliche Nachrichteninhalt
-(Inhalt-Tab im mAirList-Client, die tatsächlichen Meldungen) hat ein
-unverifiziertes Schreibformat und bleibt in diesem Schritt bewusst außen
-vor — der Editor zeigt dafür einen Hinweistext. Siehe
-`docs/MAIRLISTDB-API.md`s "Offene Punkte" für Details.
+**Nachrichten-Container-Inhalt bearbeitbar (api-Modus):** Direkt unter der
+Verpackung zeigt derselbe Editor jetzt auch den eigentlichen
+Nachrichteninhalt (`Content.Items`) — eine draggable/durchsuchbare Liste
+wie beim Hook-Container-Editor (geteilte `ItemRowList`-Komponente, siehe
+oben). "Speichern" ruft für beide Teile je einen eigenen PUT auf: zuerst
+`PUT /api/items/:id/news-container-packaging`, dann
+`PUT /api/items/:id/news-container-content` (Body: `{ itemIds: [...] }`),
+das im Backend auf `apiItems.js`s `updateNewsContainerContent()` geht. Der
+Nachrichten-Container hat drei getrennte Felder im selben API-Objekt —
+`Items` (Rolle+Item-Paare, Verpackung), `Content.Items` (eigentlicher
+Inhalt) und Title/Type/Class (Stammdaten) — die serverseitig **nicht**
+gemergt werden: jeder der beiden PUTs lädt daher zuerst den aktuellen
+Container-Zustand und übernimmt den jeweils nicht geänderten Teil
+unverändert mit, damit keiner der beiden Speichervorgänge den anderen
+Teil versehentlich leert (siehe `docs/MAIRLISTDB-API.md`, "Nachrichten-
+Container-Inhalt setzen" für die per Wireshark verifizierte Begründung).
 
 **Bewusst leer statt Fehler** (`getLogs`, `getRecentLogs`): Diese
 Funktionen liefern im api-Modus ein leeres Array statt eines Fehlers.
@@ -407,9 +415,10 @@ noch nicht umgesetzt. Zwei Fallstricke dabei: der Nachrichten-Container
 hat `Type:"News"` statt `Type:"Container"` auch beim Schreiben (nicht
 nur beim Lesen), und Hook-Container (`Playlist.Items`) und
 Nachrichten-Container (`Items` mit `Role`-Feld) verwenden zwei
-unterschiedliche, leicht verwechselbare Inhalts-Feldnamen. Offen bleibt
-der eigentliche Nachrichteninhalt (nicht die Opener/Bumper/Closer-
-Verpackung) sowie dass externe URLs als `Filename` nicht funktionieren.
+unterschiedliche, leicht verwechselbare Inhalts-Feldnamen (der eigentliche
+Nachrichteninhalt liegt in einem dritten Feld, `Content.Items` — mittlerweile
+verifiziert und implementiert, siehe unten). Offen bleibt weiterhin, dass
+externe URLs als `Filename` nicht funktionieren.
 
 **Bewusst noch nicht implementiert** (werfen einen klaren "im
 api-Modus noch nicht verfügbar"-Fehler statt zu crashen oder falsche
@@ -575,7 +584,7 @@ mAirList kennt technisch eine feste Basis-Typliste. Feingliederung (z.B. Dropper
 | Hook-Container-Inhalt bearbeiten (hinzufügen/entfernen/umsortieren) | ✅ (nur api-Modus) |
 | Regionen-Container-Inhalt bearbeiten (pro Region) | ✅ (nur api-Modus) |
 | Nachrichten-Container-Verpackung bearbeiten (Opener/Musikbett/Trenner/Closer) | ✅ (nur api-Modus) |
-| Nachrichten-Container-Inhalt bearbeiten (die eigentlichen Meldungen) | ⬜ (Format unverifiziert) |
+| Nachrichten-Container-Inhalt bearbeiten (die eigentlichen Meldungen) | ✅ (nur api-Modus) |
 | Fix-Zeiten: Item startet zur festen Uhrzeit | ⬜ |
 | Checkpoint: "Prevent auto float around this item" (z.B. volle Stunde) | ⬜ |
 | Konflikt-Erkennung: Warnung wenn zwei Nutzer dieselbe Playlist bearbeiten | ⬜ Phase Mehrbenutzer |

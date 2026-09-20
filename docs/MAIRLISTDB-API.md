@@ -712,45 +712,92 @@ $doc={
 ⚠️ Hier heißt das Feld **`Items`** (anders als beim Hook-Container!),
 und jeder Eintrag hat ein **`Role`-Feld** statt einer reinen Liste. Das
 ist die Verpackung (Opener/Musikbett/Trenner/Closer), **NICHT** der
-eigentliche Nachrichteninhalt. Der Nachrichteninhalt selbst (Inhalt-Tab
-im UI, die tatsächlichen Meldungen) wurde in diesem Mitschnitt nicht
-befüllt — noch offen, siehe "Offene Punkte" unten.
+eigentliche Nachrichteninhalt — der liegt in einem dritten, eigenen Feld
+(`Content.Items`), siehe nächster Abschnitt.
 
-#### Gegenüberstellung: zwei verschiedene Inhalts-Feldnamen — leicht zu verwechseln
+#### Gegenüberstellung: drei verschiedene Inhalts-Felder — leicht zu verwechseln
 
 | Container-Art | Feldname für Inhalt | Struktur je Eintrag |
 |---|---|---|
 | Hook-Container | `Playlist.Items` | vollständiges Item-Objekt, reine Liste |
-| Nachrichten-Container | `Items` | `{ "Role": "...", "Item": {...} }` — Rolle + Item, keine reine Liste |
+| Nachrichten-Container (Verpackung) | `Items` | `{ "Role": "...", "Item": {...} }` — Rolle + Item, keine reine Liste |
+| Nachrichten-Container (Inhalt) | `Content.Items` | vollständiges Item-Objekt, reine Liste |
 
-Beide Container-Arten haben zwar ein Top-Level-Feld, das mit "Items" zu
-tun hat, meinen damit aber strukturell komplett unterschiedliche Dinge.
-`Playlist.Items` beim Hook-Container ist eine flache Liste von Items;
-`Items` beim Nachrichten-Container ist eine Liste von
-Rolle/Item-Paaren für die Verpackung. Code, der einen Container befüllt,
-darf diese beiden Formate nicht verwechseln oder generisch behandeln.
+Alle drei Felder haben zwar mit "Items" zu tun, meinen damit aber
+strukturell komplett unterschiedliche Dinge. `Playlist.Items` beim
+Hook-Container ist eine flache Liste von Items; `Items` beim
+Nachrichten-Container ist eine Liste von Rolle/Item-Paaren für die
+Verpackung; `Content.Items` beim Nachrichten-Container ist wiederum eine
+flache Liste von Items, aber unter `Content` statt direkt unter `Items`.
+Der Nachrichten-Container hat also **beide** Top-Level-Felder gleichzeitig
+(`Items` für die Verpackung, `Content.Items` für den Inhalt) — Code, der
+einen Container befüllt, darf diese Formate nicht verwechseln oder
+generisch behandeln.
 
 **Implementiert:** `apiItems.js`s `updateNewsContainerPackaging(containerId,
 roleAssignments)` setzt genau dieses Verpackungs-Format um (Route: `PUT
 /api/items/:id/news-container-packaging` in `server/routes/library.js`,
-Frontend-Bearbeitung in `Playlist.jsx`, vier feste Rollen-Zeilen statt einer
-Liste) — siehe `docs/FEATURES.md`. Anders als bei den anderen beiden
-Container-Editoren wird der Container-Zustand **nicht** vollständig
-gemerged: der PUT-Body enthält bewusst nur `{Title, Type, Class, Items}`
-(Title aus dem aktuell geladenen Container, Type/Class fest auf
-`"News"`/`"NewsContainer"`), da dies das per Wireshark verifizierte Format
-ist. Eine nicht gesetzte Rolle (`null` oder fehlend) wird im `Items`-Array
-weggelassen — wie bei den anderen Containern ersetzt der Server den
-kompletten Zustand (kein Merge serverseitig), eine Rolle, die erhalten
-bleiben soll, muss also bei jedem PUT erneut mitgeschickt werden.
+Frontend-Bearbeitung in `ContainerEditors.jsx`s `NewsContainerEditor`, vier
+feste Rollen-Zeilen statt einer Liste) — siehe `docs/FEATURES.md`. Der
+PUT-Body enthält `{Title, Type, Class, Items, Content}` (Title aus dem
+aktuell geladenen Container, Type/Class fest auf
+`"News"`/`"NewsContainer"`, `Content.Items` unverändert aus dem aktuellen
+Zustand übernommen — siehe nächster Abschnitt zur Begründung). Eine nicht
+gesetzte Rolle (`null` oder fehlend) wird im `Items`-Array weggelassen —
+wie bei den anderen Containern ersetzt der Server den kompletten Zustand
+(kein Merge serverseitig), eine Rolle, die erhalten bleiben soll, muss
+also bei jedem PUT erneut mitgeschickt werden.
 
-⚠️ **Nachrichteninhalt weiterhin nicht editierbar:** Nur die Verpackung
-(Opener/MusicBed/Bumper/Closer) ist über das Webinterface bearbeitbar. Ein
-Versuch, den Inhalt analog zum Hook-Container über ein zusätzliches
-`Playlist.Items`-Feld neben `Items` zu setzen, wurde in diesem
-Durchgang **nicht ausprobiert** (kein Zugriff auf einen Live-Server zum
-Verifizieren) — das Format bleibt unbekannt, siehe "Offene Punkte" unten.
-Das Frontend zeigt dafür einen Hinweistext im Editor.
+### Nachrichten-Container-Inhalt setzen (PUT) — VERIFIZIERT
+
+Per gezieltem Wireshark-Mitschnitt (Item mit echtem Nachrichteninhalt
+bearbeitet, zwei aufeinanderfolgende Speichervorgänge erfasst) ist auch
+das Schreibformat für den eigentlichen Nachrichteninhalt geklärt:
+
+```
+PUT /api/v1/items/<id>
+$doc={
+  "Duration": 1.39,
+  "Items": [],
+  "Title": "Nachrichten",
+  "Type": "News",
+  "Class": "NewsContainer",
+  "Content": {
+    "Items": [
+      {vollständiges Item-Objekt}, ...
+    ]
+  }
+}
+```
+
+⚠️ **Drittes, eigenes Feld:** Der Nachrichteninhalt liegt unter
+`Content.Items`, WEDER unter `Playlist.Items` (wie beim Hook-Container)
+NOCH unter `Items` mit `Role` (wie bei der Verpackung, siehe voriger
+Abschnitt). `Items` selbst bleibt als eigenständiges, oft leeres Array
+`[]` bestehen — reserviert für die Verpackungs-Rollen, auch wenn im
+Mitschnitt keine gesetzt waren. Beim Schreiben müssen also PRINZIPIELL
+sowohl `Items` (Verpackung, ggf. leer) als auch `Content.Items` (Inhalt)
+zusammen im selben PUT mitgeschickt werden, damit keins der beiden
+versehentlich geleert wird — die aktuellen Werte beider Felder müssen
+beim Speichern des jeweils anderen erhalten bleiben (analog zur
+bekannten Regel: Title/Type/Class müssen bei jedem PUT erneut
+mitgeschickt werden).
+
+Verifiziert durch zwei aufeinanderfolgende PUTs (zweites/drittes Element
+entfernt): `Content.Items` schrumpfte korrekt von zwei auf ein Element,
+`Duration` wurde automatisch neu berechnet (457.783 → 1.39).
+
+**Implementiert:** `apiItems.js`s `updateNewsContainerContent(containerId,
+itemIds)` setzt dieses Inhalts-Format um (Route: `PUT
+/api/items/:id/news-container-content` in `server/routes/library.js`,
+Frontend-Bearbeitung in `ContainerEditors.jsx`s `NewsContainerEditor`,
+draggable Liste wie beim Hook-Container über die geteilte `ItemRowList`-
+Komponente) — siehe `docs/FEATURES.md`. Wie `updateNewsContainerPackaging`
+lädt auch diese Funktion zuerst den aktuellen Container-Zustand per
+`getItemById` und übernimmt daraus den jeweils nicht geänderten Teil
+(hier: die Rollen-Zuordnung aus `newsRoles`) unverändert in den PUT-Body,
+damit ein Speichern des Inhalts die Verpackung nicht versehentlich leert
+— und umgekehrt.
 
 ### Container löschen
 
@@ -1230,13 +1277,11 @@ aus tatsächlich beobachteten Item-Werten.
       Hook-Container, Regionen-Container, Nachrichten-Container-
       Verpackung) – VERIFIZIERT per Wireshark, siehe "Container
       erstellen und bearbeiten" oben
-- [ ] **Nachrichten-Container-Inhalt** (die tatsächlichen Meldungen im
+- [x] **Nachrichten-Container-Inhalt** (die tatsächlichen Meldungen im
       Inhalt-Tab des UI, nicht die Opener/MusicBed/Bumper/Closer-
-      Verpackung) – im Mitschnitt nicht befüllt, Format unbekannt. Ein
-      Versuch mit einem zusätzlichen `Playlist.Items`-Feld (analog zum
-      Hook-Container) wurde in diesem Durchgang mangels Live-Server nicht
-      ausprobiert/verifiziert. Die Verpackung selbst (Opener/MusicBed/
-      Bumper/Closer) ist implementiert, siehe oben.
+      Verpackung) – VERIFIZIERT per Wireshark (`Content.Items`, siehe
+      "Nachrichten-Container-Inhalt setzen" oben). Implementiert in
+      `apiItems.js`s `updateNewsContainerContent()`.
 - [ ] **Externe URL als `Filename`** (z. B. Streaming-Quelle wie
       `laut.fm`) – schlägt fehl (`"Invalid filename"`), `Class:"File"`
       erwartet einen lokalen Storage-Pfad. Falls Streaming-Quellen

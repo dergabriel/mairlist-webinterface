@@ -140,6 +140,10 @@ export function updateNewsContainerPackaging(id, roles) {
   return put(`/items/${id}/news-container-packaging`, roles);
 }
 
+export function updateNewsContainerContent(id, itemIds) {
+  return put(`/items/${id}/news-container-content`, { itemIds });
+}
+
 export function deleteItem(id) {
   return request(`/items/${id}`, { method: "DELETE" });
 }

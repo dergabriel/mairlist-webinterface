@@ -103,6 +103,17 @@ function mapApiItemToInternal(apiItem, folderId = null) {
       )
     : null;
 
+  // Nachrichten-Container-Inhalt: die eigentlichen Meldungen liegen unter
+  // Content.Items — ein DRITTES, eigenständiges Feld neben Items (Rollen-
+  // Verpackung, oben) und dem (hier ungenutzten, leeren) Items-Array anderer
+  // Container-Arten. VERIFIZIERT per Wireshark (zwei aufeinanderfolgende
+  // PUTs mit entferntem Element, siehe docs/MAIRLISTDB-API.md,
+  // "Nachrichten-Container-Inhalt setzen"). Nur für NewsContainer befüllt,
+  // sonst null.
+  const newsContent = apiItem.Class === "NewsContainer" && Array.isArray(apiItem.Content?.Items)
+    ? apiItem.Content.Items.map((it) => mapApiItemToInternal(it, folderId)).filter(Boolean)
+    : null;
+
   return {
     id: hasDatabaseId ? String(apiItem.DatabaseID) : null,
     internalId: hasDatabaseId ? Number(apiItem.DatabaseID) : null,
@@ -132,6 +143,7 @@ function mapApiItemToInternal(apiItem, folderId = null) {
     subItems,
     regions,
     newsRoles,
+    newsContent,
     updatedAt: new Date().toISOString(),
     playHistory: [],
   };
@@ -599,14 +611,19 @@ async function updateRegionContainerContents(containerId, regionItemIds) {
   return getItemById(containerId);
 }
 
-// PUT /api/v1/items/<id> mit Items (Role+Item-Paare) — VERIFIZIERT per
-// Wireshark-Mitschnitt (siehe docs/MAIRLISTDB-API.md, "Nachrichten-
-// Container-Verpackung setzen"). Anders als beim Hook-Container
-// (Playlist.Items, flache Liste) und beim Regionen-Container (Content,
-// verschachtelt) heißt das Feld hier "Items" und jeder Eintrag trägt ein
-// Role-Feld statt einer reinen Liste. Nur die Verpackung
-// (Opener/MusicBed/Bumper/Closer) — der eigentliche Nachrichteninhalt
-// (Inhalt-Tab) ist unverifiziert und wird hier nicht angefasst.
+// PUT /api/v1/items/<id> mit Items (Role+Item-Paare) und Content.Items —
+// VERIFIZIERT per Wireshark-Mitschnitt (siehe docs/MAIRLISTDB-API.md,
+// "Nachrichten-Container-Verpackung setzen" und "Nachrichten-Container-
+// Inhalt setzen"). Der Nachrichten-Container hat DREI getrennte Felder:
+// Items (Rolle+Item-Paare, die Verpackung — anders als beim Hook-Container,
+// dessen Inhalt unter Playlist.Items als flache Liste liegt), Content.Items
+// (der eigentliche Meldungsinhalt) und Title/Type/Class (Stammdaten). Beide
+// Inhalts-Felder (Items, Content.Items) müssen bei JEDEM PUT zusammen
+// mitgeschickt werden, sonst leert ein PUT, der nur den jeweils anderen
+// Teil ändern will, dieses Feld versehentlich — deshalb holen beide unten
+// stehenden Funktionen zuerst den aktuellen Container-Zustand per
+// getItemById, übernehmen daraus den jeweils NICHT geänderten Teil
+// unverändert und schreiben nur den gewünschten Teil neu.
 //
 // roleAssignments: { Opener: itemId|null, MusicBed: itemId|null,
 // Bumper: itemId|null, Closer: itemId|null } — eine Rolle mit null/nicht
@@ -627,11 +644,55 @@ async function updateNewsContainerPackaging(containerId, roleAssignments) {
     if (resolved) items.push({ Role: role, Item: resolved });
   }
 
+  // Inhalt (Content.Items) unverändert aus dem aktuellen Zustand übernehmen
+  // — sonst würde dieser PUT ihn versehentlich leeren (siehe Kommentar oben).
+  const contentItems = await resolveItemsForContainer(
+    (current.newsContent || []).map((it) => it.internalId)
+  );
+
   const body = {
     Title: current.title ?? "",
     Type: "News",
     Class: "NewsContainer",
     Items: items,
+    Content: { Items: contentItems },
+  };
+
+  await apiRequest("PUT", `/api/v1/items/${encodeURIComponent(containerId)}`, { body });
+
+  return getItemById(containerId);
+}
+
+// PUT /api/v1/items/<id> mit Content.Items — der eigentliche Nachrichten-
+// inhalt (Inhalt-Tab). VERIFIZIERT per Wireshark-Mitschnitt (zwei
+// aufeinanderfolgende PUTs mit entferntem Element, Content.Items schrumpfte
+// korrekt, Duration wurde automatisch neu berechnet), siehe
+// docs/MAIRLISTDB-API.md, "Nachrichten-Container-Inhalt setzen".
+//
+// itemIds: Liste von Item-IDs in gewünschter Reihenfolge. Die Verpackung
+// (Items, Rolle+Item-Paare) wird unverändert aus dem aktuellen Zustand
+// übernommen (siehe Kommentar oben) — sonst würde dieser PUT sie
+// versehentlich leeren.
+async function updateNewsContainerContent(containerId, itemIds) {
+  const current = await getItemById(containerId);
+  if (!current) return null;
+
+  const contentItems = await resolveItemsForContainer(itemIds);
+
+  const roleItems = [];
+  for (const role of NEWS_CONTAINER_ROLES) {
+    const roleItem = current.newsRoles?.[role];
+    if (!roleItem || roleItem.internalId == null) continue;
+    const [resolved] = await resolveItemsForContainer([roleItem.internalId]);
+    if (resolved) roleItems.push({ Role: role, Item: resolved });
+  }
+
+  const body = {
+    Title: current.title ?? "",
+    Type: "News",
+    Class: "NewsContainer",
+    Items: roleItems,
+    Content: { Items: contentItems },
   };
 
   await apiRequest("PUT", `/api/v1/items/${encodeURIComponent(containerId)}`, { body });
@@ -980,6 +1041,7 @@ module.exports = {
   updateContainerContents,
   updateRegionContainerContents,
   updateNewsContainerPackaging,
+  updateNewsContainerContent,
   createItem,
   assignItemsToFolder,
   removeItemFromFolder,

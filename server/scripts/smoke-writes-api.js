@@ -615,10 +615,14 @@ async function main() {
     }
   });
 
-  // ---- updateNewsContainerPackaging: create a News-Container, set the
-  // Opener role, verify it persists, then delete. ----
+  // ---- updateNewsContainerPackaging / updateNewsContainerContent: create a
+  // News-Container, set the Opener role, verify it persists, then
+  // independently set/shrink the content (Content.Items) and verify that
+  // neither write clobbers the other's field across several PUTs in a row —
+  // the whole point of the "beide Teile zusammen mitschicken"-Regel in
+  // docs/MAIRLISTDB-API.md. Finally delete everything. ----
 
-  await run("updateNewsContainerPackaging (News-Container Opener role)", async () => {
+  await run("updateNewsContainerPackaging + updateNewsContainerContent (News-Container)", async () => {
     const template = await repo.getItemById(itemId);
     if (!template || !template.relativePath) {
       throw new Error(`item ${itemId} not found or has no relativePath — pick a different SMOKE_ITEM_ID`);
@@ -626,6 +630,8 @@ async function main() {
 
     let container = null;
     let opener = null;
+    let contentA = null;
+    let contentB = null;
 
     try {
       container = await repo.createItem({
@@ -641,6 +647,22 @@ async function main() {
         relativePath: template.relativePath,
       });
       check("opener test item created", !!opener && opener.id != null, JSON.stringify(opener));
+
+      contentA = await repo.createItem({
+        title: "ZZZ-SmokeTest-NewsContentA",
+        type: "news",
+        relativePath: template.relativePath,
+      });
+      contentB = await repo.createItem({
+        title: "ZZZ-SmokeTest-NewsContentB",
+        type: "news",
+        relativePath: template.relativePath,
+      });
+      check(
+        "content test items created",
+        !!contentA && contentA.id != null && !!contentB && contentB.id != null,
+        `${JSON.stringify(contentA)} ${JSON.stringify(contentB)}`
+      );
 
       const withOpener = await repo.updateNewsContainerPackaging(container.id, { Opener: opener.id });
       check(
@@ -658,17 +680,65 @@ async function main() {
         `title=${withOpener?.title} containerType=${withOpener?.containerType}`
       );
 
+      // Set content to two items — this must NOT clear the Opener role set above.
+      const withContent = await repo.updateNewsContainerContent(container.id, [contentA.id, contentB.id]);
+      check(
+        "updateNewsContainerContent sets Content.Items (2 items)",
+        withContent && Array.isArray(withContent.newsContent) && withContent.newsContent.length === 2,
+        JSON.stringify(withContent?.newsContent?.map((i) => i.internalId))
+      );
+      check(
+        "updateNewsContainerContent leaves the Opener role untouched",
+        withContent &&
+          withContent.newsRoles?.Opener &&
+          String(withContent.newsRoles.Opener.internalId) === String(opener.internalId),
+        JSON.stringify(withContent?.newsRoles)
+      );
+
+      // Shrink content to one item — must still leave the Opener role intact.
+      const shrunk = await repo.updateNewsContainerContent(container.id, [contentA.id]);
+      check(
+        "updateNewsContainerContent shrinks Content.Items (1 item)",
+        shrunk && Array.isArray(shrunk.newsContent) && shrunk.newsContent.length === 1 &&
+          String(shrunk.newsContent[0].internalId) === String(contentA.internalId),
+        JSON.stringify(shrunk?.newsContent?.map((i) => i.internalId))
+      );
+      check(
+        "updateNewsContainerContent (shrink) still leaves the Opener role untouched",
+        shrunk &&
+          shrunk.newsRoles?.Opener &&
+          String(shrunk.newsRoles.Opener.internalId) === String(opener.internalId),
+        JSON.stringify(shrunk?.newsRoles)
+      );
+
+      // Change the packaging again (clear Opener) — must NOT clear the content.
+      const cleared = await repo.updateNewsContainerPackaging(container.id, { Opener: null });
+      check(
+        "updateNewsContainerPackaging (clear Opener) leaves Content.Items untouched",
+        cleared && Array.isArray(cleared.newsContent) && cleared.newsContent.length === 1 &&
+          String(cleared.newsContent[0].internalId) === String(contentA.internalId),
+        JSON.stringify(cleared?.newsContent?.map((i) => i.internalId))
+      );
+      check(
+        "updateNewsContainerPackaging (clear Opener) actually cleared the role",
+        cleared && !cleared.newsRoles?.Opener,
+        JSON.stringify(cleared?.newsRoles)
+      );
+
       const reloaded = await repo.getItemById(container.id);
       check(
-        "News-Container packaging persists after reload",
+        "News-Container packaging + content persist after reload",
         reloaded &&
-          reloaded.newsRoles?.Opener &&
-          String(reloaded.newsRoles.Opener.internalId) === String(opener.internalId),
-        JSON.stringify(reloaded?.newsRoles)
+          !reloaded.newsRoles?.Opener &&
+          Array.isArray(reloaded.newsContent) && reloaded.newsContent.length === 1 &&
+          String(reloaded.newsContent[0].internalId) === String(contentA.internalId),
+        `newsRoles=${JSON.stringify(reloaded?.newsRoles)} newsContent=${JSON.stringify(reloaded?.newsContent?.map((i) => i.internalId))}`
       );
     } finally {
       if (container) await repo.deleteItem(container.id);
       if (opener) await repo.deleteItem(opener.id);
+      if (contentA) await repo.deleteItem(contentA.id);
+      if (contentB) await repo.deleteItem(contentB.id);
     }
   });
 

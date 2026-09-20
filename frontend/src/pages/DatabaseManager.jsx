@@ -319,9 +319,12 @@ function Th({ label, sortKey, sort, onSort, className = "" }) {
   );
 }
 
-// --- New item types (mirrors server/data/mockData.js ITEM_TYPES) ---
+// --- New item types ---
 
-const ITEM_TYPES = [
+// Fallback only, used until getItemTypes() resolves (or if it fails) so the
+// dropdown is never empty. The backend (/api/types) is the source of truth
+// (mirrors the fallback in ItemEditor.jsx's GeneralTab).
+const FALLBACK_ITEM_TYPES = [
   { key: "music", label: "Musik" },
   { key: "jingle", label: "Jingle" },
   { key: "advertising", label: "Werbung" },
@@ -351,10 +354,11 @@ function Modal({ title, onClose, children }) {
   );
 }
 
-function NewItemDialog({ onClose, onCreate }) {
+function NewItemDialog({ itemTypes, onClose, onCreate }) {
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState("");
   const [type, setType] = useState("music");
+  const types = itemTypes && itemTypes.length > 0 ? itemTypes : FALLBACK_ITEM_TYPES;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -392,7 +396,7 @@ function NewItemDialog({ onClose, onCreate }) {
         <label className="block">
           <span className="mb-1.5 block text-xs text-zinc-400">Type</span>
           <select className={inputClass} value={type} onChange={(e) => setType(e.target.value)}>
-            {ITEM_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            {types.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
           </select>
         </label>
 
@@ -1585,7 +1589,7 @@ export default function MairListDB({ onEditItem, onNavigate }) {
       </main>
 
       {showNewItem && (
-        <NewItemDialog onClose={() => setShowNewItem(false)} onCreate={handleCreate} />
+        <NewItemDialog itemTypes={itemTypes} onClose={() => setShowNewItem(false)} onCreate={handleCreate} />
       )}
       {showUpload && (
         <UploadDialog storages={storages} onClose={() => setShowUpload(false)} onUpload={handleUpload} />

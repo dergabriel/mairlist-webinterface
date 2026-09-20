@@ -5,14 +5,21 @@ import {
   RefreshCw, ChevronLeft, LayoutList, Play, Pause, SlidersHorizontal,
   Clock, History, Pencil, Volume2, ZoomIn, ZoomOut, Bookmark, Trash2,
   Palette, Image as ImageIcon, AlertTriangle, CircleDot, Database as DatabaseIcon,
+  Boxes,
 } from "lucide-react";
 import {
   getItemById, updateItem, getItemHistory, getAttributeDefinitions,
   getPlaylistById, savePlaylistItemOverrides, getAudioUrl, getItemTypes,
+  getDashboard,
 } from "../lib/api";
 import { aggregateHistory, formatDate as formatHistoryDate } from "../lib/historyStats";
 import { useAuth } from "../lib/AuthContext";
 import Sidebar from "../components/Sidebar";
+import { isContainerItem } from "../lib/itemRowStyle";
+import {
+  ContainerEditor, RegionContainerEditor, NewsContainerEditor,
+  isRegionContainerItem, isNewsContainerItem,
+} from "../components/ContainerEditors";
 
 // Fields a playlist entry is allowed to override locally ("volatile" edits,
 // per mAirList's playlist/database separation): cue points and attributes.
@@ -1224,6 +1231,29 @@ function HistoryTab({ itemId }) {
   );
 }
 
+// Container-Inhalt/-Verpackung, bearbeitbar über dieselben Editoren wie in
+// der Playlist (siehe ContainerEditors.jsx), hier ohne Playlist-Kontext
+// (bare=true, kein <tr>/<td>-Wrapper, kein Abbrechen-Button). Wählt den
+// passenden Editor je Container-Art über containerType (das class-Feld,
+// s. ContainerEditors.jsx), analog zu PlaylistTable's Auswahl.
+function ContainerTab({ item, onSaved }) {
+  if (isRegionContainerItem(item)) {
+    return <RegionContainerEditor containerItem={item} onSaved={onSaved} bare />;
+  }
+  if (isNewsContainerItem(item)) {
+    return <NewsContainerEditor containerItem={item} onSaved={onSaved} bare />;
+  }
+  return <ContainerEditor containerItem={item} onSaved={onSaved} bare />;
+}
+
+// Tab-Bezeichnung passend zur Container-Art, angelehnt an die
+// Original-mAirList-Bezeichnungen ("Regionen-Inhalt", "Verpackung").
+function containerTabLabel(item) {
+  if (isRegionContainerItem(item)) return "Regionen-Inhalt";
+  if (isNewsContainerItem(item)) return "Verpackung";
+  return "Inhalt";
+}
+
 function PlaceholderTab({ icon: Icon, title, note }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -1236,7 +1266,7 @@ function PlaceholderTab({ icon: Icon, title, note }) {
 
 // --- Main ---
 
-const TABS = [
+const BASE_TABS = [
   { key: "general", label: "Allgemein", icon: LayoutList },
   { key: "playback", label: "Wiedergabe", icon: Play },
   { key: "attributes", label: "Attribute", icon: SlidersHorizontal },
@@ -1256,6 +1286,7 @@ export default function ItemEditor({ internalId, playlistContext, onBack, onNavi
   const [saveError, setSaveError] = useState(null);
   const [hasOverrides, setHasOverrides] = useState(false);
   const [itemTypes, setItemTypes] = useState(FALLBACK_ITEM_TYPES);
+  const [isApiMode, setIsApiMode] = useState(false);
 
   const saving = savingScope != null;
 
@@ -1264,6 +1295,16 @@ export default function ItemEditor({ internalId, playlistContext, onBack, onNavi
     getItemTypes()
       .then((types) => { if (!cancelled && Array.isArray(types) && types.length > 0) setItemTypes(types); })
       .catch(() => {}); // keep FALLBACK_ITEM_TYPES
+    return () => { cancelled = true; };
+  }, []);
+
+  // Der Container-Tab (Inhalt/Regionen-Inhalt/Verpackung) ist nur im
+  // api-Modus verfügbar — die Backend-Routen selbst schreiben das schon vor.
+  useEffect(() => {
+    let cancelled = false;
+    getDashboard()
+      .then((data) => { if (!cancelled) setIsApiMode(data?.system?.dataSource === "api"); })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -1364,6 +1405,23 @@ export default function ItemEditor({ internalId, playlistContext, onBack, onNavi
     }
   };
 
+  // Container-Tab nur für Container-Items im api-Modus (isContainerItem()
+  // liest containerType/type, s. itemRowStyle.js) — normale Items bekommen
+  // den Tab gar nicht erst angezeigt.
+  const showContainerTab = isApiMode && isContainerItem(item);
+  const tabs = showContainerTab
+    ? [...BASE_TABS, { key: "container", label: containerTabLabel(item), icon: Boxes }]
+    : BASE_TABS;
+
+  // Nach dem Speichern im Container-Tab: Item-Daten neu laden, damit die
+  // Änderung sofort sichtbar ist (wie bei den anderen Tabs üblich). Der
+  // Container-Endpunkt liefert das aktualisierte Item bereits zurück, ein
+  // Extra-Request ist also nicht nötig.
+  const handleContainerSaved = (updatedItem) => {
+    setGlobalItem(updatedItem);
+    setItem(updatedItem);
+  };
+
   return (
     <div className="flex h-screen w-full bg-zinc-950 font-sans text-zinc-100">
       <Sidebar
@@ -1377,7 +1435,7 @@ export default function ItemEditor({ internalId, playlistContext, onBack, onNavi
       {/* Tab column */}
       <aside className="w-56 shrink-0 border-r border-zinc-800 bg-zinc-900/50 p-3">
         <div className="space-y-0.5">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <TabItem key={t.key} icon={t.icon} label={t.label} active={tab === t.key} onClick={() => setTab(t.key)} />
           ))}
         </div>
@@ -1462,6 +1520,9 @@ export default function ItemEditor({ internalId, playlistContext, onBack, onNavi
               {tab === "scheduling" && <PlaceholderTab icon={Clock} title="Sendeplanung" note="Rotationen, Zeitfenster und Scheduling Regeln. Kommt in einer späteren Phase." />}
               {tab === "history" && <HistoryTab itemId={item.id} />}
               {tab === "cue" && <CueEditorTab item={item} updateCue={updateCue} />}
+              {tab === "container" && showContainerTab && (
+                <ContainerTab item={item} onSaved={handleContainerSaved} />
+              )}
             </>
           )}
         </div>
